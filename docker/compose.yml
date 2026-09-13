@@ -1,0 +1,74 @@
+# ElecKoi WebUI · 多用户形态
+#
+# 准备：
+#   export ELECKOI_MASTER_KEY=$(openssl rand -base64 32)
+#   docker compose -f docker/compose.yml up -d --build
+#
+# 首次访问 /login 注册第一个账号即可开始使用。
+#
+# 暴露范围：默认只绑宿主机回环。要开放给他人，先读 docs/webui/ 里的安全说明——
+# 公网暴露前必须完成 M3（富内容卡片跨源隔离、CSP、签名媒体 URL、限流）。
+
+services:
+  eleckoi-web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: eleckoi-web:dev
+    container_name: eleckoi-web
+    restart: unless-stopped
+    ports:
+      # ELECKOI_BIND：默认只绑回环（本机可用）。要给局域网访问，设为该网卡的 IP
+      # （例如 ELECKOI_BIND=192.0.2.10），比 0.0.0.0 更收敛。
+      - "${ELECKOI_BIND:-127.0.0.1}:${ELECKOI_PORT_HOST:-8790}:8790"
+      # 卡片域必须与应用域不同源。用同一 IP 的另一个端口即可满足；
+      # 访问地址要与 ELECKOI_CARD_ORIGIN 完全一致（协议+IP+端口）。
+      - "${ELECKOI_BIND:-127.0.0.1}:${ELECKOI_CARD_PORT_HOST:-8791}:8790"
+    environment:
+      # 凭据加密主密钥（32 字节 base64）。必须自行生成并妥善保管：
+      # 丢失后所有用户已保存的 API Key 都无法解密。
+      ELECKOI_MASTER_KEY: "${ELECKOI_MASTER_KEY:?请先设置 ELECKOI_MASTER_KEY（openssl rand -base64 32）}"
+      ELECKOI_PORT: "8790"
+      ELECKOI_LOG_LEVEL: "info"
+      # 自助注册：关闭后只能由管理员在「用户管理」里建号。
+      # 账号池为空时仍然允许创建首个账号（自动成为管理员），否则服务将无人可管理。
+      ELECKOI_ALLOW_REGISTRATION: "${ELECKOI_ALLOW_REGISTRATION:-0}"
+      # 启动时按邮箱提升为管理员（逗号分隔）
+      ELECKOI_ADMIN_EMAILS: "${ELECKOI_ADMIN_EMAILS:-}"
+      # 无引用多久后回收该用户的运行时（释放 SQLite 句柄与 Agent 子进程）
+      ELECKOI_TENANT_IDLE_MINUTES: "${ELECKOI_TENANT_IDLE_MINUTES:-30}"
+      # 每用户同时进行的 Agent 回合上限（每个回合一个 node 子进程，是主要资源消耗）
+      ELECKOI_MAX_CONCURRENT_RUNS: "${ELECKOI_MAX_CONCURRENT_RUNS:-2}"
+      # 同时存活的租户上限，超过时淘汰最久未用的空闲租户
+      ELECKOI_MAX_LIVE_TENANTS: "${ELECKOI_MAX_LIVE_TENANTS:-50}"
+      # ── 富内容卡片跨源隔离（公网必配）──
+      # 卡片域与应用域必须是两个不同的源。配了 ELECKOI_CARD_ORIGIN 就必须配
+      # ELECKOI_APP_ORIGINS，否则服务启动即失败（卡片帧会拒绝一切文档投递）。
+      # 未配置时卡片与宿主同源：角色卡能调用宿主全部 IPC，仅限本地自用。
+      ELECKOI_CARD_ORIGIN: "${ELECKOI_CARD_ORIGIN:-}"
+      ELECKOI_APP_ORIGINS: "${ELECKOI_APP_ORIGINS:-}"
+      # AGPL-3.0 §13：以网络提供服务时须向使用者提供对应源码。
+      # 未配置时服务会打印警告，并在登录页省略该入口。
+      ELECKOI_SOURCE_URL: "${ELECKOI_SOURCE_URL:-}"
+      # HTTPS 部署时开启，使会话 Cookie 带 Secure
+      ELECKOI_SECURE_COOKIES: "${ELECKOI_SECURE_COOKIES:-0}"
+      # 反向代理后需开启，才能从 X-Forwarded-For 取到真实客户端 IP（限流用）
+      ELECKOI_TRUST_PROXY: "${ELECKOI_TRUST_PROXY:-0}"
+    volumes:
+      - eleckoi-data:/data
+    # 容器加固
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          pids: 512
+
+volumes:
+  eleckoi-data:
