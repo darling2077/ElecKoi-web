@@ -1,3 +1,41 @@
+> ## ⚠️ 本仓库是 fork，不是上游
+>
+> 本仓库是 [eleckoi/ElecKoi](https://github.com/eleckoi/ElecKoi) 的 **fork**，
+> 在上游 **v0.1.1**（`37aeb07`）基础上新增了 **Docker 部署的多用户 WebUI 形态**，修改日期 **2026-09**。
+> 上游原项目是 Windows / Android 桌面客户端；本分支让同一套内核可以作为**多用户 Web 服务**运行。
+> **上游的原始 README 内容完整保留在下方**，未作删改。
+>
+> ### 本分支新增了什么
+>
+> | 目录 | 内容 |
+> | --- | --- |
+> | `src/web/` | 多租户 WebUI 服务端：一用户一 cordis Context、SSE + POST 传输、鉴权 / 配额 / 管理页 |
+> | `docker/` | Dockerfile、compose、Caddy 反代样例、租户备份脚本 |
+> | `patches/` | 对上游源码的 2 个最小补丁（构建时由脚本施加，**不落盘进提交**） |
+> | `docs/webui/` | 方案、进展报告与部署文档 |
+>
+> ### 快速开始
+>
+> ```bash
+> export ELECKOI_MASTER_KEY=$(openssl rand -base64 32)   # 务必自行生成并妥善备份
+> docker compose -f docker/compose.yml up -d --build
+> # 打开 http://127.0.0.1:8790/login —— 注册的第一个账号自动成为管理员
+> ```
+>
+> - 完整部署说明（公网暴露、反向代理、卡片跨源隔离）：[`docs/webui/`](docs/webui/)
+> - 主密钥为何不能变、数据如何备份：[`docs/webui/凭据与主密钥.md`](docs/webui/凭据与主密钥.md)
+>
+> ### 与上游的关系
+>
+> - 本分支对上游**源码**只有 **2 处受控补丁**，因此 `git rebase upstream/main` 可保持一条线更新；
+>   `node scripts/check-upstream-diff.mjs` 是保证这一点的门禁。
+> - 其余改动全部是**新增文件**。
+> - 许可证与上游一致：**AGPL-3.0-or-later**（见 [`LICENSE`](LICENSE)）。
+>   按 AGPL §13，以网络形式提供本服务时须向使用者提供对应源码 —— 部署时请把
+>   `ELECKOI_SOURCE_URL` 设为你所部署版本的源码地址，登录页会据此展示源码入口。
+>
+> ---
+
 <p align="center">
   <img src="src/renderer/src/assets/model-icons/whale-maid-thinking.png" width="128" alt="电子爱思考鲸鱼娘">
 </p>
