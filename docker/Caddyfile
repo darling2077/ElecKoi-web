@@ -1,0 +1,74 @@
+# ElecKoi WebUI · 反向代理样例（Caddy）
+#
+# 为什么需要两个域名：富内容卡片必须与宿主**不同源**，否则角色卡里的 JS
+# 可以直接调用宿主全部 IPC。Caddy 在这里的角色是把两个域名分别转给同一个容器。
+#
+#   应用域  app.example.com    → 容器 8790
+#   卡片域  cards.example.com  → 容器 8790（服务端按 Host 区分，卡片域只暴露卡片帧与签名媒体）
+#
+# 部署步骤：
+#   1. 把两个域名都解析到本机（A/AAAA 记录）
+#   2. 替换下面的域名
+#   3. 启动容器时设置：
+#        ELECKOI_CARD_ORIGIN=https://cards.example.com
+#        ELECKOI_APP_ORIGINS=https://app.example.com
+#        ELECKOI_SECURE_COOKIES=1
+#        ELECKOI_TRUST_PROXY=1
+#   4. docker run -v $PWD/Caddyfile:/etc/caddy/Caddyfile ... caddy
+#
+# Caddy 会自动申请并续期 TLS 证书，无需手工配置。
+
+{
+	email you@example.com
+}
+
+# ── 应用域 ──
+app.example.com {
+	encode zstd gzip
+
+	# SSE（/api/events）是长连接：必须关闭缓冲，否则事件会被代理攒着不发。
+	reverse_proxy 127.0.0.1:8790 {
+		flush_interval -1
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		-Server
+	}
+
+	# 登录接口按 IP 限流，兜住暴力尝试（容器内也有一层按 IP+邮箱的限流）
+	@login path /api/auth/login /api/auth/register
+	rate_limit @login {
+		zone login {
+			key {remote_host}
+			events 20
+			window 1m
+		}
+	}
+}
+
+# ── 卡片域 ──
+# 只承载卡片帧与签名媒体；容器端对其余路径一律 404。
+cards.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8790 {
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		# 卡片域不需要被任何站点嵌套
+		X-Frame-Options "SAMEORIGIN"
+		-Server
+	}
+}
+
+# 说明：
+#  - rate_limit 需要 Caddy 的 rate_limit 模块（非标准发行版自带）；
+#    若使用官方标准镜像，请删掉该段，或自行编译带该模块的镜像。
+#  - 若不想用两个域名，也可用两个端口（http://host:8080 与 http://host:8081），
+#    但必须保证两者是**不同源**；注意 http/https 与端口的差异都算不同源。
