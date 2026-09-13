@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.node.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "paths": {
+      "@main/*": ["../main/*"],
+      "@shared/*": ["../shared/*"]
+    }
+  },
+  "include": ["**/*.ts"]
+}
