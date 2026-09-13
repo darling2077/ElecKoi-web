@@ -17,10 +17,19 @@
 > ### 快速开始
 >
 > ```bash
-> export ELECKOI_MASTER_KEY=$(openssl rand -base64 32)   # 务必自行生成并妥善备份
+> cp docker/.env.example docker/.env
+> openssl rand -base64 32        # 生成主密钥，填进 ELECKOI_MASTER_KEY
 > docker compose -f docker/compose.yml up -d --build
 > # 打开 http://127.0.0.1:8790/login —— 注册的第一个账号自动成为管理员
 > ```
+>
+> **想交给 AI 助手部署？** 根目录的 [`CLAUDE.md`](CLAUDE.md) 就是给 AI 编码助手
+> 看的部署与改动指引。Claude Code 会**自动读取**它，无需手动粘贴任何提示词；
+> 用其它工具（Cursor / Codex / Copilot 等）时，把下面这句话连同仓库地址丢给它即可：
+>
+> > 读 `CLAUDE.md`，按里面的步骤帮我把这个仓库用 Docker 部署起来。
+>
+> 首次构建约 20–40 分钟，属正常，不要中断。
 >
 > - 完整部署说明（公网暴露、反向代理、卡片跨源隔离）：[`docs/webui/`](docs/webui/)
 > - 主密钥为何不能变、数据如何备份：[`docs/webui/凭据与主密钥.md`](docs/webui/凭据与主密钥.md)

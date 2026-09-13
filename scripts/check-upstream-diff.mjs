@@ -21,7 +21,16 @@ import { join, resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 
-/** 允许新增的路径前缀（我们自己的代码与部署物）。 */
+/**
+ * 允许新增的路径前缀（我们自己的代码与部署物）。
+ *
+ * 根目录的 CLAUDE.md 是刻意的例外：它是 AI 编码助手**自动读取**的约定文件，
+ * 放在根目录才会被发现，放进 docs/ 就失去意义。
+ *
+ * 为什么不用更通用的 AGENTS.md：上游 .gitignore 第 40 行把 `/AGENTS.md` 有意排除
+ * （作者当本地材料用），而我们不想为此去改上游的 .gitignore。
+ * CLAUDE.md 同为主流约定且未被忽略，是这两个约束下的最优解。
+ */
 const ALLOWED_ADDITIONS = [
   'src/web/',
   'docker/',
@@ -29,7 +38,8 @@ const ALLOWED_ADDITIONS = [
   'docs/webui/',
   'scripts/check-upstream-diff.mjs',
   'scripts/apply-patches.mjs',
-  '.dockerignore'
+  '.dockerignore',
+  'CLAUDE.md'
 ]
 
 /**
