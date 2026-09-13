@@ -1,0 +1,50 @@
+diff --git a/src/renderer/src/modules/authorFrontend/components/RichMessageFrame.jsx b/src/renderer/src/modules/authorFrontend/components/RichMessageFrame.jsx
+index 7b84306..e45d088 100644
+--- a/src/renderer/src/modules/authorFrontend/components/RichMessageFrame.jsx
++++ b/src/renderer/src/modules/authorFrontend/components/RichMessageFrame.jsx
+@@ -8,6 +8,15 @@ import { rememberRichMessageHeight } from '../model/richMessageHeights.js';
+ 
+ const minimumHeight = 1;
+ 
++/**
++ * WebUI 卡片源，由服务端注入（见 window.__ELECKOI_WEB__）。
++ *
++ * 设置后卡片渲染在独立源上：卡片内的 JS 无法触达 parent.eleckoi
++ * （跨源属性访问会抛安全错误），只能走既有的 postMessage 协议，
++ * 也就是 author SDK 那几项受控权限。未设置时保持原行为（同源 srcdoc）。
++ */
++const CARD_ORIGIN = globalThis.__ELECKOI_WEB__?.cardOrigin || '';
++
+ function createChannel() {
+   return globalThis.crypto?.randomUUID?.() || `rich-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+ }
+@@ -106,6 +115,20 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
+     return () => window.removeEventListener('message', receive);
+   }, [channel, identity, message.conversationId, message.id]);
+ 
++  useEffect(() => {
++    if (!CARD_ORIGIN) return undefined;
++    const frame = frameRef.current;
++    if (!frame) return undefined;
++    // 卡片源上的帧页面加载完成后主动索要文档；这里回投一次。
++    const respond = (event) => {
++      if (event.source !== frame.contentWindow) return;
++      if (event.data?.type !== 'eleckoi:card-ready') return;
++      frame.contentWindow?.postMessage({ type: 'eleckoi:card-document', channel, html: source }, CARD_ORIGIN);
++    };
++    window.addEventListener('message', respond);
++    return () => window.removeEventListener('message', respond);
++  }, [channel, source]);
++
+   return (
+     <iframe
+       ref={frameRef}
+@@ -113,7 +136,7 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
+       title="互动消息内容"
+       allow="fullscreen; autoplay; clipboard-read; clipboard-write"
+       loading="eager"
+-      srcDoc={source}
++      {...(CARD_ORIGIN ? { src: `${CARD_ORIGIN}/__eleckoi/card-frame.html` } : { srcDoc: source })}
+       style={{ height: `${height}px` }}
+     />
+   );
