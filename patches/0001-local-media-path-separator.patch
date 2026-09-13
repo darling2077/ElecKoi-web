@@ -1,0 +1,44 @@
+diff --git a/src/main/platform/filesystem/LocalMediaStore.ts b/src/main/platform/filesystem/LocalMediaStore.ts
+index 2d912e3..b50ae9d 100644
+--- a/src/main/platform/filesystem/LocalMediaStore.ts
++++ b/src/main/platform/filesystem/LocalMediaStore.ts
+@@ -8,7 +8,7 @@ import {
+   rmSync,
+   writeFileSync
+ } from 'node:fs'
+-import { join, resolve } from 'node:path'
++import { isAbsolute, join, relative, resolve } from 'node:path'
+ 
+ export const LOCAL_MEDIA_SCHEME = 'eleckoi-media'
+ const REFERENCE_PREFIX = `${LOCAL_MEDIA_SCHEME}://asset/v1/`
+@@ -94,14 +94,12 @@ export class LocalMediaStore {
+     const [, ownerHash, slot, fileName] = parts
+     if (!ownerHash || !HASH_PATTERN.test(ownerHash) || !slot || !SLOT_PATTERN.test(slot) || !fileName || !FILE_PATTERN.test(fileName)) return undefined
+     const candidate = resolve(this.versionRoot(), ownerHash, slot, fileName)
+-    const root = `${resolve(this.versionRoot())}\\`
+-    return candidate.startsWith(root) ? candidate : undefined
++    return isInside(resolve(this.versionRoot()), candidate) ? candidate : undefined
+   }
+ 
+   removeOwner(owner: string): void {
+     const target = resolve(this.versionRoot(), this.ownerHash(owner))
+-    const root = `${resolve(this.versionRoot())}\\`
+-    if (!target.startsWith(root)) throw new Error('本地媒体目录越界。')
++    if (!isInside(resolve(this.versionRoot()), target)) throw new Error('本地媒体目录越界。')
+     rmSync(target, { recursive: true, force: true })
+   }
+ 
+@@ -173,3 +171,13 @@ function decodeStoredImage(path: string): DecodedImage {
+   if (!match) throw new Error('本地媒体引用无效。')
+   return { bytes: readFileSync(path), extension: match[2]! }
+ }
++
++/**
++ * 跨平台判定 candidate 是否位于 root 之内。
++ * 上游原实现用 `${resolve(root)}\\` 拼前缀，反斜杠在 POSIX 上不构成目录分隔，
++ * 导致 pathForReference 在 Linux/macOS 恒返回 undefined（媒体全部 404）。
++ */
++function isInside(root: string, candidate: string): boolean {
++  const path = relative(root, candidate)
++  return path.length > 0 && !path.startsWith('..') && !isAbsolute(path)
++}
