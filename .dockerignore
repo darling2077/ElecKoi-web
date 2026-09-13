@@ -1,0 +1,20 @@
+# 构建上下文排除项（容器内会重新安装依赖与构建产物）
+node_modules
+**/node_modules
+out
+release
+
+# 版本控制与本地工具
+.git
+.gitattributes
+.github
+.githooks
+
+# 记忆与本地笔记
+.dsh-memory
+docs/webui
+
+# 各种本地临时物
+*.log
+.DS_Store
+resources/native
