@@ -602,7 +602,7 @@ const ALLOWED_MODIFICATIONS = new Set(['package.json', 'README.md', 'NOTICE'])
 | 在 fork 上是否跑 | **默认不跑**，需手动在 Actions 页启用 |
 | 能否删除/修改这两个文件 | ❌ **不能** —— 它们是上游文件，删除会触发门禁「删除了上游文件」 |
 | 是否建议加 CI | 可选。若加，新文件放 `.github/workflows/`，而该前缀**不在门禁白名单内** → 需把 `.github/workflows/` 加进 `ALLOWED_ADDITIONS` |
-| 推荐做法 | 先不加。发布初期用本地 `pnpm webui:verify` 作为验收门禁（已有 17 项 `webui:*` 检查）。若加，只加一个 Linux 作业跑 `pnpm webui:typecheck && pnpm check:upstream-diff`，成本低、信号强 |
+| ~~推荐做法~~ **已实施** | 加了 `.github/workflows/web-image.yml`：推 `webui-v*` tag 时构建镜像推到 ghcr.io，并在构建成功后创建 Release。白名单已加入 `.github/workflows/`（只放行该子目录，上游那两个 workflow 若被改动/删除仍会被门禁拦下）。本地 `pnpm webui:verify` 仍是主验收门禁，CI 不重复跑它 |
 
 **⚠️ 一条容易踩的坑**：`release-windows.yml` 的触发条件是 `push: tags: ['v*']`。
 如果发布时顺手 `git push --tags`，而 fork 又启用了 Actions，就会**触发上游的 Windows 发布流程**。
@@ -690,12 +690,14 @@ docker compose -f docker/compose.yml up -d --build
    设 `ELECKOI_VERSION=1.0.0` 即可让运行中的服务显示你自己的版本号（可在 `docker/compose.yml` 里加一行）。
 3. 在 README 里写清"基于上游 v0.1.1"。
 
-**现在要不要打 tag？** 不是必需：
+**现在要不要打 tag？** 已实施 —— 首个版本 tag 为 `webui-v0.1.1`：
 
-- **首次发布**：只推 `webui` 分支即可，不打 tag。
-- **等真正部署上线某个版本**、想让 `ELECKOI_SOURCE_URL` 精确指向"正在运行的那份源码"时再打 ——
-  因为分支会继续前移，指向分支的源码链接会随时间漂移；指向 tag 才稳定。
-  这正是 AGPL §13 想要的"对应源码"。
+- 推 tag 会触发 `.github/workflows/web-image.yml`：构建镜像 → 推 `ghcr.io/darling2077/eleckoi-web:0.1.1`
+  与 `:latest` → 构建成功后用 `docs/webui/发行说明.md` 作正文创建 Release。
+- **顺序很重要**：Release 由 CI 创建，不要手动再建一个（会撞车）。
+- tag 指向固定 commit，所以 `ELECKOI_SOURCE_URL` 指向它才是 AGPL §13 要的"对应源码"；
+  指向分支会随分支前移而漂移。
+- 发下一个版本：先更新 `docs/webui/发行说明.md`，再打 `webui-v<下一个版本>` tag。
 
 **⚠️ tag 命名必须避开 `v*`**：上游的 `.github/workflows/release-windows.yml` 触发条件是
 `push: tags: ['v*']`。如果你打了 `v0.2.0` 这类 tag 并推送、而 fork 又启用了 Actions，
@@ -772,10 +774,14 @@ docker compose -f docker/compose.yml up -d --build
   - 这些文档记录了大量内部推理过程，公开有助于建立信任，但也会暴露踩坑史
   - [ ] 全部公开（推荐）　[ ] 只公开面向部署者的部分（`README`、`反向代理部署`、`上游升级流程`）
 
-### 决策 6：CI
+### 决策 6：CI　→ 已定：加「构建并发布镜像」作业
 
-- [ ] 暂不加 Actions，用本地 `pnpm webui:verify`（推荐）
-- [ ] 加一个 Linux 最小 CI（需把 `.github/workflows/` 加入门禁白名单）
+- [ ] ~~暂不加 Actions，用本地 `pnpm webui:verify`~~
+- [x] 加 Actions（已把 `.github/workflows/` 加入门禁白名单）
+  - 实际加的不是"最小 Linux CI"，而是 **`web-image.yml`：推 `webui-v*` tag 时
+    构建镜像推到 ghcr.io 并创建 Release**。理由是首次构建要 20–40 分钟，
+    让每个用户各自构建一遍是纯浪费；发一个现成镜像价值最大。
+  - 本地 `pnpm webui:verify`（16 组、137 项断言）仍是主验收门禁，CI 不重复跑。
 
 ### 决策 7：作者身份与提交署名
 
