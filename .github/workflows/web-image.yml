@@ -1,0 +1,78 @@
+name: ElecKoi WebUI Image
+
+# ⚠️ 触发条件必须避开 `v*`。
+# 上游的 .github/workflows/release-windows.yml 是 `push: tags: ['v*']`，
+# 会跑 windows-latest 构建 Windows 安装包并发布 Release。fork 一旦启用 Actions，
+# 推一个 `v0.1.1` 这样的 tag 就会把它一起唤醒（浪费 Windows 额度，还可能产生
+# 同名但内容毫不相干的 Release）。所以本仓库的 tag 统一带 `webui-` 前缀。
+on:
+  push:
+    tags:
+      - 'webui-v*'
+
+permissions:
+  contents: write # 建 Release
+  packages: write # 推 ghcr.io
+
+concurrency:
+  group: web-image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  image:
+    name: 构建并发布容器镜像
+    runs-on: ubuntu-latest
+    # Dockerfile 里含 apt + 886 个 pnpm 包 + Electron 相关下载，
+    # 首次构建 20–40 分钟；给足余量但不要无限等（卡住时要能失败）。
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # ghcr 的镜像名必须全小写，而仓库名是 ElecKoi-web（含大写）。
+      # 版本号从 tag 里剥掉 `webui-v` 前缀：webui-v0.1.1 → 0.1.1
+      - name: 计算镜像名与版本
+        id: names
+        run: |
+          set -euo pipefail
+          echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "version=${GITHUB_REF_NAME#webui-v}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          # 只出 amd64：镜像里的 Electron/Chromium 运行时按平台取二进制，
+          # 没有验证过 arm64，不要发布未经测试的架构。
+          platforms: linux/amd64
+          push: true
+          # 小写仓库名见上一步；${{ }} 里不能直接对表达式做大小写转换。
+          tags: |
+            ${{ steps.names.outputs.image }}:${{ steps.names.outputs.version }}
+            ${{ steps.names.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.title=ElecKoi WebUI
+            org.opencontainers.image.description=ElecKoi 的 Docker 多用户 WebUI 分支
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+
+      # 放在构建成功之后：构建失败时不该留下一个声称"镜像已发布"的 Release。
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "$GITHUB_REF_NAME" \
+            --title "ElecKoi WebUI ${{ steps.names.outputs.version }}" \
+            --notes-file docs/webui/发行说明.md
