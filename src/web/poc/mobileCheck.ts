@@ -20,6 +20,12 @@ import { randomBytes } from 'node:crypto'
 import { startWebUiStack } from '../stack'
 import { startMockModelServer } from './mockModelServer'
 
+/** 夹具立绘：8×8 深青渐变 PNG。用它当角色头像后，
+ *  1) 消息头像会真的渲染（否则 .avatar 是空占位，量不到宽度）；
+ *  2) 上游默认 chatBackground='character' 会把立绘当聊天壁纸，
+ *     壁纸层 .chat-shell-backdrop 才会出现——手机端那条左侧长条就在这层。 */
+const FIXTURE_ART = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAuElEQVR4nA3JQUpDQQwA0J6kB5gDzAHmAHOALFyIBBEpEqQEKRKKlFCKBCklFClBigQR+YgLFx7Oeds3mwOXK6kLbWx97bALPCTFNJtfcLmWStpW1jcOFnhMOo+45HIrdalNrG8d9oGnpByBXO6kPmh7sv7s4IFvSZ8jbrjcS33UptZfHF4D35OmEQsuLHWtbWf94BCBH0k/I4jLSupGm1k/OpwDv5J+Ryy5iNSttr31k0MGfif9Tf8FZlnBNMBlhwAAAABJRU5ErkJggg=='
+
 const PROBE_PAGE = '__mobileprobe.html'
 const PROBE_DRIVER = '__mobileprobe-driver.js'
 const PROBE_SCRIPT = '__mobileprobe.js'
@@ -128,6 +134,13 @@ function probeScript(): string {
       messageCount: document.querySelectorAll('.message').length,
       bubbleCount: document.querySelectorAll('.bubble, .message-content').length,
       emptyHint: (document.querySelector('.chat-empty-guide, .message-area')?.textContent || '').slice(0, 40),
+      // 壁纸层：窄屏必须从 0 起，否则左边露出通高白条
+      backdrop: (() => {
+        const b = document.querySelector('.chat-shell-backdrop');
+        if (!b) return null;
+        const r = b.getBoundingClientRect();
+        return { left: Math.round(r.left), width: Math.round(r.width) };
+      })(),
       // 手机上抽屉展开时，账号区不能盖住抽屉自己的收起按钮
       chromeOverlap: (() => {
         const account = document.querySelector('.eleckoi-web-account');
@@ -155,7 +168,7 @@ function probeScript(): string {
       item.click();
       setTimeout(() => {
         const after = measure();
-        write({ ...before, tapped: true, collapsedAfterTap: after.collapsed, chatWidthAfterTap: after.chatWidth, bubbleWidthAfterTap: after.bubbleWidth, diagAfterTap: after.diag, messageCountAfterTap: after.messageCount });
+        write({ ...before, tapped: true, collapsedAfterTap: after.collapsed, chatWidthAfterTap: after.chatWidth, bubbleWidthAfterTap: after.bubbleWidth, diagAfterTap: after.diag, messageCountAfterTap: after.messageCount, backdropAfterTap: after.backdrop });
       }, 800);
       return;
     }
@@ -216,6 +229,70 @@ function probeScript(): string {
           })()
         });
       }, 1200);
+      return;
+    }
+    if (params.get('model') === '1') {
+      const item = document.querySelector('.conversation-item');
+      if (!item) { setTimeout(tick, 250); return; }
+      item.click();
+      setTimeout(() => {
+        const trigger = document.querySelector('.chat-model-trigger');
+        if (!trigger) { write({ ...before, modelOpened: false }); return; }
+        trigger.click();
+        setTimeout(() => {
+          const panel = document.querySelector('.chat-model-panel');
+          const configs = document.querySelector('.chat-model-configs');
+          const pane = document.querySelector('.chat-model-list-pane');
+          const name = document.querySelector('.chat-model-list > button .chat-model-name');
+          const box = (el) => (el ? el.getBoundingClientRect() : null);
+          const pr = box(panel);
+          write({
+            ...before,
+            modelOpened: panel !== null,
+            panelLeft: pr ? Math.round(pr.left) : -1,
+            panelRight: pr ? Math.round(pr.right) : -1,
+            panelWidth: pr ? Math.round(pr.width) : 0,
+            panelHeight: pr ? Math.round(pr.height) : 0,
+            configsWidth: configs ? Math.round(box(configs).width) : 0,
+            listPaneWidth: pane ? Math.round(box(pane).width) : 0,
+            listNameClipped: name ? name.scrollWidth > name.clientWidth + 1 : null,
+            // 配置条里每一项都必须完整可见（不能靠横滑才能看到）
+            configsScrolls: (() => {
+              const box = document.querySelector('.chat-model-configs');
+              if (!box) return null;
+              return box.scrollHeight - box.clientHeight;
+            })(),
+            configsDiag: (() => {
+              const box = document.querySelector('.chat-model-configs');
+              if (!box) return null;
+              const out = [];
+              for (const group of box.children) {
+                const h3 = group.querySelector('h3');
+                const g = group.getBoundingClientRect();
+                out.push('组[' + (h3 ? h3.textContent.trim() : '?') + '] y=' + Math.round(g.top)
+                  + ' h=' + Math.round(g.height)
+                  + ' 项=' + [...group.querySelectorAll('button')].map((b) => {
+                    const r = b.getBoundingClientRect();
+                    return b.textContent.trim().slice(0, 14) + '@' + Math.round(r.left) + '-' + Math.round(r.right);
+                  }).join(','));
+              }
+              return out;
+            })(),
+            configsClipped: (() => {
+              const box = document.querySelector('.chat-model-configs');
+              if (!box) return null;
+              const br = box.getBoundingClientRect();
+              const items = [...box.querySelectorAll('.chat-model-provider-group > button')];
+              if (items.length < 2) return null;
+              return items.some((el) => {
+                const r = el.getBoundingClientRect();
+                return r.right > br.right + 1 || r.width === 0;
+              });
+            })(),
+            docOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth
+          });
+        }, 900);
+      }, 900);
       return;
     }
     setTimeout(() => write(before), 400);
@@ -425,16 +502,37 @@ async function main(): Promise<void> {
       api_format: 'chat_completions'
     }) as Array<{ id: string; name: string }>
     const configId = configs.find((c) => c.name === 'MOBILE-MOCK')?.id
+    // 再建一条**不同提供商**下的配置。模型弹窗左栏是按提供商分组的，
+    // 只有一个分组时"配置项是否被挤出屏幕"这条断言等于空过。
+    await call('command.models.save', {
+      name: 'MOBILE-SECOND',
+      provider: 'deepseek',
+      api_key: 'mock-key-2',
+      base_url: mock.url,
+      proxy_url: '',
+      model: 'mock-model-2',
+      model_options: [],
+      custom_headers: {},
+      supports_tools: null,
+      enabled: true,
+      image_settings: {},
+      api_format: 'chat_completions'
+    })
     await call('command.settings.write', {
       key: 'models.active',
       value: { capability: 'chat', config_id: configId, model: 'mock-model', parameters: { stream: true, temperature: 1, top_p: 1 } }
     })
     await call('command.characters.create', {
-      id: 'char-mobile', name: '移动端测试', description: '布局验收', personality: '', scenario: '', chatBackground: ''
+      id: 'char-mobile', name: '移动端测试', description: '布局验收', personality: '', scenario: '',
+      avatar: FIXTURE_ART,
+      chatBackground: '', chatBackgroundOpacity: 1, chatBackgroundBlur: 0, chatBackgroundScrim: 0
     })
     const details = await call('command.conversations.create', {
       title: '移动端测试会话',
-      metadata: { characterId: 'char-mobile', characterName: '移动端测试', characterAvatar: '', characterPersona: {}, modelSettings: {} }
+      metadata: {
+        characterId: 'char-mobile', characterName: '移动端测试',
+        characterAvatar: FIXTURE_ART, characterPersona: {}, modelSettings: {}
+      }
     }) as { conversation?: { id?: string } }
     const conversationId = details?.conversation?.id
     if (!conversationId) throw new Error('会话创建失败')
@@ -553,6 +651,39 @@ async function main(): Promise<void> {
       + `、横向溢出 ${String(fontReport?.overflowX)}px、进页自动收起=${String(fontReport?.drawerCollapsed)}`
       + `（期望：正文 ≥200px、不被抽屉遮挡、不横向溢出）`
       + `\n        预览内部：${JSON.stringify(fontReport?.fontDiag ?? {})}`)
+
+    // ── M-wallpaper：窄屏壁纸层必须从 0 起（否则左边一条通高白条） ──
+    const backdrop = (tapReport?.backdropAfterTap ?? tapReport?.backdrop) as { left?: number; width?: number } | null | undefined
+    const backdropOk = backdrop != null && Number(backdrop.left) === 0
+      && Number(backdrop.width) >= Number(tapReport?.chatWidthAfterTap ?? 0) - 1
+    record('M-wallpaper', backdropOk,
+      backdrop == null
+        ? '未取到壁纸层（夹具立绘没生效？）'
+        : `壁纸层 left=${String(backdrop.left)}px、宽 ${String(backdrop.width)}px`
+          + `（聊天区 ${String(tapReport?.chatWidthAfterTap)}px，期望 left=0 且铺满）`)
+
+    // ── M-model：模型选择弹窗在窄屏不该挤压 ──
+    const model = await captureAt(url('&model=1'), { width: 390, height: 844 },
+      { screenshot: join(shotDir, 'model-phone.png') })
+    const modelReport = model.report
+    const panelWidth = Number(modelReport?.panelWidth ?? 0)
+    const listPaneWidth = Number(modelReport?.listPaneWidth ?? 0)
+    const panelInside = Number(modelReport?.panelLeft ?? -1) >= 0
+      && Number(modelReport?.panelRight ?? 1e9) <= Number(modelReport?.viewport ?? 0) + 1
+    // 模型列表列至少占弹窗的 60%（改前 141/361 = 39%）
+    const modelOk = modelReport?.modelOpened === true && panelInside
+      && listPaneWidth >= panelWidth * 0.6
+      && modelReport?.configsClipped !== true
+      && Number(modelReport?.configsScrolls ?? 1) <= 1
+      && Number(modelReport?.docOverflowX ?? 1) <= 1
+    record('M-model', modelOk,
+      `模型弹窗：宽 ${panelWidth}px（${String(modelReport?.panelLeft)}→${String(modelReport?.panelRight)}，视口 ${String(modelReport?.viewport)}px）、`
+      + `配置条 ${String(modelReport?.configsWidth)}px、模型列表 ${listPaneWidth}px`
+      + `（占 ${panelWidth > 0 ? Math.round((listPaneWidth / panelWidth) * 100) : 0}%，期望 ≥60%）、`
+      + `名字被截断=${String(modelReport?.listNameClipped)}、`
+      + `配置项被截=${String(modelReport?.configsClipped)}、配置条纵向需滚动 ${String(modelReport?.configsScrolls)}px、`
+      + `横向溢出 ${String(modelReport?.docOverflowX)}px`
+      + `\n        配置条：${JSON.stringify(modelReport?.configsDiag ?? [])}`)
 
     // 点开会话后的"游玩视图"截图：这才是用户实际长时间面对的画面
     await captureAt(url('&tap=1'), { width: 390, height: 844 }, { screenshot: join(shotDir, 'chat-open.png') })
