@@ -12,6 +12,7 @@
  *    明暗主题也随应用设置（登录时未知账号，故先跟随系统）。
  */
 
+import { faviconLinks } from './favicon'
 import type { AuthError } from '../control/AuthService'
 import { APP_TOKENS_PATH } from './appTokens'
 import { pageCss } from './pageStyles'
@@ -50,6 +51,7 @@ export function renderLoginPage(options: LoginPageOptions): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+${faviconLinks()}
 <title>登录 · 电子爱</title>
 <link rel="stylesheet" href="${APP_TOKENS_PATH}">
 <style>

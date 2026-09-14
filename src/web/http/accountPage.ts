@@ -5,6 +5,7 @@
  * 主题跟随该账号在应用里的外观设置。这里是「门厅内侧」，应当和门一样安静。
  */
 
+import { faviconLinks } from './favicon'
 import { APP_TOKENS_PATH } from './appTokens'
 import { pageCss } from './pageStyles'
 import type { PageTheme } from './pageTheme'
@@ -64,6 +65,7 @@ export function renderAccountPage(options: AccountPageOptions): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+${faviconLinks()}
 <title>账号管理 · 电子爱</title>
 <link rel="stylesheet" href="${APP_TOKENS_PATH}">
 <style>
