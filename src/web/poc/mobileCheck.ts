@@ -134,6 +134,23 @@ function probeScript(): string {
       messageCount: document.querySelectorAll('.message').length,
       bubbleCount: document.querySelectorAll('.bubble, .message-content').length,
       emptyHint: (document.querySelector('.chat-empty-guide, .message-area')?.textContent || '').slice(0, 40),
+      // 生成统计条：每项都必须完整显示（上游窄屏会把每项截成 "1…""LL…"）
+      stats: (() => {
+        const line = document.querySelector('.generation-stats-line');
+        if (!line) return null;
+        const items = [...line.querySelectorAll('.generation-stats-item')];
+        return {
+          count: items.length,
+          height: Math.round(line.getBoundingClientRect().height),
+          clipped: items.filter((el) => el.scrollWidth > el.clientWidth + 1).length,
+          // 有壁纸时必须改用壁纸前景色，否则 --muted 的灰字糊在背景里
+          color: getComputedStyle(line).color,
+          wallpaper: (document.querySelector('.qq-shell')?.classList.contains('has-chat-wallpaper')) === true,
+          wallpaperFg: getComputedStyle(document.querySelector('.qq-shell') || line)
+            .getPropertyValue('--chat-wallpaper-content-fg').trim(),
+          text: items.map((el) => el.textContent.trim()).join(' | ').slice(0, 120)
+        };
+      })(),
       // 壁纸层：窄屏必须从 0 起，否则左边露出通高白条
       backdrop: (() => {
         const b = document.querySelector('.chat-shell-backdrop');
@@ -166,10 +183,22 @@ function probeScript(): string {
       const item = document.querySelector('.conversation-item');
       if (!item) { setTimeout(tick, 250); return; }
       item.click();
-      setTimeout(() => {
+      // 不要固定等 800ms：会话渲染快慢会波动，等待不足会让 M-text / M-wallpaper /
+      // M-stats 一起误报"没打开会话"（真的遇到过，重跑又全绿）。
+      // 改成轮询到消息出现为止，超时再如实上报。
+      let waited = 0;
+      const pollChat = () => {
+        waited += 250;
         const after = measure();
-        write({ ...before, tapped: true, collapsedAfterTap: after.collapsed, chatWidthAfterTap: after.chatWidth, bubbleWidthAfterTap: after.bubbleWidth, diagAfterTap: after.diag, messageCountAfterTap: after.messageCount, backdropAfterTap: after.backdrop });
-      }, 800);
+        // 两个条件都要满足：消息出现（会话确实打开了）**且**统计条渲染出来
+        // （整轮生成结束）。只看消息会在生成中途就退出，统计条还没挂上。
+        if ((after.messageCount > 0 && after.stats != null) || waited >= 15000) {
+          write({ ...before, tapped: true, waitedMs: waited, collapsedAfterTap: after.collapsed, chatWidthAfterTap: after.chatWidth, bubbleWidthAfterTap: after.bubbleWidth, diagAfterTap: after.diag, messageCountAfterTap: after.messageCount, backdropAfterTap: after.backdrop, statsAfterTap: after.stats });
+          return;
+        }
+        setTimeout(pollChat, 250);
+      };
+      setTimeout(pollChat, 250);
       return;
     }
     if (params.get('font') === '1') {
@@ -231,13 +260,49 @@ function probeScript(): string {
       }, 1200);
       return;
     }
+    if (params.get('outside') === '1') {
+      const shell = document.querySelector('.qq-shell');
+      if (!shell) { setTimeout(tick, 250); return; }
+      const startOpen = !shell.classList.contains('side-panel-collapsed');
+      setTimeout(() => {
+        const drawer = document.querySelector('.side-panel-shell');
+        const dr = drawer ? drawer.getBoundingClientRect() : { right: 0 };
+        // 取抽屉右缘再往右 24px、垂直居中：这正是"露在外面的空白区"
+        const x = Math.round(Math.min(window.innerWidth - 12, dr.right + 24));
+        const y = Math.round(window.innerHeight / 2);
+        const hit = document.elementFromPoint(x, y);
+        const blank = hit instanceof Element && !hit.closest('.side-panel-shell');
+        if (blank) {
+          hit.dispatchEvent(new MouseEvent('click', {
+            bubbles: true, cancelable: true, view: window, clientX: x, clientY: y
+          }));
+        }
+        setTimeout(() => {
+          const after = document.querySelector('.qq-shell');
+          write({
+            ...before,
+            outsideStartOpen: startOpen,
+            outsidePoint: x + ',' + y,
+            outsideHitBlank: blank,
+            outsideClosed: after ? after.classList.contains('side-panel-collapsed') : null
+          });
+        }, 600);
+      }, 700);
+      return;
+    }
     if (params.get('model') === '1') {
       const item = document.querySelector('.conversation-item');
       if (!item) { setTimeout(tick, 250); return; }
       item.click();
-      setTimeout(() => {
+      let tries = 0;
+      const openPicker = () => {
+        tries += 1;
         const trigger = document.querySelector('.chat-model-trigger');
-        if (!trigger) { write({ ...before, modelOpened: false }); return; }
+        if (!trigger) {
+          if (tries < 12) { setTimeout(openPicker, 250); return; }
+          write({ ...before, modelOpened: false });
+          return;
+        }
         trigger.click();
         setTimeout(() => {
           const panel = document.querySelector('.chat-model-panel');
@@ -292,7 +357,8 @@ function probeScript(): string {
             docOverflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth
           });
         }, 900);
-      }, 900);
+      };
+      openPicker();
       return;
     }
     setTimeout(() => write(before), 400);
@@ -525,7 +591,7 @@ async function main(): Promise<void> {
     await call('command.characters.create', {
       id: 'char-mobile', name: '移动端测试', description: '布局验收', personality: '', scenario: '',
       avatar: FIXTURE_ART,
-      chatBackground: '', chatBackgroundOpacity: 1, chatBackgroundBlur: 0, chatBackgroundScrim: 0
+      chatBackground: '', chatBackgroundOpacity: 1, chatBackgroundBlur: 0, chatBackgroundScrim: 0.5
     })
     const details = await call('command.conversations.create', {
       title: '移动端测试会话',
@@ -627,7 +693,8 @@ async function main(): Promise<void> {
     record('M-tap', tapOk,
       tapReport === undefined
         ? '未取到点击后的状态'
-        : `点会话后：收起=${String(tapReport.collapsedAfterTap)}、聊天区 ${String(tapReport.chatWidthAfterTap)}px`)
+        : `点会话后：收起=${String(tapReport.collapsedAfterTap)}、聊天区 ${String(tapReport.chatWidthAfterTap)}px`
+          + `、等待 ${String(tapReport.waitedMs)}ms`)
 
     // ── M-font：「字体页」（外观设置）在手机上的实时预览宽度 ──
     const font = await captureAt(url('&font=1'), { width: 390, height: 844 },
@@ -661,6 +728,49 @@ async function main(): Promise<void> {
         ? '未取到壁纸层（夹具立绘没生效？）'
         : `壁纸层 left=${String(backdrop.left)}px、宽 ${String(backdrop.width)}px`
           + `（聊天区 ${String(tapReport?.chatWidthAfterTap)}px，期望 left=0 且铺满）`)
+
+    // ── M-stats：底部生成统计条不能被截成省略号 ──
+    const stats = tapReport?.statsAfterTap as
+      { count?: number; clipped?: number; text?: string; height?: number
+        color?: string; wallpaper?: boolean; wallpaperFg?: string } | null | undefined
+    // 颜色维度：开了壁纸就必须用上游那套壁纸前景色（RGB 比对，浏览器会归一化写法）
+    // 注意：自定义属性读出来是原始 token（#15171a），computed color 是 rgb(...)，
+    // 必须先归一化。这里不用正则——整段页面脚本是 TS 模板字符串，
+    // 反斜杠转义会被吃掉（之前已经栽过一次）。
+    const colorNorm = (value: unknown): string => {
+      const raw = String(value).trim().toLowerCase()
+      if (raw.charAt(0) === '#') {
+        let hex = raw.slice(1)
+        if (hex.length === 3) {
+          hex = hex.charAt(0) + hex.charAt(0) + hex.charAt(1) + hex.charAt(1)
+            + hex.charAt(2) + hex.charAt(2)
+        }
+        const n = Number.parseInt(hex.slice(0, 6), 16)
+        return ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255)
+      }
+      return raw.replace('rgba(', '').replace('rgb(', '').replace(')', '')
+        .split(',').slice(0, 3).map((part) => part.trim()).join(',')
+    }
+    const colorOk = stats?.wallpaper !== true
+      || (stats.color !== undefined && colorNorm(stats.color) === colorNorm(stats.wallpaperFg))
+    const statsOk = stats != null && Number(stats.count) >= 3 && Number(stats.clipped) === 0 && colorOk
+    record('M-stats', statsOk,
+      stats == null
+        ? '未取到生成统计条'
+        : `统计条 ${String(stats.count)} 项、高 ${String(stats.height)}px、被截断 ${String(stats.clipped)} 项`
+          + `、壁纸前景色=${colorOk ? '已套用' : '未套用(' + colorNorm(stats.color) + ' vs ' + colorNorm(stats.wallpaperFg) + ')'}`
+          + `（期望全部完整显示且不被壁纸吞掉）\n        ${String(stats.text)}`)
+
+    // ── M-outside：点抽屉外的空白处应当收起侧栏 ──
+    const outside = await captureAt(url('&outside=1'), { width: 390, height: 844 },
+      { screenshot: join(shotDir, 'drawer-outside.png') })
+    const outReport = outside.report
+    const outsideOk = outReport?.outsideStartOpen === true
+      && outReport?.outsideHitBlank === true
+      && outReport?.outsideClosed === true
+    record('M-outside', outsideOk,
+      `侧栏展开时点空白处（${String(outReport?.outsidePoint)}，命中非抽屉元素=${String(outReport?.outsideHitBlank)}）`
+      + `→ 收起=${String(outReport?.outsideClosed)}`)
 
     // ── M-model：模型选择弹窗在窄屏不该挤压 ──
     const model = await captureAt(url('&model=1'), { width: 390, height: 844 },
