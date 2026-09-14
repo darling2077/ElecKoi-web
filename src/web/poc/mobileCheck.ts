@@ -1,0 +1,576 @@
+/**
+ * 移动端布局验收：在真实浏览器里按手机视口测量，并验证抽屉交互。
+ *
+ * 为什么不用 `chromium --window-size=390,844`：无头 Chromium 对窗口宽度有
+ * **500px 下限**，传 390 会被静默钳到 500——于是"测了手机布局"是假的，
+ * 结论全部无效（这个坑真实踩过：前两轮截图与断言其实都是 500px 布局）。
+ *
+ * 因此改用 CDP 的 Emulation.setDeviceMetricsOverride 精确设定视口，
+ * 用 Node 原生 WebSocket 通信，不引入任何新依赖。
+ *
+ * 运行：pnpm webui:mobile
+ */
+
+import { spawn } from 'node:child_process'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { startWebUiStack } from '../stack'
+import { startMockModelServer } from './mockModelServer'
+
+const PROBE_PAGE = '__mobileprobe.html'
+const PROBE_DRIVER = '__mobileprobe-driver.js'
+const PROBE_SCRIPT = '__mobileprobe.js'
+const PROBE_TARGET = '__mobileprobe-target.html'
+
+const outcomes: Array<{ id: string; ok: boolean; detail: string }> = []
+
+function record(id: string, ok: boolean, detail: string): void {
+  outcomes.push({ id, ok, detail })
+  console.log(`${ok ? '\u001b[32mPASS\u001b[0m' : '\u001b[31mFAIL\u001b[0m'}  ${id}\n        ${detail}`)
+}
+
+function probePage(): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>mobile-probe</title></head>
+<body><pre id="out">pending</pre><script src="/${PROBE_DRIVER}"></script></body></html>
+`
+}
+
+function probeDriver(): string {
+  return `(() => {
+  const params = new URLSearchParams(location.search);
+  const out = document.getElementById('out');
+  const carry = new URLSearchParams();
+  for (const [key, value] of params) {
+    if (key !== 'email' && key !== 'password' && key !== 'target') carry.set(key, value);
+  }
+  const suffix = carry.toString() === '' ? '' : '?' + carry.toString();
+  (async () => {
+    const login = await fetch('/api/auth/login', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: params.get('email') || '', password: params.get('password') || '' })
+    });
+    if (!login.ok) { out.textContent = 'LOGIN-FAILED ' + login.status; return; }
+    location.replace((params.get('target') || '/') + suffix);
+  })().catch((error) => { out.textContent = 'ERROR ' + String(error); });
+})();
+`
+}
+
+function injectProbe(html: string): string {
+  return html.replace('</body>', `<script src="/${PROBE_SCRIPT}"></script></body>`)
+}
+
+/** 探针挂在 documentElement 上：应用是 SPA，body 会被 React 重写。 */
+function probeScript(): string {
+  return `(() => {
+  const params = new URLSearchParams(location.search);
+  const write = (payload) => {
+    let host = document.getElementById('mobileprobe');
+    if (!host) {
+      host = document.createElement('pre');
+      host.id = 'mobileprobe';
+      host.style.display = 'none';
+      document.documentElement.append(host);
+    }
+    host.textContent = 'REPORT:' + JSON.stringify(payload);
+  };
+  const measure = () => {
+    const shell = document.querySelector('.qq-shell');
+    const chat = document.querySelector('.main-panel-shell');
+    const panel = document.querySelector('.side-panel-shell');
+    const bubble = document.querySelector('.message-content, .bubble');
+    return {
+      bubbleWidth: bubble ? Math.round(bubble.getBoundingClientRect().width) : 0,
+      // 拆解开销：正文列之外的宽度都花在哪了
+      diag: (() => {
+        const row = document.querySelector('.message-roleplay');
+        const av = document.querySelector('.message-roleplay > .avatar');
+        const panel = document.querySelector('.chat-panel');
+        if (!row) return null;
+        const cs = getComputedStyle(row);
+        const bubbleEl = row.querySelector('.bubble');
+        const bcs = bubbleEl ? getComputedStyle(bubbleEl) : null;
+        return {
+          rowWidth: Math.round(row.getBoundingClientRect().width),
+          columns: cs.gridTemplateColumns,
+          rowPadding: cs.paddingLeft + '/' + cs.paddingRight,
+          avatarWidth: av ? Math.round(av.getBoundingClientRect().width) : 0,
+          panelPadding: panel ? getComputedStyle(panel).paddingLeft + '/' + getComputedStyle(panel).paddingRight : '',
+          bubblePad: bcs ? bcs.paddingLeft + '/' + bcs.paddingRight : '',
+          contentWidth: bubble ? Math.round(bubble.getBoundingClientRect().width) : 0,
+          avatarVar: getComputedStyle(row).getPropertyValue('--chat-avatar-width'),
+          railVar: getComputedStyle(row).getPropertyValue('--chat-roleplay-side-rail'),
+          chain: (() => {
+            const out = [];
+            let el = row;
+            const stop = document.querySelector('.main-panel-shell');
+            for (let i = 0; el && i < 12; i += 1) {
+              const c = getComputedStyle(el);
+              const cls = String(el.className || '').split(/\s+/).filter(Boolean).slice(0, 2).join('.');
+              out.push(el.tagName.toLowerCase() + '.' + cls
+                + ' w=' + Math.round(el.getBoundingClientRect().width)
+                + ' pad=' + c.paddingLeft + '/' + c.paddingRight
+                + ' mar=' + c.marginLeft + '/' + c.marginRight
+                + ' max=' + c.maxWidth
+                + ' ovf=' + c.overflowX);
+              if (el === stop) break;
+              el = el.parentElement;
+            }
+            return out;
+          })()
+        };
+      })(),
+      // 诊断：会话打开后 DOM 里到底有什么
+      messageCount: document.querySelectorAll('.message').length,
+      bubbleCount: document.querySelectorAll('.bubble, .message-content').length,
+      emptyHint: (document.querySelector('.chat-empty-guide, .message-area')?.textContent || '').slice(0, 40),
+      // 手机上抽屉展开时，账号区不能盖住抽屉自己的收起按钮
+      chromeOverlap: (() => {
+        const account = document.querySelector('.eleckoi-web-account');
+        const collapse = document.querySelector('.side-panel-shell .side-panel-collapse-button');
+        if (!account || !collapse) return { checked: false };
+        const a = account.getBoundingClientRect();
+        const c = collapse.getBoundingClientRect();
+        const hidden = a.width === 0 || a.height === 0;
+        const overlap = !hidden && a.right > c.left && a.left < c.right && a.bottom > c.top && a.top < c.bottom;
+        return { checked: true, accountHidden: hidden, overlap };
+      })(),
+      viewport: window.innerWidth,
+      chatWidth: chat ? Math.round(chat.getBoundingClientRect().width) : 0,
+      panelWidth: panel ? Math.round(panel.getBoundingClientRect().width) : 0,
+      columns: shell ? getComputedStyle(shell).gridTemplateColumns.split(' ').length : 0,
+      collapsed: shell ? shell.classList.contains('side-panel-collapsed') : false
+    };
+  };
+  const tick = () => {
+    if (!document.querySelector('.qq-shell')) { setTimeout(tick, 250); return; }
+    const before = measure();
+    if (params.get('tap') === '1') {
+      const item = document.querySelector('.conversation-item');
+      if (!item) { setTimeout(tick, 250); return; }
+      item.click();
+      setTimeout(() => {
+        const after = measure();
+        write({ ...before, tapped: true, collapsedAfterTap: after.collapsed, chatWidthAfterTap: after.chatWidth, bubbleWidthAfterTap: after.bubbleWidth, diagAfterTap: after.diag, messageCountAfterTap: after.messageCount });
+      }, 800);
+      return;
+    }
+    if (params.get('font') === '1') {
+      const trigger = document.querySelector('.rail-settings-trigger');
+      if (!trigger) { setTimeout(tick, 250); return; }
+      trigger.click();
+      setTimeout(() => {
+        const page = document.querySelector('.chat-display-settings-page');
+        const preview = document.querySelector('.chat-display-preview');
+        const content = document.querySelector('.chat-display-preview .message-content');
+        const column = document.querySelector('.chat-display-preview-column');
+        const controls = document.querySelector('.chat-display-controls');
+        const rect = (el) => (el ? Math.round(el.getBoundingClientRect().width) : 0);
+        const shell = document.querySelector('.qq-shell');
+        const pr = preview ? preview.getBoundingClientRect() : null;
+        const sidebar = document.querySelector('.app-settings-sidebar');
+        write({
+          ...before,
+          fontOpened: page !== null,
+          // 手机上抽屉必须自动收起：它和设置内容是浮层叠放关系，
+          // 展开时会把内容整块盖住（"字体页太窄"的真实成因）
+          drawerCollapsed: shell ? shell.classList.contains('side-panel-collapsed') : null,
+          sidebarVisible: sidebar ? sidebar.getBoundingClientRect().right > 0 : null,
+          previewLeft: pr ? Math.round(pr.left) : -1,
+          previewRight: pr ? Math.round(pr.right) : -1,
+          previewWidth: rect(preview),
+          previewContentWidth: rect(content),
+          previewColumnWidth: rect(column),
+          controlsWidth: rect(controls),
+          overflowX: page ? page.scrollWidth - page.clientWidth : -1,
+          fontDiag: (() => {
+            const row = document.querySelector('.chat-display-preview .message-roleplay, .chat-display-preview .message-social');
+            const prev = document.querySelector('.chat-display-preview');
+            if (!row) return { row: null };
+            const cs = getComputedStyle(row);
+            const av = row.querySelector('.avatar');
+            const out = [];
+            let el = row;
+            for (let i = 0; el && i < 8; i += 1) {
+              const c = getComputedStyle(el);
+              const cls = String(el.className || '').replace(/[^a-zA-Z0-9_-]+/g, '.').slice(0, 40);
+              out.push(el.tagName.toLowerCase() + '.' + cls
+                + ' w=' + Math.round(el.getBoundingClientRect().width)
+                + ' pad=' + c.paddingLeft + '/' + c.paddingRight
+                + ' bd=' + c.borderLeftWidth + '/' + c.borderRightWidth);
+              if (el === prev) break;
+              el = el.parentElement;
+            }
+            return {
+              rowClass: String(row.className),
+              columns: cs.gridTemplateColumns,
+              rowOriginAvatar: cs.getPropertyValue('--chat-avatar-width'),
+              inlineAvatar: prev ? prev.style.getPropertyValue('--chat-avatar-width') : '',
+              avatarWidth: av ? Math.round(av.getBoundingClientRect().width) : 0,
+              chain: out
+            };
+          })()
+        });
+      }, 1200);
+      return;
+    }
+    setTimeout(() => write(before), 400);
+  };
+  setTimeout(tick, 900);
+})();
+`
+}
+
+/** 极简 CDP 客户端：只用 Emulation 与 Page 两个域，靠 Node 原生 WebSocket。 */
+class CdpSession {
+  private ws: WebSocket
+  private nextId = 1
+  private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+
+  private constructor(ws: WebSocket) {
+    this.ws = ws
+    ws.addEventListener('message', (event) => {
+      const message = JSON.parse(String(event.data)) as { id?: number; result?: unknown; error?: { message: string } }
+      if (message.id === undefined) return
+      const entry = this.pending.get(message.id)
+      if (entry === undefined) return
+      this.pending.delete(message.id)
+      if (message.error) entry.reject(new Error(message.error.message))
+      else entry.resolve(message.result)
+    })
+  }
+
+  static async connect(wsUrl: string): Promise<CdpSession> {
+    const ws = new WebSocket(wsUrl)
+    await new Promise<void>((done, fail) => {
+      ws.addEventListener('open', () => done(), { once: true })
+      ws.addEventListener('error', () => fail(new Error('CDP 连接失败')), { once: true })
+    })
+    return new CdpSession(ws)
+  }
+
+  send(method: string, params: Record<string, unknown> = {}): Promise<unknown> {
+    const id = this.nextId++
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject })
+      this.ws.send(JSON.stringify({ id, method, params }))
+    })
+  }
+
+  close(): void {
+    this.ws.close()
+  }
+}
+
+async function waitForEndpoint(port: number, timeoutMs = 20000): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`)
+      const payload = await response.json() as { webSocketDebuggerUrl?: string }
+      if (payload.webSocketDebuggerUrl) return payload.webSocketDebuggerUrl
+    } catch {
+      // 还没起来
+    }
+    await new Promise((done) => setTimeout(done, 300))
+  }
+  throw new Error('Chromium 调试端口未就绪')
+}
+
+interface Capture {
+  report?: Record<string, unknown>
+  screenshot?: string
+}
+
+/** 用 CDP 在指定视口下打开页面，取回探针报告（可选截图）。 */
+async function captureAt(
+  url: string,
+  viewport: { width: number; height: number },
+  options: { screenshot?: string } = {}
+): Promise<Capture> {
+  const port = 9300 + Math.floor(Math.random() * 500)
+  const profile = mkdtempSync(join(tmpdir(), 'eleckoi-mobile-'))
+  const child = spawn('chromium', [
+    '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
+    '--no-first-run', '--disable-sync', '--hide-scrollbars',
+    `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, 'about:blank'
+  ], { stdio: 'ignore' })
+
+  const cleanup = (): void => {
+    if (!child.killed) child.kill('SIGKILL')
+    rmSync(profile, { recursive: true, force: true })
+  }
+
+  try {
+    const browserWs = await waitForEndpoint(port)
+    const browser = await CdpSession.connect(browserWs)
+    const { targetId } = await browser.send('Target.createTarget', { url: 'about:blank' }) as { targetId: string }
+    const list = await fetch(`http://127.0.0.1:${port}/json/list`).then((r) => r.json()) as Array<{ id: string; webSocketDebuggerUrl: string }>
+    const pageInfo = list.find((item) => item.id === targetId)
+    if (pageInfo === undefined) throw new Error('找不到新建的页面目标')
+    const page = await CdpSession.connect(pageInfo.webSocketDebuggerUrl)
+
+    await page.send('Page.enable')
+    // 关键一步：精确设置视口，绕开无头模式 500px 下限
+    await page.send('Emulation.setDeviceMetricsOverride', {
+      width: viewport.width,
+      height: viewport.height,
+      deviceScaleFactor: 2,
+      mobile: true
+    })
+    await page.send('Page.navigate', { url })
+
+    // 等探针写出报告
+    const deadline = Date.now() + 30000
+    let report: Record<string, unknown> | undefined
+    while (Date.now() < deadline) {
+      await new Promise((done) => setTimeout(done, 500))
+      const evaluated = await page.send('Runtime.evaluate', {
+        expression: "document.getElementById('mobileprobe')?.textContent || ''",
+        returnByValue: true
+      }) as { result?: { value?: string } }
+      const text = evaluated.result?.value ?? ''
+      if (text.startsWith('REPORT:')) {
+        report = JSON.parse(text.slice('REPORT:'.length)) as Record<string, unknown>
+        break
+      }
+    }
+
+    let screenshot: string | undefined
+    if (options.screenshot !== undefined) {
+      const shot = await page.send('Page.captureScreenshot', { format: 'png' }) as { data?: string }
+      if (shot.data !== undefined) {
+        writeFileSync(options.screenshot, Buffer.from(shot.data, 'base64'))
+        screenshot = options.screenshot
+      }
+    }
+
+    page.close()
+    browser.close()
+    return { ...(report === undefined ? {} : { report }), ...(screenshot === undefined ? {} : { screenshot }) }
+  } finally {
+    cleanup()
+  }
+}
+
+async function main(): Promise<void> {
+  process.env.ELECKOI_DISABLE_EVENT_STREAM = '1'
+  const root = await mkdtemp(join(tmpdir(), 'eleckoi-web-mobile-'))
+  const rendererDir = resolve('out/renderer')
+  mkdirSync(rendererDir, { recursive: true })
+  writeFileSync(join(rendererDir, PROBE_PAGE), probePage())
+  writeFileSync(join(rendererDir, PROBE_DRIVER), probeDriver())
+  writeFileSync(join(rendererDir, PROBE_SCRIPT), probeScript())
+
+  const shotDir = process.env.ELECKOI_SHOT_DIR ?? '/tmp/mobile-shots'
+  mkdirSync(shotDir, { recursive: true })
+
+  const stack = await startWebUiStack({
+    dataRoot: root,
+    rendererDir,
+    masterKeyBase64: randomBytes(32).toString('base64'),
+    appVersion: '0.1.0-web-mobile',
+    port: 0,
+    allowRegistration: true,
+    publicPaths: [`/${PROBE_PAGE}`, `/${PROBE_DRIVER}`, `/${PROBE_SCRIPT}`, `/${PROBE_TARGET}`]
+  })
+  const base = stack.server.url
+  const email = 'mobile@example.com'
+  const password = 'mobile-check-password'
+  console.log(`\n== 移动端布局验收 ==\n服务：${base}\n截图：${shotDir}\n`)
+
+  const longReply = '夜里的风从半开的窗缝钻进来，带着雨后潮湿的凉意。夏心语坐在宿舍床沿，指尖轻轻压着覆眼的白色丝带；'
+    + '贴在她肩上的深灰衣料随呼吸传来熟悉的温度——她知道，你还在。'
+    + '“小白……”她朝你的意识所在处偏过头，声音很轻，却带着终于能放松下来的笑意，'
+    + '“今天的冥想结束得比平时早一点。外面雨好像停了。”'
+  const mock = await startMockModelServer({ replyPrefix: longReply, wrapInFinalTag: false, chunkDelayMs: 5 })
+
+  const jar: Record<string, string> = {}
+  try {
+    const register = await fetch(`${base}/api/auth/register`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email, username: 'mobile', password })
+    })
+    for (const entry of register.headers.getSetCookie?.() ?? []) {
+      const pair = entry.split(';')[0] ?? ''
+      if (pair.startsWith('eleckoi_session=')) jar.cookie = pair
+    }
+    if (register.status !== 200) throw new Error(`注册失败：${register.status}`)
+
+    const call = async (name: string, input: unknown): Promise<unknown> => {
+      const response = await fetch(`${base}/api/rpc`, {
+        method: 'POST', headers: { 'content-type': 'application/json', ...jar },
+        body: JSON.stringify({ name, input })
+      })
+      return ((await response.json()) as { data?: unknown }).data
+    }
+    // 角色创建契约里没有 firstMessage（zod 会静默丢弃），所以开场白这条路走不通。
+    // 改用 mock 模型跑一个真实回合——这正是 webui:render 里验证过可行的方式。
+    const configs = await call('command.models.save', {
+      name: 'MOBILE-MOCK',
+      provider: 'custom',
+      api_key: 'mock-key',
+      base_url: mock.url,
+      proxy_url: '',
+      model: 'mock-model',
+      model_options: [],
+      custom_headers: {},
+      supports_tools: null,
+      enabled: true,
+      image_settings: {},
+      api_format: 'chat_completions'
+    }) as Array<{ id: string; name: string }>
+    const configId = configs.find((c) => c.name === 'MOBILE-MOCK')?.id
+    await call('command.settings.write', {
+      key: 'models.active',
+      value: { capability: 'chat', config_id: configId, model: 'mock-model', parameters: { stream: true, temperature: 1, top_p: 1 } }
+    })
+    await call('command.characters.create', {
+      id: 'char-mobile', name: '移动端测试', description: '布局验收', personality: '', scenario: '', chatBackground: ''
+    })
+    const details = await call('command.conversations.create', {
+      title: '移动端测试会话',
+      metadata: { characterId: 'char-mobile', characterName: '移动端测试', characterAvatar: '', characterPersona: {}, modelSettings: {} }
+    }) as { conversation?: { id?: string } }
+    const conversationId = details?.conversation?.id
+    if (!conversationId) throw new Error('会话创建失败')
+
+    // 跑一个回合产生助手消息（正文要够长，宽度才量得准）
+    await call('command.agent.start', { conversationId, text: '请写一段较长的场景描写' })
+    const deadline = Date.now() + 120_000
+    let ready = false
+    while (Date.now() < deadline && !ready) {
+      await new Promise((done) => setTimeout(done, 500))
+      const page = await call('query.conversations.messages', { conversationId, limit: 50 }) as {
+        messages?: Array<{ role: string; status: string }>
+      }
+      const assistant = [...(page.messages ?? [])].reverse().find((m) => m.role === 'assistant')
+      if (assistant !== undefined && assistant.status !== 'streaming') ready = true
+    }
+    if (!ready) throw new Error('mock 回合未在时限内结束')
+
+    // 诊断：确认夹具真的产生了可渲染内容
+    const detail = await call('query.conversations.details', { conversationId }) as {
+      conversation?: { id?: string }
+      metadata?: { openingOptions?: unknown[] }
+      messages?: unknown[]
+    }
+    const msgs = await call('query.conversations.messages', { conversationId, limit: 50 }) as { messages?: unknown[] }
+    console.log(`        [夹具] 会话 ${conversationId}：详情键 ${Object.keys(detail ?? {}).join(',')}`
+      + `、消息 ${msgs?.messages?.length ?? '?'} 条`)
+
+    const page = await fetch(`${base}/`, { headers: jar, redirect: 'manual' })
+    if (page.status !== 200) throw new Error(`抓取应用页失败：${page.status}`)
+    writeFileSync(join(rendererDir, PROBE_TARGET), injectProbe(await page.text()))
+
+    const url = (extra = ''): string =>
+      `${base}/${PROBE_PAGE}?target=${encodeURIComponent(`/${PROBE_TARGET}`)}`
+      + `&email=${encodeURIComponent(email)}&password=${encodeURIComponent(password)}${extra}`
+
+    // 手机竖屏 / 小屏安卓 / 手机横屏 / 桌面
+    const viewports = [
+      { key: 'phone', width: 390, height: 844, label: '手机竖屏 iPhone 14' },
+      { key: 'phone-small', width: 360, height: 780, label: '小屏安卓' },
+      { key: 'landscape', width: 844, height: 390, label: '手机横屏' },
+      { key: 'desktop', width: 1280, height: 800, label: '桌面（须保持三栏）' }
+    ]
+
+    for (const v of viewports) {
+      const { report } = await captureAt(url(), v, { screenshot: join(shotDir, `app-${v.key}.png`) })
+      if (report === undefined) {
+        record(`M-${v.key}`, false, `${v.label}：未取到测量结果`)
+        continue
+      }
+      const measured = Number(report.viewport ?? 0)
+      const chatWidth = Number(report.chatWidth ?? 0)
+      const columns = Number(report.columns ?? 0)
+      // 视口必须就是我们要求的宽度——否则说明又被环境钳制了
+      const viewportOk = Math.abs(measured - v.width) <= 2
+      // 判定标准按形态区分：
+      //  - 桌面（宽且高）：维持三栏
+      //  - 竖屏手机（窄）：必须单栏，聊天区近乎占满
+      //  - 横屏手机（宽但矮）：三栏也可接受（用户横过来就是想要更宽），
+      //    只要聊天区仍有可用宽度。硬套单栏反而浪费横向空间。
+      const isPortraitPhone = v.width < 720 && v.height > v.width
+      const layoutOk = isPortraitPhone
+        ? columns === 1 && chatWidth >= measured - 60
+        : columns === 3 && chatWidth >= 500
+      // 账号区不得盖住抽屉的收起按钮（浮层遮挡类问题，尺寸断言抓不到）
+      const overlapInfo = report.chromeOverlap as
+        { checked?: boolean; overlap?: boolean; accountHidden?: boolean } | undefined
+      const chromeOk = !isPortraitPhone || overlapInfo?.checked !== true || overlapInfo.overlap !== true
+      record(`M-${v.key}`, viewportOk && layoutOk && chromeOk,
+        `${v.label}：视口 ${measured}px（目标 ${v.width}px${viewportOk ? '' : ' ⚠️被钳制'}）、`
+        + `聊天区 ${chatWidth}px、侧栏 ${String(report.panelWidth)}px、列数 ${columns}`
+        + (chromeOk ? '' : ` ｜ ⚠️ 账号区盖住了抽屉的收起按钮：${JSON.stringify(overlapInfo)}`))
+    }
+
+    // ── M-tap：窄屏点会话后，抽屉应自动收起 ──
+    const tapped = await captureAt(url('&tap=1'), { width: 390, height: 844 })
+    const tapReport = tapped.report
+    const tapOk = tapReport?.tapped === true
+      && tapReport.collapsedAfterTap === true
+      && Number(tapReport.chatWidthAfterTap ?? 0) >= 380
+    // ── M-text：窄屏下正文本该占满可用宽度，不能被头像栏/内边距挤成细条 ──
+    const bubbleWidth = Number(tapReport?.bubbleWidthAfterTap ?? tapReport?.bubbleWidth ?? 0)
+    const chatWidthAfterTap = Number(tapReport?.chatWidthAfterTap ?? 0)
+    // 期望：正文至少占聊天区的 78%（留出头像与内边距的合理开销）
+    const textOk = chatWidthAfterTap > 0 && bubbleWidth >= chatWidthAfterTap * 0.78
+    record('M-text', textOk,
+      `窄屏正文宽度 ${bubbleWidth}px / 聊天区 ${chatWidthAfterTap}px`
+      + ` ｜ 消息数 ${String(tapReport?.messageCountAfterTap ?? tapReport?.messageCount)}、气泡数 ${String(tapReport?.bubbleCount)}、`
+      + `\n        拆解：${JSON.stringify(tapReport?.diagAfterTap ?? tapReport?.diag ?? {})}`
+      + `（占 ${chatWidthAfterTap > 0 ? Math.round((bubbleWidth / chatWidthAfterTap) * 100) : 0}%，期望 ≥78%）`)
+
+    record('M-tap', tapOk,
+      tapReport === undefined
+        ? '未取到点击后的状态'
+        : `点会话后：收起=${String(tapReport.collapsedAfterTap)}、聊天区 ${String(tapReport.chatWidthAfterTap)}px`)
+
+    // ── M-font：「字体页」（外观设置）在手机上的实时预览宽度 ──
+    const font = await captureAt(url('&font=1'), { width: 390, height: 844 },
+      { screenshot: join(shotDir, 'font-phone.png') })
+    const fontReport = font.report
+    const previewContent = Number(fontReport?.previewContentWidth ?? 0)
+    const previewWidth = Number(fontReport?.previewWidth ?? 0)
+    const noOverflow = Number(fontReport?.overflowX ?? 1) <= 1
+    // 光量宽度不够——抽屉是浮层，内容是"宽度正常但被盖住"，
+    // 所以还要断言抽屉已自动收起、且预览框完整落在视口内。
+    const viewport = Number(fontReport?.viewport ?? 0)
+    const previewLeft = Number(fontReport?.previewLeft ?? -1)
+    const previewRight = Number(fontReport?.previewRight ?? -1)
+    const notCovered = fontReport?.drawerCollapsed === true
+      && previewLeft >= 0 && previewRight <= viewport + 1
+    const fontOk = fontReport?.fontOpened === true && previewContent >= 200 && noOverflow && notCovered
+    record('M-font', fontOk,
+      `字体页：预览 ${previewWidth}px（${previewLeft}→${previewRight}，视口 ${viewport}px）`
+      + `、预览正文 ${previewContent}px`
+      + `、预览列 ${String(fontReport?.previewColumnWidth)}px、控件列 ${String(fontReport?.controlsWidth)}px`
+      + `、横向溢出 ${String(fontReport?.overflowX)}px、进页自动收起=${String(fontReport?.drawerCollapsed)}`
+      + `（期望：正文 ≥200px、不被抽屉遮挡、不横向溢出）`
+      + `\n        预览内部：${JSON.stringify(fontReport?.fontDiag ?? {})}`)
+
+    // 点开会话后的"游玩视图"截图：这才是用户实际长时间面对的画面
+    await captureAt(url('&tap=1'), { width: 390, height: 844 }, { screenshot: join(shotDir, 'chat-open.png') })
+    await captureAt(url('&account=1'), { width: 390, height: 844 }, { screenshot: join(shotDir, 'account-phone.png') })
+    console.log(`\n截图：${shotDir}`)
+  } finally {
+    await mock.close()
+    for (const p of [PROBE_PAGE, PROBE_DRIVER, PROBE_SCRIPT, PROBE_TARGET]) rmSync(join(rendererDir, p), { force: true })
+    await stack.close()
+    await rm(root, { recursive: true, force: true })
+  }
+
+  const failed = outcomes.filter((outcome) => !outcome.ok)
+  console.log(`\n== 结果：${outcomes.length - failed.length}/${outcomes.length} 通过 ==\n`)
+  if (failed.length > 0) {
+    console.log('未通过：' + failed.map((outcome) => outcome.id).join('、'))
+    process.exitCode = 1
+  }
+}
+
+await main()
