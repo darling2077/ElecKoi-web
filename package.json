@@ -47,7 +47,7 @@
     "check:upstream-diff": "node scripts/check-upstream-diff.mjs",
     "webui:media": "node scripts/apply-patches.mjs && vite build --config src/web/vite.media.config.ts && node out/web/media.mjs",
     "webui:multitenant": "node scripts/apply-patches.mjs && vite build --config src/web/vite.multitenant.config.ts && node out/web/multitenant.mjs",
-    "webui:verify": "pnpm webui:typecheck && pnpm check:upstream-diff && pnpm webui:poc && pnpm webui:agent && pnpm webui:media && pnpm webui:avatar && pnpm webui:multitenant && pnpm webui:admin && pnpm webui:cardisolation && pnpm webui:csp && pnpm webui:chrome && pnpm webui:appearance && pnpm webui:proxy && pnpm webui:keys && pnpm webui:render && pnpm webui:quota && pnpm webui:backup",
+    "webui:verify": "pnpm webui:typecheck && pnpm check:upstream-diff && pnpm webui:poc && pnpm webui:agent && pnpm webui:media && pnpm webui:avatar && pnpm webui:multitenant && pnpm webui:admin && pnpm webui:cardisolation && pnpm webui:csp && pnpm webui:chrome && pnpm webui:appearance && pnpm webui:proxy && pnpm webui:keys && pnpm webui:render && pnpm webui:mobile && pnpm webui:quota && pnpm webui:backup",
     "webui:cardisolation": "node scripts/apply-patches.mjs && vite build --config src/web/vite.cardisolation.config.ts && node out/web/cardisolation.mjs",
     "webui:csp": "node scripts/apply-patches.mjs && vite build --config src/web/vite.csp.config.ts && node out/web/csp.mjs",
     "webui:quota": "node scripts/apply-patches.mjs && vite build --config src/web/vite.quota.config.ts && node out/web/quota.mjs",
@@ -58,7 +58,8 @@
     "webui:appearance": "node scripts/apply-patches.mjs && vite build --config src/web/vite.appearance.config.ts && node out/web/appearance.mjs",
     "webui:proxy": "node scripts/apply-patches.mjs && vite build --config src/web/vite.proxy.config.ts && node out/web/proxy.mjs",
     "webui:keys": "node scripts/apply-patches.mjs && vite build --config src/web/vite.keys.config.ts && node out/web/keys.mjs",
-    "webui:render": "node scripts/apply-patches.mjs && vite build --config src/web/vite.render.config.ts && node out/web/render.mjs"
+    "webui:render": "node scripts/apply-patches.mjs && vite build --config src/web/vite.render.config.ts && node out/web/render.mjs",
+    "webui:mobile": "node scripts/apply-patches.mjs && vite build --config src/web/vite.mobile.config.ts && node out/web/mobile.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.1",
