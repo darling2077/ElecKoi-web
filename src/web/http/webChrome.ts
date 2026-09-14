@@ -224,6 +224,36 @@ export function buildWebChromeCss(): string {
     padding: 6px 12px 6px 9px !important;
   }
   .chat-model-config-copy { max-width: 152px; }
+
+  /* 9. 生成统计条。
+        上游是 flex + white-space: nowrap，每一项又都带 text-overflow: ellipsis，
+        桌面端一行放得下所以看不出来；手机上一行放不下，5 项会被一起压扁成
+        "1…""LL…""缓…""输入 10 t…"——不是字小，是每项都被截断了。
+        窄屏改为换行：宁可两行看全，也不要一行全是省略号。 */
+  .qq-shell.main-window-shell .generation-stats-line {
+    flex-wrap: wrap !important;
+    row-gap: 2px !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    padding: 8px 8px 0 !important;
+  }
+  .qq-shell.main-window-shell .generation-stats-item {
+    flex: 0 0 auto !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    white-space: nowrap !important;
+    padding: 0 8px !important;
+  }
+  /* 开了聊天壁纸时，上游会把 --chat-wallpaper-content-fg 套到聊天标题、
+     作者名、正文气泡上（chat-background.css:72），唯独漏了这条统计栏——
+     壁纸一亮，--muted 的灰色小字就糊进背景里了。按上游同一套变量补上。 */
+  .qq-shell.has-chat-wallpaper .generation-stats-line {
+    color: var(--chat-wallpaper-content-fg);
+    text-shadow: 0 0 1px var(--chat-wallpaper-content-shadow);
+  }
+  .qq-shell.has-chat-wallpaper .generation-stats-item {
+    border-left-color: color-mix(in srgb, currentColor 30%, transparent);
+  }
 }
 
 /* 账号区在窄屏收窄，避免压住标题 */
@@ -436,14 +466,34 @@ export function buildWebChromeScript(): string {
     // class 由 React state 决定，直接改会被下一次渲染覆盖。
     // 注意标题栏那个按钮只在已收起时渲染（用于展开），收起入口在侧栏头部。
     // 必须延后一拍：React 的 onClick（loadChat / 切页）要先跑完。
+    let collapsing = false;
     function collapseDrawer() {
+      // 同一拍内可能有多条规则同时命中（例如"点会话"与"点空白"），去重
+      if (collapsing) return;
+      collapsing = true;
       setTimeout(() => {
+        collapsing = false;
         const shell = document.querySelector('.qq-shell');
         if (!shell || shell.classList.contains(COLLAPSED_CLASS)) return;
         const collapse = document.querySelector('.side-panel-shell .side-panel-collapse-button');
         if (collapse instanceof HTMLElement) collapse.click();
       }, 0);
     }
+
+    // 点抽屉以外的空白处也要收起。
+    // 上游的遮罩是 box-shadow 铺出来的，**不接收点击**，所以照着直觉点旁边
+    // 什么也不会发生，只能去够侧栏头部那个小按钮。这里补上这条习惯用法。
+    document.addEventListener('click', (event) => {
+      if (!narrow.matches) return;
+      const shell = document.querySelector('.qq-shell');
+      if (!shell || shell.classList.contains(COLLAPSED_CLASS)) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest('.side-panel-shell')) return;        // 抽屉内部
+      if (target.closest('.navigation-rail-shell')) return;   // 底部图标栏：切分区
+      if (target.closest('.side-panel-expand-button')) return; // 展开按钮自己会处理
+      collapseDrawer();
+    }, false);
 
     // 进入"设置"分区时自动收起。
     // 上游的折叠态纯手动（useSidePanelLayout 里没有按宽度判定的逻辑），
