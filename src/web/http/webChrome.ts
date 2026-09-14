@@ -155,6 +155,75 @@ export function buildWebChromeCss(): string {
   .qq-shell.main-window-shell .chat-display-preview .message-area {
     padding: 8px !important;
   }
+
+  /* 7. 聊天壁纸左边那条通高白条。
+        壁纸层 .chat-shell-backdrop 的定位是
+          inset: 0 0 0 calc(var(--rail-column-width) + var(--side-panel-width));
+        桌面端没错——壁纸只该盖住右侧聊天区。但窄屏下图标栏已经挪到底部，
+        --rail-column-width 仍是 52px（responsive.css 在 ≤1280px 定的），
+        于是左边空出 52px 通高、露出 --chat-wallpaper-canvas 的白底。
+        窄屏壁纸必须从 0 起。 */
+  .qq-shell.main-window-shell .chat-shell-backdrop {
+    left: 0 !important;
+  }
+  /* 侧栏拖拽调宽的把手：left = 图标栏宽 + 侧栏宽，是一根 8px 宽的透明条。
+        窄屏侧栏是浮层抽屉、宽度也不由拖拽决定，这根条子只会白白吞掉点击。 */
+  .qq-shell.main-window-shell .side-panel-resizer {
+    display: none !important;
+  }
+
+  /* 8. 模型选择弹窗：上游在 @media (max-width: 720px) 里只把左栏 260→220px。
+        393px 屏上弹窗宽 361px，左栏仍占 61%，模型列表只剩 141px——
+        "deepseek-v4-f…""gemini-3.1-pro…" 全被截断。
+        窄屏改成上下两段：提供商/配置横排成一条可横滑的窄带，模型列表吃满余宽。 */
+  .chat-model-backdrop { padding: 10px !important; }
+  .chat-model-panel {
+    width: min(780px, 100%) !important;
+    height: min(680px, 100%) !important;
+  }
+  .chat-model-browser {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto minmax(0, 1fr) !important;
+  }
+  .chat-model-configs {
+    flex-wrap: wrap !important;
+    align-content: flex-start !important;
+    align-items: center !important;
+    gap: 6px 10px !important;
+    /* 必须容得下 3 行（两个提供商各一行 + 某个提供商有两条配置时多一行）。
+       限得太紧会让后面的提供商被压到可视区外，用户得在这个小条里纵向滚动
+       才找得到——webui:mobile 的 M-model 会以 scrollHeight 报出来。 */
+    max-height: 176px;
+    display: flex !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    border-right: 0 !important;
+    border-bottom: 1px solid var(--line) !important;
+    padding: 10px 12px !important;
+  }
+  .chat-model-provider-group,
+  .chat-model-provider-group + .chat-model-provider-group {
+    flex: 0 1 auto !important;
+    flex-wrap: wrap !important;
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 6px !important;
+    margin-top: 0 !important;
+    display: flex !important;
+  }
+  .chat-model-provider-group h3 {
+    flex: 0 0 auto !important;
+    height: auto !important;
+    margin: 0 2px 0 0 !important;
+    white-space: nowrap;
+  }
+  .chat-model-provider-group > button {
+    flex: 0 0 auto !important;
+    width: auto !important;
+    min-height: 0 !important;
+    padding: 6px 12px 6px 9px !important;
+  }
+  .chat-model-config-copy { max-width: 152px; }
 }
 
 /* 账号区在窄屏收窄，避免压住标题 */
