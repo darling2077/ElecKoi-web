@@ -36,6 +36,10 @@ const ALLOWED_ADDITIONS = [
   'docker/',
   'patches/',
   'docs/webui/',
+  // 我们自己加的 workflow（构建并发布容器镜像）。
+  // 注意只放行 workflows/ 子目录：上游那两个 workflow 若是被改动或删除，
+  // 仍会照常被门禁拦下。
+  '.github/workflows/',
   'scripts/check-upstream-diff.mjs',
   'scripts/apply-patches.mjs',
   '.dockerignore',

@@ -14,7 +14,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: eleckoi-web:dev
+    image: ${ELECKOI_IMAGE:-eleckoi-web:dev}
     container_name: eleckoi-web
     restart: unless-stopped
     ports:
