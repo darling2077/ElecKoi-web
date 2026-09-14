@@ -270,6 +270,40 @@ async function main(): Promise<void> {
         ? '登录 / 账号管理 / 用户管理三页均引用应用令牌，无旧色板残留，主题随应用设置'
         : offenders.join('；'))
 
+    // ── A-11 站点图标：上游 index.html 根本没有 favicon 声明，
+    //    所以浏览器标签页一直显示默认图标。四处文档都要由我们补上，
+    //    且图标本体必须是**能解码的 64×64 PNG**，不能是坏掉的 data URL。 ──
+    const faviconProblems: string[] = []
+    for (const page of pages) {
+      const html = captured.get(page.path) ?? ''
+      if (!html.includes('rel="icon"')) faviconProblems.push(`${page.name} 缺 rel="icon"`)
+      if (!html.includes('apple-touch-icon')) faviconProblems.push(`${page.name} 缺 apple-touch-icon`)
+    }
+    const appDocument = await fetch(`${base}/`, { headers: jar, redirect: 'manual' })
+    const appHtml = appDocument.status === 200 ? await appDocument.text() : ''
+    if (!appHtml.includes('rel="icon"')) {
+      faviconProblems.push(`应用文档缺 rel="icon"（HTTP ${appDocument.status}）`)
+    }
+    const iconHref = /<link rel="icon"[^>]*href="(data:image\/png;base64,[^"]+)"/.exec(captured.get('/login') ?? '')?.[1]
+    let iconShape = '未取到'
+    if (iconHref === undefined) {
+      faviconProblems.push('登录页里取不到图标 data URL')
+    } else {
+      const base64 = iconHref.slice('data:image/png;base64,'.length)
+      const bytes = Buffer.from(base64, 'base64')
+      const isPng = bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      const iconWidth = isPng ? bytes.readUInt32BE(16) : 0
+      const iconHeight = isPng ? bytes.readUInt32BE(20) : 0
+      iconShape = `${iconWidth}×${iconHeight} PNG、${bytes.length} 字节`
+      if (!isPng || iconWidth !== 64 || iconHeight !== 64) {
+        faviconProblems.push(`图标不是可解码的 64×64 PNG（实为 ${iconShape}）`)
+      }
+    }
+    record('A-11', faviconProblems.length === 0,
+      faviconProblems.length === 0
+        ? `登录/账号/用户管理/应用文档四处均带站点图标（${iconShape}）`
+        : faviconProblems.join('；'))
+
     // ── A-4 页面 CSP 必须放行样式表与字体（否则令牌与 Noto Sans 会被拦） ──
     const cspProblems: string[] = []
     for (const page of pages) {
