@@ -8,6 +8,7 @@
  * 视觉与应用同源：令牌与字体来自 /__eleckoi/app-tokens.css，主题跟随管理员账号。
  */
 
+import { faviconLinks } from './favicon'
 import { APP_TOKENS_PATH } from './appTokens'
 import { pageCss } from './pageStyles'
 import type { PageTheme } from './pageTheme'
@@ -33,6 +34,7 @@ export function renderAdminUsersPage(options: AdminUsersPageOptions): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
+${faviconLinks()}
 <title>用户管理 · 电子爱</title>
 <link rel="stylesheet" href="${APP_TOKENS_PATH}">
 <style>
