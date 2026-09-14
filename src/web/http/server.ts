@@ -23,6 +23,7 @@ import { failure, success } from '@shared/foundation/result'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, type WebGateway } from '../transport/WebGateway'
 import { readSignedMedia } from '../mediaSignature'
 import { CARD_FRAME_PATH, cardFrameCsp, renderCardFrame } from './cardFrame'
+import { faviconLinks } from './favicon'
 import { APP_TOKENS_PATH, readAppTokens } from './appTokens'
 import { WEB_CHROME_CSS_PATH, WEB_CHROME_JS_PATH, buildWebChromeCss, buildWebChromeScript } from './webChrome'
 import { securityHeaders } from './securityHeaders'
@@ -144,6 +145,8 @@ function injectBridge(html: string): string {
   // 桥脚本 + Web 外壳：外壳把桌面端的窗口按钮换成账号区。
   // 都走同源外链，因此应用文档的 CSP 无需为它们放宽。
   const tags = [
+    // 上游 index.html 没有 favicon 声明，标签页一直是浏览器默认图标。
+    faviconLinks(),
     `<link rel="stylesheet" href="${WEB_CHROME_CSS_PATH}">`,
     `<script src="${WEB_BRIDGE_PATH}"></script>`,
     `<script src="${WEB_CHROME_JS_PATH}"></script>`
