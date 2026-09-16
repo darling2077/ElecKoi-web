@@ -96,12 +96,12 @@ async function main(): Promise<void> {
     const configId = configs.find((config) => config.name === 'Mock 模型')?.id
     await dispatch('command.settings.write', {
       key: 'models.active',
-      value: { capability: 'chat', config_id: configId, model: 'mock-model', parameters: { stream: true, temperature: 1, top_p: 1 } }
+      value: { capability: 'chat', config_id: configId, model: 'mock-model' }
     })
     await dispatch('command.characters.create', {
       id: 'char-quota', name: '测试角色', description: '', personality: '', scenario: '', firstMessage: '', chatBackground: ''
     })
-    const metadata = { characterId: 'char-quota', characterName: '测试角色', characterAvatar: '', characterPersona: {}, modelSettings: {} }
+    const metadata = { characterId: 'char-quota', characterName: '测试角色', characterAvatar: '', characterPersona: {} }
     const conversationA = (await dispatch<{ conversation: { id: string } }>('command.conversations.create', { title: 'A', metadata })).conversation.id
     const conversationB = (await dispatch<{ conversation: { id: string } }>('command.conversations.create', { title: 'B', metadata })).conversation.id
 
