@@ -8,6 +8,11 @@
 #
 # 暴露范围：默认只绑宿主机回环。要开放给他人，先读 docs/webui/ 里的安全说明——
 # 公网暴露前必须完成 M3（富内容卡片跨源隔离、CSP、签名媒体 URL、限流）。
+#
+# 可选：自带图床（Zipline），用于让角色卡里的图片有个稳定的家。
+# 它在 `images` profile 下，不显式启用就不会启动；配置在 docker/.env 的「自带图床」段
+#   docker compose -f docker/compose.yml --profile images up -d zipline-db zipline
+# 详见 docs/webui/卡片外链图片本地化.md。
 
 services:
   eleckoi-web:
@@ -47,6 +52,10 @@ services:
       # 未配置时卡片与宿主同源：角色卡能调用宿主全部 IPC，仅限本地自用。
       ELECKOI_CARD_ORIGIN: "${ELECKOI_CARD_ORIGIN:-}"
       ELECKOI_APP_ORIGINS: "${ELECKOI_APP_ORIGINS:-}"
+      # 允许卡片加载图片/媒体的**额外源**（逗号分隔的纯源）。
+      # 卡里的外链图片默认被卡片帧 CSP 拦掉（表现为图片位置全黑）。
+      # ⚠️ 只填你自己的图床：卡片是作者写的 JS，放行谁就等于允许它把数据发给谁。
+      ELECKOI_CARD_IMAGE_ORIGINS: "${ELECKOI_CARD_IMAGE_ORIGINS:-}"
       # AGPL-3.0 §13：以网络提供服务时须向使用者提供对应源码。
       # 未配置时服务会打印警告，并在登录页省略该入口。
       ELECKOI_SOURCE_URL: "${ELECKOI_SOURCE_URL:-}"
@@ -70,5 +79,76 @@ services:
           memory: 2g
           pids: 512
 
+  # ── 可选：图床（Zipline）────────────────────────────────────────────
+  # 为什么自带一个：角色卡常引用外部图床的立绘，那些图随时失效；卡片帧的 CSP
+  # 又只放行白名单里的源。自己跑一个图床，「卡片能显示」与「导出后不失效」就都成立。
+  #
+  # 不启用不占任何资源：这两个服务在 `images` profile 下，默认的
+  # `docker compose up -d` 完全忽略它们。启用见 docs/webui/卡片外链图片本地化.md。
+  zipline-db:
+    image: postgres:16-alpine
+    container_name: zipline-db
+    restart: unless-stopped
+    profiles: [images]
+    environment:
+      POSTGRES_USER: zipline
+      POSTGRES_DB: zipline
+      POSTGRES_PASSWORD: "${ZIPLINE_DB_PASSWORD:-}"
+    volumes:
+      - zipline-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U zipline -d zipline']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zipline:
+    image: ghcr.io/diced/zipline:latest
+    container_name: zipline
+    restart: unless-stopped
+    profiles: [images]
+    depends_on:
+      zipline-db:
+        condition: service_healthy
+    # 用 environment 逐项传入而不是 env_file：这样只有下面这几个变量会进图床容器，
+    # ELECKOI_MASTER_KEY 之类的凭据不会被第三方镜像看到。
+    # 配置项都写在 docker/.env（见 .env.example 的「自带图床」段）。
+    environment:
+      DATABASE_URL: "postgres://zipline:${ZIPLINE_DB_PASSWORD:-}@zipline-db:5432/zipline"
+      CORE_HOSTNAME: 0.0.0.0
+      CORE_PORT: "3000"
+      # 会话与令牌签名密钥。换掉会让所有人登出、API 令牌全部失效。
+      CORE_SECRET: "${ZIPLINE_CORE_SECRET:-}"
+      WEBSITE_TITLE: "${ZIPLINE_TITLE:-ElecKoi 图床}"
+      # ⚠️ 这两个开关别配反：REGISTRATION=false + INVITES=true 才是「邀请码才能注册」。
+      # 注册时不带邀请码只看 REGISTRATION，为 true 就等于任何人都能注册。
+      FEATURES_USER_REGISTRATION: "${ZIPLINE_USER_REGISTRATION:-false}"
+      INVITES_ENABLED: "${ZIPLINE_INVITES_ENABLED:-true}"
+      FILES_MAX_FILE_SIZE: "${ZIPLINE_MAX_FILE_SIZE:-20mb}"
+      FILES_MAX_FILES_PER_UPLOAD: "${ZIPLINE_MAX_FILES_PER_UPLOAD:-10}"
+      # 经 Lucky 反代：取真实客户端 IP、生成的链接用 https
+      CORE_TRUST_PROXY: "true"
+      CORE_RETURN_HTTPS_URLS: "true"
+      CORE_DEFAULT_DOMAIN: "${ZIPLINE_DEFAULT_DOMAIN:-img.kidamita.top}"
+      FEATURES_THUMBNAILS_ENABLED: "true"
+    ports:
+      - "${ELECKOI_IMAGES_BIND:-${ELECKOI_BIND:-127.0.0.1}}:${ELECKOI_IMAGES_PORT_HOST:-8792}:3000"
+    volumes:
+      # 图与缩略图放命名卷：不污染仓库目录，也不会被 git 扫到
+      - zipline-uploads:/zipline/uploads
+      - zipline-public:/zipline/public
+      - zipline-themes:/zipline/themes
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          pids: 512
+
 volumes:
   eleckoi-data:
+  zipline-db:
+  zipline-uploads:
+  zipline-public:
+  zipline-themes:

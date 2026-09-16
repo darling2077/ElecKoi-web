@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { WebHost } from '../WebHost'
+import { cardFrameCsp, resolveCardImageOrigins } from '../http/cardFrame'
 import { singleTenantResolver, startWebServer } from '../http/server'
 
 const outcomes: Array<{ id: string; ok: boolean; detail: string }> = []
@@ -119,6 +120,28 @@ async function main(): Promise<void> {
     // 桥脚本自身也要能被 CSP 放行（同源外链脚本）
     record('CSP-7', dom.includes('/__eleckoi/web-bridge.js'),
       '应用文档仍引用桥脚本')
+
+    // 卡片帧的图片白名单（ELECKOI_CARD_IMAGE_ORIGINS）。
+    // 卡片里的外链图片默认被 img-src 拦掉，用户把它自己的图床配进来才放行。
+    const base = cardFrameCsp(['https://ai.example.com'])
+    const withImages = cardFrameCsp(['https://ai.example.com'], resolveCardImageOrigins([' https://img.example.com/ ']))
+    record('CSP-8',
+      base.includes("img-src 'self' data: blob:") && base.includes("connect-src 'none'")
+      && withImages.includes("img-src 'self' data: blob: https://img.example.com")
+      && withImages.includes("media-src 'self' data: blob: https://img.example.com")
+      // 放宽的只能是「加载」，绝不能顺手把回传通道打开
+      && withImages.includes("connect-src 'none'")
+      && withImages.includes("script-src 'unsafe-inline' 'unsafe-eval'"),
+      '默认不放开外部图片源；配置后只放宽 img-src/media-src，connect-src 仍为 none、脚本策略不变')
+
+    const rejected: string[] = []
+    for (const bad of ['https://img.example.com/a/b', 'https://img.example.com/?x=1', 'https://*.example.com', 'ftp://img.example.com', '不是URL']) {
+      try { resolveCardImageOrigins([bad]); rejected.push(`漏放行 ${bad}`) } catch { /* 预期 */ }
+    }
+    record('CSP-9', rejected.length === 0,
+      rejected.length === 0
+        ? '带路径/查询/通配符/非 http 的写法都被拒绝（白名单只接受纯源）'
+        : rejected.join('；'))
   } finally {
     await server.close()
     await tenant.dispose()
