@@ -4,13 +4,35 @@ interface LegacyToolConfigRow {
   payloadJson: string
   updatedAt: string
 }
-
 interface WebSearchSettingsRow {
   mode: 'provider_native' | 'tavily'
   maxResults: 3 | 5 | 8
   tavilyApiKey: string
   updatedAt: string
 }
+
+interface PresetContentRow {
+  content: string
+}
+
+interface PresetEntryRow {
+  payloadJson: string
+}
+
+const PREVIOUS_TOOL_CONFIGURATION_KIND = 'tool_policy'
+const CURRENT_TOOL_CONFIGURATION_KIND = 'tool_configuration'
+const CURRENT_TOOL_CONFIGURATION_VERSION = 4
+const ROLEPLAY_PLAN_ENTRY_ID = 'fixed-roleplay-plan'
+const CURRENT_TOOL_GROUP_IDS = new Set([
+  'builtin:mcp-resources', 'builtin:workflow', 'builtin:creator', 'builtin:variables',
+  'builtin:collaboration', 'builtin:plugin-discovery', 'builtin:workspace', 'builtin:web',
+  'builtin:roleplay-workflow', 'builtin:auto-illustration', 'builtin:setting-library'
+])
+const DEFAULT_TOOL_GROUP_IDS = ['builtin:variables', 'builtin:setting-library']
+const DEFAULT_ROLEPLAY_PLAN_STEPS = [
+  '必须先并行调用工具调研阅读设定，这里不扮演回复，禁止未阅读设定直接回复',
+  '等前置任务都完成，直接输出 <FINAL> 正文，不要再次调用 update_roleplay_plan；应用检测到正文后会自动完成最终项的标记。'
+]
 
 export const migration0002 = {
   fromVersion: 1,
@@ -94,6 +116,8 @@ export function applyCurrentStorageCleanup(database: Database.Database): void {
       .run(webSearch.mode, webSearch.maxResults, webSearch.tavilyApiKey, webSearch.updatedAt)
   }
 
+  normalizeAgentPresetStorage(database)
+
   database.exec(`
     INSERT INTO agent_preset_contents(presetId, kind, content)
       SELECT id, 'usage_instructions', usageInstructions FROM agent_presets
@@ -112,6 +136,215 @@ export function applyCurrentStorageCleanup(database: Database.Database): void {
     ALTER TABLE agent_presets DROP COLUMN usageInstructions;
     DROP TABLE global_tool_config;
   `)
+}
+
+export function hasPreReleaseV2PresetStorage(database: Database.Database): boolean {
+  if (database.prepare('SELECT 1 FROM agent_preset_contents WHERE kind = ? LIMIT 1')
+    .get(PREVIOUS_TOOL_CONFIGURATION_KIND)) return true
+  if (database.prepare('SELECT 1 FROM agent_preset_version_contents WHERE kind = ? LIMIT 1')
+    .get(PREVIOUS_TOOL_CONFIGURATION_KIND)) return true
+  if (database.prepare(`SELECT 1 FROM agent_presets AS preset
+      WHERE NOT EXISTS (SELECT 1 FROM agent_preset_contents AS content
+        WHERE content.presetId = preset.id AND content.kind = ?) LIMIT 1`)
+    .get(CURRENT_TOOL_CONFIGURATION_KIND)) return true
+  if (database.prepare(`SELECT 1 FROM agent_preset_versions AS version
+      WHERE NOT EXISTS (SELECT 1 FROM agent_preset_version_contents AS content
+        WHERE content.presetId = version.presetId AND content.versionId = version.versionId AND content.kind = ?) LIMIT 1`)
+    .get(CURRENT_TOOL_CONFIGURATION_KIND)) return true
+  if (hasObsoletePlanRows(database, 'agent_preset_entries', 'entryId', 'payloadJson')) return true
+  if (hasObsoletePlanRows(database, 'agent_preset_version_entries', 'entryId', 'payloadJson')) return true
+  if (hasObsoletePlanRows(database, 'setting_entry_contents', 'entryId', 'payloadJson')) return true
+  if (hasObsoletePlanRows(database, 'conversation_setting_changes', 'targetId', 'payloadJson')) return true
+  return [...readPresetConfigurationRows(database, 'agent_preset_contents'),
+    ...readPresetConfigurationRows(database, 'agent_preset_version_contents')]
+    .some((row) => normalizeToolConfiguration(row.content) !== row.content)
+}
+
+export function normalizeAgentPresetStorage(database: Database.Database): void {
+  const presets = database.prepare('SELECT id FROM agent_presets').all() as Array<{ id: string }>
+  for (const preset of presets) {
+    const previous = readPresetContent(database, 'agent_preset_contents', preset.id, PREVIOUS_TOOL_CONFIGURATION_KIND)
+    const current = readPresetContent(database, 'agent_preset_contents', preset.id, CURRENT_TOOL_CONFIGURATION_KIND)
+    const plan = readPresetPlan(database, 'agent_preset_entries', preset.id)
+    writePresetContent(database, 'agent_preset_contents', preset.id,
+      normalizeToolConfiguration(current?.content ?? previous?.content, plan))
+  }
+
+  const versions = database.prepare('SELECT presetId, versionId FROM agent_preset_versions')
+    .all() as Array<{ presetId: string; versionId: string }>
+  for (const version of versions) {
+    const previous = readPresetVersionContent(database, version, PREVIOUS_TOOL_CONFIGURATION_KIND)
+    const current = readPresetVersionContent(database, version, CURRENT_TOOL_CONFIGURATION_KIND)
+    const plan = readPresetVersionPlan(database, version)
+    writePresetVersionContent(database, version,
+      normalizeToolConfiguration(current?.content ?? previous?.content, plan))
+  }
+
+  database.prepare('DELETE FROM agent_preset_contents WHERE kind = ?').run(PREVIOUS_TOOL_CONFIGURATION_KIND)
+  database.prepare('DELETE FROM agent_preset_version_contents WHERE kind = ?').run(PREVIOUS_TOOL_CONFIGURATION_KIND)
+  deleteObsoletePlanRows(database)
+}
+
+function normalizeToolConfiguration(raw?: string, previousPlan?: string[]): string {
+  if (!raw) return JSON.stringify(currentToolConfiguration(DEFAULT_TOOL_GROUP_IDS, DEFAULT_TOOL_GROUP_IDS, undefined, previousPlan))
+  let value: unknown
+  try { value = JSON.parse(raw) } catch (error) {
+    throw new Error('预设工具配置已损坏，无法整理。', { cause: error })
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('预设工具配置不是对象，无法整理。')
+  const source = value as Record<string, unknown>
+  if (source.version !== 2 && source.version !== CURRENT_TOOL_CONFIGURATION_VERSION) {
+    throw new Error('预设工具配置版本无法识别，拒绝猜测。')
+  }
+  const enabled = currentToolIds(source.enabledGroupIds, '启用工具组')
+  const included = source.version === 2 && source.includedGroupIds === undefined
+    ? enabled
+    : currentToolIds(source.includedGroupIds, '已收录工具组')
+  const selection = source.version === CURRENT_TOOL_CONFIGURATION_VERSION
+    ? readSubagentSelection(source.subagentModelSelection)
+    : undefined
+  const roleplayPlan = source.version === CURRENT_TOOL_CONFIGURATION_VERSION
+    ? readRoleplayPlan(source.roleplayPlan)
+    : previousPlan
+  return JSON.stringify(currentToolConfiguration(included, enabled, selection, roleplayPlan))
+}
+
+function currentToolConfiguration(
+  includedGroupIds: string[],
+  enabledGroupIds: string[],
+  subagentModelSelection?: { configId: string; model: string },
+  roleplayPlan?: string[]
+): Record<string, unknown> {
+  return {
+    version: CURRENT_TOOL_CONFIGURATION_VERSION,
+    includedGroupIds,
+    enabledGroupIds,
+    subagentModelSelection: subagentModelSelection ?? { configId: '', model: '' },
+    roleplayPlan: { steps: roleplayPlan ?? DEFAULT_ROLEPLAY_PLAN_STEPS }
+  }
+}
+
+function currentToolIds(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`预设${label}格式无效，无法整理。`)
+  }
+  return [...new Set(value.filter((item): item is string => typeof item === 'string' && CURRENT_TOOL_GROUP_IDS.has(item)))]
+}
+
+function readSubagentSelection(value: unknown): { configId: string; model: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('预设子代理模型配置无效，无法整理。')
+  const source = value as Record<string, unknown>
+  if (typeof source.configId !== 'string' || typeof source.model !== 'string') {
+    throw new Error('预设子代理模型配置无效，无法整理。')
+  }
+  return { configId: source.configId, model: source.model }
+}
+
+function readRoleplayPlan(value: unknown): string[] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('预设角色扮演计划无效，无法整理。')
+  const steps = (value as Record<string, unknown>).steps
+  if (!Array.isArray(steps) || steps.length < 1 || steps.length > 20
+    || steps.some((step) => typeof step !== 'string' || !step.trim() || step.length > 2_000)) {
+    throw new Error('预设角色扮演计划无效，无法整理。')
+  }
+  return steps as string[]
+}
+
+function readPresetConfigurationRows(database: Database.Database, table: string): PresetContentRow[] {
+  return database.prepare(`SELECT content FROM ${table} WHERE kind = ?`).all(CURRENT_TOOL_CONFIGURATION_KIND) as PresetContentRow[]
+}
+
+function readPresetContent(database: Database.Database, table: string, presetId: string, kind: string): PresetContentRow | undefined {
+  return database.prepare(`SELECT content FROM ${table} WHERE presetId = ? AND kind = ?`).get(presetId, kind) as PresetContentRow | undefined
+}
+
+function readPresetVersionContent(
+  database: Database.Database,
+  version: { presetId: string; versionId: string },
+  kind: string
+): PresetContentRow | undefined {
+  return database.prepare(`SELECT content FROM agent_preset_version_contents
+    WHERE presetId = ? AND versionId = ? AND kind = ?`).get(version.presetId, version.versionId, kind) as PresetContentRow | undefined
+}
+
+function writePresetContent(database: Database.Database, table: string, presetId: string, content: string): void {
+  database.prepare(`INSERT INTO ${table}(presetId, kind, content) VALUES (?, ?, ?)
+    ON CONFLICT(presetId, kind) DO UPDATE SET content = excluded.content`)
+    .run(presetId, CURRENT_TOOL_CONFIGURATION_KIND, content)
+}
+
+function writePresetVersionContent(
+  database: Database.Database,
+  version: { presetId: string; versionId: string },
+  content: string
+): void {
+  database.prepare(`INSERT INTO agent_preset_version_contents(presetId, versionId, kind, content) VALUES (?, ?, ?, ?)
+    ON CONFLICT(presetId, versionId, kind) DO UPDATE SET content = excluded.content`)
+    .run(version.presetId, version.versionId, CURRENT_TOOL_CONFIGURATION_KIND, content)
+}
+
+function readPresetPlan(database: Database.Database, table: string, presetId: string): string[] | undefined {
+  const row = database.prepare(`SELECT payloadJson FROM ${table} WHERE presetId = ? AND entryId = ?`)
+    .get(presetId, ROLEPLAY_PLAN_ENTRY_ID) as PresetEntryRow | undefined
+  return row ? planStepsFromEntry(row.payloadJson) : undefined
+}
+
+function readPresetVersionPlan(
+  database: Database.Database,
+  version: { presetId: string; versionId: string }
+): string[] | undefined {
+  const row = database.prepare(`SELECT payloadJson FROM agent_preset_version_entries
+    WHERE presetId = ? AND versionId = ? AND entryId = ?`)
+    .get(version.presetId, version.versionId, ROLEPLAY_PLAN_ENTRY_ID) as PresetEntryRow | undefined
+  return row ? planStepsFromEntry(row.payloadJson) : undefined
+}
+
+function planStepsFromEntry(raw: string): string[] {
+  let value: unknown
+  try { value = JSON.parse(raw) } catch (error) {
+    throw new Error('旧角色扮演计划已损坏，无法整理。', { cause: error })
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('旧角色扮演计划格式无效，无法整理。')
+  const content = (value as Record<string, unknown>).content
+  if (typeof content !== 'string') throw new Error('旧角色扮演计划正文无效，无法整理。')
+  const steps = content.split(/\r?\n/).map((step) => step.trim()).filter(Boolean)
+  if (steps.length < 1 || steps.length > 20 || steps.some((step) => step.length > 2_000)) {
+    throw new Error('旧角色扮演计划无法完整转换，拒绝截断。')
+  }
+  return steps
+}
+
+function hasObsoletePlanRows(database: Database.Database, table: string, idColumn: string, payloadColumn: string): boolean {
+  const rows = database.prepare(`SELECT ${idColumn} AS id, ${payloadColumn} AS payload FROM ${table}`)
+    .all() as Array<{ id: string; payload: string }>
+  return rows.some((row) => row.id === ROLEPLAY_PLAN_ENTRY_ID || payloadKind(row.payload) === 'roleplay_plan')
+}
+
+function payloadKind(raw: string): string {
+  try {
+    const value: unknown = JSON.parse(raw)
+    return value && typeof value === 'object' && !Array.isArray(value)
+      && typeof (value as Record<string, unknown>).kind === 'string'
+      ? (value as Record<string, unknown>).kind as string
+      : ''
+  } catch { return '' }
+}
+
+function deleteObsoletePlanRows(database: Database.Database): void {
+  database.prepare(`DELETE FROM agent_preset_entries WHERE entryId = ? OR json_extract(payloadJson, '$.kind') = 'roleplay_plan'`)
+    .run(ROLEPLAY_PLAN_ENTRY_ID)
+  database.prepare(`DELETE FROM agent_preset_version_entries WHERE entryId = ? OR json_extract(payloadJson, '$.kind') = 'roleplay_plan'`)
+    .run(ROLEPLAY_PLAN_ENTRY_ID)
+  database.prepare(`DELETE FROM conversation_setting_changes WHERE targetId = ? OR json_extract(payloadJson, '$.kind') = 'roleplay_plan'`)
+    .run(ROLEPLAY_PLAN_ENTRY_ID)
+  database.prepare(`DELETE FROM setting_library_version_entry_links WHERE entryId IN (
+      SELECT entryId FROM setting_entry_contents WHERE entryId = ? OR json_extract(payloadJson, '$.kind') = 'roleplay_plan'
+    )`).run(ROLEPLAY_PLAN_ENTRY_ID)
+  database.prepare(`DELETE FROM setting_library_entry_links WHERE entryId IN (
+      SELECT entryId FROM setting_entry_contents WHERE entryId = ? OR json_extract(payloadJson, '$.kind') = 'roleplay_plan'
+    )`).run(ROLEPLAY_PLAN_ENTRY_ID)
+  database.prepare(`DELETE FROM setting_entry_contents WHERE entryId = ? OR json_extract(payloadJson, '$.kind') = 'roleplay_plan'`)
+    .run(ROLEPLAY_PLAN_ENTRY_ID)
 }
 
 function tableExists(database: Database.Database, name: string): boolean {

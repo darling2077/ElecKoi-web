@@ -55,8 +55,8 @@ function schemaObjects(db: Database.Database) {
   return db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'desktop_%' ORDER BY type,name").all()
 }
 
-function legacyV1Database(): Database.Database {
-  const database = new Database(':memory:')
+function legacyV1Database(path = ':memory:'): Database.Database {
+  const database = new Database(path)
   database.exec(commonSchemaSql)
   database.exec(`
     ALTER TABLE chat_sessions ADD COLUMN characterMode TEXT NOT NULL DEFAULT 'story';
@@ -134,6 +134,18 @@ function legacyV2Database(baseline = 'eleckoi-common-v1-2026-09-14-runtime-clean
     PRAGMA user_version = 2;
   `)
   database.prepare('UPDATE desktop_schema SET baseline = ? WHERE id = 1').run(baseline)
+  return database
+}
+
+function currentV2Database(): Database.Database {
+  const database = new Database(':memory:')
+  database.exec(commonSchemaSql)
+  database.exec(`
+    CREATE TABLE desktop_schema (id INTEGER PRIMARY KEY CHECK(id = 1), baseline TEXT NOT NULL);
+    CREATE TABLE desktop_preferences (key TEXT PRIMARY KEY, valueJson TEXT NOT NULL, updatedAt TEXT NOT NULL);
+    INSERT INTO desktop_schema VALUES (1, 'eleckoi-common');
+    PRAGMA user_version = 2;
+  `)
   return database
 }
 
@@ -270,6 +282,43 @@ describe('shared SQLite baseline', () => {
     }
   })
 
+  it('opens an on-disk v1 database as v2 and opens it again after an app restart', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'eleckoi-v1-reopen-test-'))
+    directories.push(directory)
+    const path = join(directory, 'eleckoi-common.sqlite3')
+    const legacy = legacyV1Database(path)
+    legacy.exec(`
+      INSERT INTO chat_sessions(id, title, characterId, characterName, characterAvatar, characterMode, historySummary, historyMessageCount, historyUserMessageCount, createdAt, updatedAt, workspaceId, permissionMode)
+        VALUES ('chat-reopen', '迁移后保留', '', '', '', 'story', '历史摘要', 1, 1, 'created', 'updated', '', '');
+      INSERT INTO desktop_preferences VALUES ('appearance.mode', '"dark"', 'saved-at');
+    `)
+    legacy.close()
+
+    const firstStart = new SqliteDatabase(path)
+    const secondStart = new SqliteDatabase(path)
+    try {
+      firstStart.open()
+      expect(firstStart.native.pragma('user_version', { simple: true })).toBe(2)
+      expect(firstStart.native.prepare('SELECT title, historySummary FROM chat_sessions WHERE id = ?').get('chat-reopen'))
+        .toEqual({ title: '迁移后保留', historySummary: '历史摘要' })
+      expect(firstStart.native.prepare('SELECT valueJson FROM desktop_preferences WHERE key = ?').get('appearance.mode'))
+        .toEqual({ valueJson: '"dark"' })
+      firstStart.close()
+
+      secondStart.open()
+      expect(secondStart.native.pragma('user_version', { simple: true })).toBe(2)
+      expect(secondStart.native.prepare('SELECT baseline FROM desktop_schema WHERE id = 1').get())
+        .toEqual({ baseline: BASELINE_ID })
+      expect(secondStart.native.prepare('SELECT title FROM chat_sessions WHERE id = ?').get('chat-reopen'))
+        .toEqual({ title: '迁移后保留' })
+      expect(secondStart.native.pragma('foreign_key_check')).toEqual([])
+      expect(secondStart.native.pragma('integrity_check', { simple: true })).toBe('ok')
+    } finally {
+      firstStart.close()
+      secondStart.close()
+    }
+  })
+
   it('rolls back every v1 schema change when a migration step fails', () => {
     const database = legacyV1Database()
     try {
@@ -294,6 +343,14 @@ describe('shared SQLite baseline', () => {
           VALUES ('preset-v2','预设','general','[]','','preset-v2:1','','',0,'[]','保留说明');
         INSERT INTO agent_preset_versions(presetId,versionId,versionNumber,name,createdAtEpochMs,expandedGroupIdsJson)
           VALUES ('preset-v2','preset-v2:1',1,'预设',1,'[]');
+        INSERT INTO agent_preset_contents(presetId,kind,content)
+          VALUES ('preset-v2','tool_policy','{"version":2,"includedGroupIds":["builtin:variables","retired:tool"],"enabledGroupIds":["builtin:variables"]}');
+        INSERT INTO agent_preset_version_contents(presetId,versionId,kind,content)
+          VALUES ('preset-v2','preset-v2:1','tool_policy','{"version":2,"includedGroupIds":["builtin:variables"],"enabledGroupIds":["builtin:variables"]}');
+        INSERT INTO agent_preset_entries(presetId,entryId,sortIndex,payloadJson)
+          VALUES ('preset-v2','fixed-roleplay-plan',0,'{"kind":"roleplay_plan","content":"读取设定\\n输出正文"}');
+        INSERT INTO agent_preset_version_entries(presetId,versionId,entryId,sortIndex,payloadJson)
+          VALUES ('preset-v2','preset-v2:1','fixed-roleplay-plan',0,'{"kind":"roleplay_plan","content":"读取版本设定\\n输出版本正文"}');
       `)
 
       installSchema(database)
@@ -304,6 +361,53 @@ describe('shared SQLite baseline', () => {
         .toEqual({ mode: 'tavily', maxResults: 3, tavilyApiKey: 'ciphertext', updatedAt: 'saved-at' })
       expect(database.prepare("SELECT content FROM agent_preset_contents WHERE presetId='preset-v2' AND kind='usage_instructions'").get())
         .toEqual({ content: '保留说明' })
+      expect(JSON.parse((database.prepare("SELECT content FROM agent_preset_contents WHERE presetId='preset-v2' AND kind='tool_configuration'").get() as { content: string }).content))
+        .toEqual({
+          version: 4,
+          includedGroupIds: ['builtin:variables'],
+          enabledGroupIds: ['builtin:variables'],
+          subagentModelSelection: { configId: '', model: '' },
+          roleplayPlan: { steps: ['读取设定', '输出正文'] }
+        })
+      expect(JSON.parse((database.prepare("SELECT content FROM agent_preset_version_contents WHERE presetId='preset-v2' AND versionId='preset-v2:1' AND kind='tool_configuration'").get() as { content: string }).content).roleplayPlan)
+        .toEqual({ steps: ['读取版本设定', '输出版本正文'] })
+      expect(database.prepare("SELECT kind FROM agent_preset_contents WHERE kind='tool_policy'").all()).toEqual([])
+      expect(database.prepare("SELECT entryId FROM agent_preset_entries WHERE entryId='fixed-roleplay-plan'").all()).toEqual([])
+      expect(database.pragma('foreign_key_check')).toEqual([])
+      expect(database.pragma('integrity_check', { simple: true })).toBe('ok')
+    } finally {
+      database.close()
+    }
+  })
+
+  it('normalizes obsolete preset storage inside an otherwise current v2 database', () => {
+    const database = currentV2Database()
+    try {
+      database.exec(`
+        INSERT INTO agent_presets(id,name,modelFamily,modelTagsJson,libraryGroupId,activeVersionId,authorName,authorAvatarPath,sortIndex,expandedGroupIdsJson)
+          VALUES ('preset-current-v2','预设','general','[]','','preset-current-v2:1','','',0,'[]');
+        INSERT INTO agent_preset_versions(presetId,versionId,versionNumber,name,createdAtEpochMs,expandedGroupIdsJson)
+          VALUES ('preset-current-v2','preset-current-v2:1',1,'预设',1,'[]');
+        INSERT INTO agent_preset_contents(presetId,kind,content)
+          VALUES ('preset-current-v2','tool_policy','{"version":2,"enabledGroupIds":["builtin:variables"]}');
+        INSERT INTO agent_preset_entries(presetId,entryId,sortIndex,payloadJson)
+          VALUES ('preset-current-v2','fixed-roleplay-plan',0,'{"kind":"roleplay_plan","content":"读取变量\\n生成正文"}');
+      `)
+
+      installSchema(database)
+
+      const configuration = database.prepare(`SELECT content FROM agent_preset_contents
+        WHERE presetId = 'preset-current-v2' AND kind = 'tool_configuration'`).get() as { content: string }
+      expect(JSON.parse(configuration.content)).toEqual({
+        version: 4,
+        includedGroupIds: ['builtin:variables'],
+        enabledGroupIds: ['builtin:variables'],
+        subagentModelSelection: { configId: '', model: '' },
+        roleplayPlan: { steps: ['读取变量', '生成正文'] }
+      })
+      expect(database.prepare("SELECT kind FROM agent_preset_contents WHERE kind='tool_policy'").all()).toEqual([])
+      expect(database.prepare("SELECT entryId FROM agent_preset_entries WHERE entryId='fixed-roleplay-plan'").all()).toEqual([])
+      expect(database.pragma('user_version', { simple: true })).toBe(2)
       expect(database.pragma('foreign_key_check')).toEqual([])
       expect(database.pragma('integrity_check', { simple: true })).toBe('ok')
     } finally {

@@ -1,5 +1,11 @@
 import type Database from 'better-sqlite3'
-import { applyCurrentStorageCleanup, isLegacyDevelopmentV2Storage, migration0002 } from './migrations/0002RuntimeClean'
+import {
+  applyCurrentStorageCleanup,
+  hasPreReleaseV2PresetStorage,
+  isLegacyDevelopmentV2Storage,
+  migration0002,
+  normalizeAgentPresetStorage
+} from './migrations/0002RuntimeClean'
 import { commonSchemaSql } from './migrations/commonSchemaSql'
 
 export const BASELINE_ID = 'eleckoi-common'
@@ -60,13 +66,17 @@ function migrate(database: Database.Database, baseline: string, version: number)
 }
 
 function normalizePreReleaseV2(database: Database.Database, baseline: string, version: number): void {
-  if (version !== CURRENT_SCHEMA_VERSION || (baseline === BASELINE_ID && !isLegacyDevelopmentV2Storage(database))) return
+  const oldStorage = isLegacyDevelopmentV2Storage(database)
+  const oldPresetStorage = !oldStorage && hasPreReleaseV2PresetStorage(database)
+  if (version !== CURRENT_SCHEMA_VERSION || (baseline === BASELINE_ID && !oldStorage && !oldPresetStorage)) return
   if (!(PRE_RELEASE_V2_BASELINES as readonly string[]).includes(baseline)) {
     throw new Error('无法识别开发数据库 v2 的结构标识，拒绝猜测或删除数据。')
   }
   database.transaction(() => {
-    if (isLegacyDevelopmentV2Storage(database)) {
+    if (oldStorage) {
       applyCurrentStorageCleanup(database)
+    } else if (oldPresetStorage) {
+      normalizeAgentPresetStorage(database)
     } else {
       validateTableInventory(database)
       validateSchema(database)

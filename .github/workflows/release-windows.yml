@@ -54,6 +54,9 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Run database migration and product tests
+        run: pnpm test
+
       - name: Build and verify all Electron processes
         run: |
           pnpm build
@@ -84,11 +87,8 @@ jobs:
             (Resolve-Path release/latest.yml).Path
           )
           $notes = @"
-          1. 新增消息内富交互内容的音频、对话操作与资源加载支持。
-          2. 优化 DSH 多会话运行、会话恢复与异常重启。
-          3. 完善 Top P、推理强度及不同模型接口的能力适配。
-          4. 完善角色卡、Agent 预设和设定库的导入导出。
-          5. 修复数据库升级、消息状态、变量与本地媒体保存问题。
-          6. 优化侧边栏折叠、模型配置和变量编辑体验。
+          1. 修复从 v0.1.0/v0.1.1 升级后 Agent 预设工具配置无法读取的问题。
+          2. 自动整理已经升级为 v2、但仍保留旧预设内容键的数据库，并保留有效预设数据。
+          3. 发布前强制运行数据库迁移和产品测试。
           "@
           gh release create $env:RELEASE_TAG @assets --verify-tag --notes $notes --title "ElecKoi $env:RELEASE_TAG"
