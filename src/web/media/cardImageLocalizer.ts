@@ -13,6 +13,9 @@
  * 单图有体积上限、单次导入有张数与时间预算，超了就停下并如实报告。
  */
 import { createHash } from 'node:crypto'
+import { existsSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { SqliteDatabase } from '@main/platform/sqlite/SqliteDatabase'
 
 /** 会被扫描的表与列——角色卡的数据散在这几处（与外部脚本保持一致）。 */
@@ -49,13 +52,22 @@ const MIME_BY_KIND: Record<string, string> = {
   svg: 'image/svg+xml'
 }
 
+/**
+ * 图片搬到哪儿去。对应 compose 里的四种做法（见 docs/webui/卡片外链图片本地化.md）：
+ *   - uploadApi：自建公网图床（导出后别人也能取到图）
+ *   - localDir：本地图床，由本服务在卡片源上以 /card-images/ 提供（导出后别人看不到）
+ *   - dataUri：内联成 data: URI（不用图床，导出即自带，代价是卡片数据变大）
+ */
+export type CardImageTarget =
+  | { kind: 'uploadApi'; uploadApi: string; uploadToken: string }
+  | { kind: 'localDir'; directory: string }
+  | { kind: 'dataUri'; maxInlineBytes: number }
+
 export interface CardImageLocalizerOptions {
   database: SqliteDatabase
-  /** 图床对外的地址，用于识别「已经搬过了」。 */
-  publicBase: string
-  /** 上传接口地址（Zipline：POST /api/upload）。 */
-  uploadApi: string
-  uploadToken: string
+  /** 对外地址前缀：用于识别「已经搬过了」，也是改写后写进卡里的前缀（内联模式不需要）。 */
+  publicBase?: string
+  target: CardImageTarget
   maxImages?: number
   maxBytes?: number
   timeoutMs?: number
@@ -150,13 +162,19 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
   type Working = { phase: 'working'; done: number; total: number }
   type Progress = Working | { phase: 'done'; done: number; total: number }
   const baseOrigin = (() => {
+    if (options.publicBase === undefined) return undefined
     try {
       return new URL(options.publicBase).origin
     } catch {
       return undefined
     }
   })()
-  const summary = `图床 ${options.publicBase}（单次最多 ${maxImages} 张、${Math.round(budgetMs / 1000)}s 预算）`
+  const where = options.target.kind === 'uploadApi'
+    ? `图床 ${options.target.uploadApi}`
+    : options.target.kind === 'localDir'
+      ? `本地目录 ${options.target.directory}（由本服务在 /card-images/ 提供）`
+      : '内联 data: URI'
+  const summary = `${where}（单次最多 ${maxImages} 张、${Math.round(budgetMs / 1000)}s 预算）`
 
   async function downloadOnce(url: string): Promise<{ buffer: Buffer; kind: string }> {
     const response = await fetch(url, {
@@ -187,14 +205,36 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
     }
   }
 
+  /** 按目标把一张图"搬"好，返回可以直接写进卡片的地址。 */
+  async function place(buffer: Buffer, kind: string): Promise<string> {
+    const target = options.target
+    if (target.kind === 'dataUri') {
+      if (buffer.length > target.maxInlineBytes) {
+        throw new Error(`超过内联上限（${(buffer.length / 1024).toFixed(0)}KB）`)
+      }
+      return `data:${MIME_BY_KIND[kind] ?? 'application/octet-stream'};base64,${buffer.toString('base64')}`
+    }
+    const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 32)
+    const name = `${hash}.${kind}`
+    if (target.kind === 'localDir') {
+      await mkdir(target.directory, { recursive: true })
+      const file = join(target.directory, name)
+      if (!existsSync(file)) await writeFile(file, buffer)
+      return `${(options.publicBase ?? '').replace(/\/+$/, '')}/card-images/${name}`
+    }
+    return await upload(buffer, kind)
+  }
+
   async function upload(buffer: Buffer, kind: string): Promise<string> {
+    if (options.target.kind !== 'uploadApi') throw new Error('当前搬运方式不需要上传接口')
+    const { uploadApi, uploadToken } = options.target
     const name = `${createHash('sha256').update(buffer).digest('hex').slice(0, 32)}.${kind}`
     const form = new FormData()
     form.append('file', new Blob([new Uint8Array(buffer)], { type: MIME_BY_KIND[kind] ?? 'application/octet-stream' }), name)
-    const response = await fetch(`${options.uploadApi.replace(/\/+$/, '')}/api/upload`, {
+    const response = await fetch(`${uploadApi.replace(/\/+$/, '')}/api/upload`, {
       method: 'POST',
       // Zipline 的令牌原样放在 Authorization（没有 Bearer 前缀）
-      headers: { authorization: options.uploadToken },
+      headers: { authorization: uploadToken },
       body: form,
       signal: AbortSignal.timeout(Math.max(timeoutMs, 30_000))
     })
@@ -209,7 +249,7 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
     const url = payload.files?.[0]?.url
     if (url === undefined) throw new Error(`图床没有返回文件地址：${text.slice(0, 120)}`)
     // 只取路径再套回对外地址：从内网还是公网调 API 都能写对域名
-    return `${options.publicBase.replace(/\/+$/, '')}${new URL(url, options.uploadApi).pathname}`
+    return `${(options.publicBase ?? '').replace(/\/+$/, '')}${new URL(url, uploadApi).pathname}`
   }
 
   // 后台模式下进行中的任务：waitForIdle 用它，避免进程退出把搬运掐断。
@@ -278,10 +318,10 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
           const url = queue[cursor++]!
           try {
             const { buffer, kind } = await download(url)
-            replacements.set(url, await upload(buffer, kind))
+            replacements.set(url, await place(buffer, kind))
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error)
-            if (message.includes('不是可识别的图片')) outcome.skipped += 1
+            if (message.includes('不是可识别的图片') || message.includes('超过内联上限')) outcome.skipped += 1
             else {
               outcome.failed += 1
               log(`  ✗ 卡片图片搬运失败 ${url.slice(0, 72)}：${message}`)
@@ -314,7 +354,7 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
         }
       })
       apply.immediate()
-      log(`  卡片图片已搬到 ${options.publicBase}：改写 ${outcome.urlsLocalized} 处引用（涉及 ${outcome.localized} 条记录）`
+      log(`  卡片图片已搬到 ${where}：改写 ${outcome.urlsLocalized} 处引用（涉及 ${outcome.localized} 条记录）`
         + (outcome.skipped > 0 ? `，非图片 ${outcome.skipped} 个` : '')
         + (outcome.failed > 0 ? `，失败 ${outcome.failed} 个` : '')
         + (outcome.deferred > 0 ? `，因上限/预算延后 ${outcome.deferred} 个（可调大 ELECKOI_IMAGE_MAX_PER_IMPORT / ELECKOI_IMAGE_TIME_BUDGET_MS）` : ''))
