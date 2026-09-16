@@ -44,8 +44,10 @@ docker compose -f docker/compose.yml up -d --build
   另一种不需要任何放行的做法是内联成 `data:` URI（CSP 本来就允许），见该文档的
   方案对照表。
 - 导入卡片时自动搬图由 `ELECKOI_IMAGE_PUBLIC_BASE` / `UPLOAD_API` / `UPLOAD_TOKEN`
-  三个变量共同启用（缺一个即关闭）；默认后台搬运，靠 `ELECKOI_IMAGE_LOCALIZE_MODE=inline`
-  才阻塞导入——大卡绝不能 inline，否则导入请求会被反向代理掐断。
+  三个变量共同启用（缺一个即关闭）。默认 **inline（同步）**：导入请求等图片搬完才返回，
+  界面由注入的桥脚本画进度条（`/api/card-images/progress` + `webBridge.ts`）。
+  同步搬运要求反向代理后端读超时 ≥600 秒；`ELECKOI_IMAGE_LOCALIZE_MODE=background`
+  可换回后台搬运。进度条与接口都在我们自己的代码里，没有改上游前端。
 - 可选的图床（Zipline）在 `images` profile 下，配置全部在 `docker/.env` 的
   「自带图床」段（`ZIPLINE_*`）；不启用不影响默认部署（默认那条 `up -d` 仍只起
   `eleckoi-web`）。⚠️ `ZIPLINE_USER_REGISTRATION` 与 `ZIPLINE_INVITES_ENABLED`
