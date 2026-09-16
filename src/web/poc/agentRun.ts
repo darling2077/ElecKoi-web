@@ -80,8 +80,7 @@ async function main(): Promise<void> {
       value: {
         capability: 'chat',
         config_id: configId,
-        model: 'mock-model',
-        parameters: { stream: true, temperature: 1, top_p: 1 }
+        model: 'mock-model'
       }
     })
     record('P2b-2', '激活该模型为当前 chat 模型', true, `models.active.config_id=${configId}`)
@@ -106,8 +105,7 @@ async function main(): Promise<void> {
         characterId: 'char-p2b',
         characterName: '测试角色',
         characterAvatar: '',
-        characterPersona: {},
-        modelSettings: {}
+        characterPersona: {}
       }
     })
     const conversationId = created.conversation?.id
