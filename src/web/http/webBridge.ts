@@ -198,7 +198,12 @@ export function buildWebBridgeSource(options: { eventStream?: boolean; cardOrigi
       return result;
     } catch (error) {
       if (trackImport) settleProgress();
-      return { ok: false, error: { code: 'INTERNAL', message: '与桌面服务的连接已断开。' } };
+      // 真正断线时把底层原因带上：只说"连接已断开"会让排查无从下手
+      // （历史上最常见的真实原因是请求体超过服务端上限）。
+      // 注意：这段是注入到页面的脚本，本身套在模板字符串里——
+      // 这里不能用反引号，也不能写美元花括号，否则会把外层模板打断（构建期就会失败）。
+      const reason = error && error.message ? '（' + error.message + '）' : '';
+      return { ok: false, error: { code: 'INTERNAL', message: '与桌面服务的连接已断开。' + reason } };
     }
   }
 
