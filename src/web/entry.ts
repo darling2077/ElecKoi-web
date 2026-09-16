@@ -21,6 +21,19 @@ function envFlag(name: string, fallback: boolean): boolean {
 const dataRoot = process.env.ELECKOI_DATA_DIR ?? '/data'
 const appRoot = process.env.ELECKOI_APP_ROOT ?? process.cwd()
 const rendererDir = process.env.ELECKOI_RENDERER_DIR ?? resolve(appRoot, 'out', 'renderer')
+
+/**
+ * `POST /api/rpc` 的请求体上限。
+ *
+ * 导入角色卡是把整张卡的 base64 塞进一次请求的，上游契约单文件允许到 132 MB，
+ * 8 MB 的老上限会让稍大的卡或批量导入直接失败——而且浏览器只看到「连接已断开」，
+ * 完全看不出原因。这里默认给到 128 MB，可用 ELECKOI_MAX_BODY_BYTES 调整。
+ */
+function readMaxBodyBytes(): number {
+  const raw = (process.env.ELECKOI_MAX_BODY_BYTES ?? '').trim()
+  const bytes = Number(raw)
+  return Number.isFinite(bytes) && bytes > 0 ? bytes : 128 * 1024 * 1024
+}
 const allowRegistration = envFlag('ELECKOI_ALLOW_REGISTRATION', true)
 const idleMs = Number(process.env.ELECKOI_TENANT_IDLE_MINUTES ?? 30) * 60 * 1000
 const maxLive = Number(process.env.ELECKOI_MAX_LIVE_TENANTS ?? 50)
@@ -42,6 +55,7 @@ if (!existsSync(rendererDir)) {
 const stack = await startWebUiStack({
   dataRoot,
   rendererDir,
+  maxBodyBytes: readMaxBodyBytes(),
   masterKeyBase64,
   appVersion: process.env.ELECKOI_VERSION ?? '0.1.0-web',
   host: process.env.ELECKOI_HOST ?? '127.0.0.1',
@@ -73,6 +87,8 @@ if (!process.env.ELECKOI_SOURCE_URL) {
 console.log(process.env.ELECKOI_CARD_ORIGIN
   ? `卡片源：${process.env.ELECKOI_CARD_ORIGIN}（富内容已跨源隔离）\n`
   : `卡片源：未配置——富内容与宿主同源，仅限本地自用，请勿开放公网。\n`)
+console.log(`单次请求体上限：${(readMaxBodyBytes() / 1048576).toFixed(0)} MB（导入大卡或批量导入顶到时会提示 413，可用 ELECKOI_MAX_BODY_BYTES 调整）\n`)
+
 if ((process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').trim() !== '') {
   console.log(`卡片可加载的外部图片源：${process.env.ELECKOI_CARD_IMAGE_ORIGINS}\n`)
 }

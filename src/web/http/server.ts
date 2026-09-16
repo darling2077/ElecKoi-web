@@ -15,6 +15,7 @@
  * **绝不接受客户端传入的 userId / tenantId**。
  */
 
+import { StringDecoder } from 'node:string_decoder'
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, resolve, sep } from 'node:path'
@@ -65,6 +66,9 @@ export interface AuthHandler {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>
 }
 
+/** 未配置时的请求体上限：给足导入大卡与中等批量导入的余量。 */
+export const DEFAULT_MAX_BODY_BYTES = 128 * 1024 * 1024
+
 export interface WebServerOptions {
   host?: string
   port?: number
@@ -88,6 +92,13 @@ export interface WebServerOptions {
    * 未设置时卡片与宿主同源——**仅限本地自用，不可开放公网**。
    */
   cardOrigin?: string
+  /**
+   * `POST /api/rpc` 的请求体上限（字节）。导入角色卡会把**整张卡的 base64** 放进一次请求，
+   * 上游契约单文件就允许到 132 MB，所以这个值必须给够——太小会让"上传大图/批量导入"
+   * 直接失败（旧上限 8 MB 就是这个症状：浏览器只报「与桌面服务的连接已断开」）。
+   * 由 ELECKOI_MAX_BODY_BYTES 提供。
+   */
+  maxBodyBytes?: number
   /**
    * 额外允许卡片加载图片/媒体的源（逗号分隔已由调用方拆分）。
    * 用于角色卡把立绘放在外部图床的常见写法；只应填**自己的**域，见 cardFrame.ts 的说明。
@@ -122,22 +133,73 @@ export function sendText(res: ServerResponse, status: number, body: string, type
   res.end(body)
 }
 
+/** 请求体超过上限。单独成类，好让调用方回一个**能读懂的**响应而不是把连接掐掉。 */
+export class BodyTooLargeError extends Error {
+  constructor(
+    readonly receivedBytes: number,
+    readonly limitBytes: number
+  ) {
+    super(`请求体过大（${(receivedBytes / 1048576).toFixed(1)} MB，服务端上限 ${(limitBytes / 1048576).toFixed(0)} MB）`)
+    this.name = 'BodyTooLargeError'
+  }
+}
+
+/**
+ * 读取请求体。
+ *
+ * 两个要点：
+ *  1. 超限时**不要** `req.destroy()`——那会让浏览器只看到「与桌面服务的连接已断开」，
+ *     用户完全无法判断是哪里超了。这里抛 BodyTooLargeError，由调用方回一个明确的 413。
+ *  2. 用 StringDecoder 边收边解码，省掉 `Buffer.concat` 的那一份整块拷贝——
+ *     导入角色卡的请求体动辄上百 MB，峰值内存要省。
+ */
 export function readBody(req: IncomingMessage, limitBytes = 8 * 1024 * 1024): Promise<string> {
   return new Promise((resolveBody, rejectBody) => {
-    const chunks: Buffer[] = []
+    const decoder = new StringDecoder('utf8')
+    let body = ''
     let size = 0
+    let settled = false
     req.on('data', (chunk: Buffer) => {
+      if (settled) return
       size += chunk.length
       if (size > limitBytes) {
-        rejectBody(new Error('请求体过大'))
-        req.destroy()
+        settled = true
+        rejectBody(new BodyTooLargeError(size, limitBytes))
         return
       }
-      chunks.push(chunk)
+      body += decoder.write(chunk)
     })
-    req.on('end', () => resolveBody(Buffer.concat(chunks).toString('utf8')))
-    req.on('error', rejectBody)
+    req.on('end', () => {
+      if (settled) return
+      settled = true
+      resolveBody(body + decoder.end())
+    })
+    req.on('error', (error) => {
+      if (settled) return
+      settled = true
+      rejectBody(error)
+    })
   })
+}
+
+/**
+ * 回完 413 之后把剩下的请求体排空一小会儿。
+ * 客户端往往还在往外写，直接关连接会让它读不到我们刚写的响应；
+ * 但也不能无限排空（有人可能真在传几个 GB），所以给个上限。
+ */
+function drainThenClose(req: IncomingMessage, res: ServerResponse, maxBytes = 8 * 1024 * 1024): void {
+  let drained = 0
+  const timer = setTimeout(() => req.destroy(), 5000)
+  req.on('data', (chunk: Buffer) => {
+    drained += chunk.length
+    if (drained > maxBytes) {
+      clearTimeout(timer)
+      req.destroy()
+    }
+  })
+  req.on('end', () => clearTimeout(timer))
+  res.on('close', () => clearTimeout(timer))
+  req.resume()
 }
 
 /**
@@ -377,8 +439,18 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     if (path === '/api/rpc' && req.method === 'POST') {
       let envelope: { name?: unknown; input?: unknown }
       try {
-        envelope = JSON.parse(await readBody(req)) as { name?: unknown; input?: unknown }
-      } catch {
+        envelope = JSON.parse(await readBody(req, options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES)) as { name?: unknown; input?: unknown }
+      } catch (error) {
+        if (error instanceof BodyTooLargeError) {
+          // 导入角色卡会把整张卡的 base64 放进一次请求，顶到上限时**必须**给出可执行的
+          // 下一步；老实现直接 req.destroy()，浏览器只报「与桌面服务的连接已断开」。
+          res.setHeader('connection', 'close')
+          sendJson(res, 413, failure(new Error(
+            `${error.message}。一次少选几张卡再导入，或调大 ELECKOI_MAX_BODY_BYTES 后重启服务。`
+          )))
+          drainThenClose(req, res)
+          return
+        }
         sendJson(res, 400, failure(new Error('请求体不是合法 JSON')))
         return
       }
