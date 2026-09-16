@@ -12,6 +12,7 @@
 # 可选：自带图床（Zipline），用于让角色卡里的图片有个稳定的家。
 # 它在 `images` profile 下，不显式启用就不会启动；配置在 docker/.env 的「自带图床」段
 #   docker compose -f docker/compose.yml --profile images up -d zipline-db zipline
+# 数据落在宿主机目录（docker/.env 的 ZIPLINE_DATA_DIR），不是 Docker 命名卷。
 # 详见 docs/webui/卡片外链图片本地化.md。
 
 services:
@@ -95,7 +96,9 @@ services:
       POSTGRES_DB: zipline
       POSTGRES_PASSWORD: "${ZIPLINE_DB_PASSWORD:-}"
     volumes:
-      - zipline-db:/var/lib/postgresql/data
+      # 数据落在宿主机目录（ZIPLINE_DATA_DIR），不用命名卷：图床会长大，
+      # 放在你自己的大盘上更好管，也便于单独备份。
+      - ${ZIPLINE_DATA_DIR:-/var/lib/eleckoi-zipline}/pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U zipline -d zipline']
       interval: 10s
@@ -134,10 +137,10 @@ services:
     ports:
       - "${ELECKOI_IMAGES_BIND:-${ELECKOI_BIND:-127.0.0.1}}:${ELECKOI_IMAGES_PORT_HOST:-8792}:3000"
     volumes:
-      # 图与缩略图放命名卷：不污染仓库目录，也不会被 git 扫到
-      - zipline-uploads:/zipline/uploads
-      - zipline-public:/zipline/public
-      - zipline-themes:/zipline/themes
+      # 图与缩略图；目录不存在时 Docker 会自动建（属主 root，正好是容器运行身份）
+      - ${ZIPLINE_DATA_DIR:-/var/lib/eleckoi-zipline}/uploads:/zipline/uploads
+      - ${ZIPLINE_DATA_DIR:-/var/lib/eleckoi-zipline}/public:/zipline/public
+      - ${ZIPLINE_DATA_DIR:-/var/lib/eleckoi-zipline}/themes:/zipline/themes
     security_opt:
       - no-new-privileges:true
     deploy:
@@ -148,7 +151,3 @@ services:
 
 volumes:
   eleckoi-data:
-  zipline-db:
-  zipline-uploads:
-  zipline-public:
-  zipline-themes:
