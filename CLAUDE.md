@@ -38,6 +38,11 @@ docker compose -f docker/compose.yml up -d --build
 - 反向代理后必须开 `ELECKOI_TRUST_PROXY=1`，否则所有用户共用一个代理 IP，
   累计十次登录失败会让**全站**被限流十五分钟。
 - 反向代理的后端读超时需 ≥300 秒：`POST /api/rpc` 会同步等待整个 Agent 回合结束才返回。
+- **升级旧部署时不要绕过容器入口脚本**（`docker/entrypoint.sh`）：它会在服务启动前
+  跑一次幂等的数据迁移。上游改 schema 常量名却不给迁移时（v0.1.2 的预设内容键
+  `tool_policy` → `tool_configuration` 就是），老库会静默不兼容、预设页面直接报错。
+  若数据卷文件属主不是 uid 10001，迁移会失败并在日志里给出 `chown` 命令；
+  **迁移失败不会阻止服务启动**。`ELECKOI_AUTO_MIGRATE=0` 可关闭自动迁移。
 
 ## 改代码前必读
 

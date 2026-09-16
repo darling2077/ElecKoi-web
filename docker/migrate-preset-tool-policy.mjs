@@ -51,6 +51,8 @@ const TARGETS = [
 
 function collectDatabases(input) {
   const target = resolve(input)
+  // 路径写错要报错（手工执行时能立刻发现），但"目录在、只是还没有内容"是
+  // 全新安装的正常状态——入口脚本每次启动都会调用它，不能因此启动失败。
   if (!existsSync(target)) throw new Error(`路径不存在：${target}`)
   if (statSync(target).isFile()) return [target]
 
@@ -58,13 +60,31 @@ function collectDatabases(input) {
   if (existsSync(direct)) return [direct]
 
   const tenantsRoot = join(target, 'tenants')
-  if (existsSync(tenantsRoot)) {
-    return readdirSync(tenantsRoot)
-      .map((entry) => join(tenantsRoot, entry, DB_RELATIVE))
-      .filter((candidate) => existsSync(candidate))
-      .sort()
+  if (!existsSync(tenantsRoot)) return []
+
+  return readdirSync(tenantsRoot)
+    .map((entry) => join(tenantsRoot, entry, DB_RELATIVE))
+    .filter((candidate) => existsSync(candidate))
+    .sort()
+}
+
+/**
+ * 把驱动层的错误翻译成能照着做的提示。
+ * 最常见的两种失败都不是"脚本坏了"，而是环境问题：
+ *   - SQLITE_READONLY：数据卷里的文件属主不是容器用户（uid 10001），
+ *     常见于从 root 时代的部署继承数据、或用 root 恢复过备份。
+ *   - 库损坏：先跑 backup-tenants 的 verify 确认。
+ */
+function describeError(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  if (/readonly/i.test(message)) {
+    return `${message}\n     数据库文件不可写。容器以 uid 10001 运行；`
+      + `若文件属主不对，在宿主机执行：chown -R 10001:10001 <数据卷路径>`
   }
-  throw new Error(`在 ${target} 下找不到 ${DB_RELATIVE}，也不是含 tenants/ 的数据根目录`)
+  if (/corrupt|malformed/i.test(message)) {
+    return `${message}\n     数据库可能已损坏，先跑 backup-tenants.mjs verify 确认。`
+  }
+  return message
 }
 
 function tableExists(db, name) {
@@ -132,7 +152,15 @@ function main() {
     return
   }
 
-  const databases = inputs.flatMap((input) => collectDatabases(input))
+  let databases
+  try {
+    databases = inputs.flatMap((input) => collectDatabases(input))
+  } catch (error) {
+    // 手工执行时路径写错要看得懂，而不是一坨堆栈
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exitCode = 2
+    return
+  }
   if (databases.length === 0) {
     console.log('没有找到任何 eleckoi-common.sqlite3，什么都没做。')
     return
@@ -140,8 +168,16 @@ function main() {
 
   console.log(apply ? `模式：写入（--apply）\n` : `模式：dry-run（只报告，不改动；确认后加 --apply）\n`)
   let totalLegacy = 0
+  let failed = 0
   for (const databasePath of databases) {
-    const plans = migrate(databasePath, apply)
+    let plans
+    try {
+      plans = migrate(databasePath, apply)
+    } catch (error) {
+      failed += 1
+      console.error(`${databasePath}\n  ✗ 处理失败：${describeError(error)}`)
+      continue
+    }
     const legacy = plans.reduce((sum, { plan }) => sum + plan.legacy, 0)
     totalLegacy += legacy
     console.log(`${databasePath}`)
@@ -155,9 +191,16 @@ function main() {
     console.log('')
   }
 
-  if (totalLegacy === 0) console.log('结论：所有库都已经是新键，无需迁移。')
-  else if (apply) console.log(`结论：完成，共处理 ${totalLegacy} 行。请重启服务或让应用重新读取预设。`)
-  else console.log(`结论：共需处理 ${totalLegacy} 行。确认无误后加 --apply 重新执行。`)
+  if (failed > 0) {
+    console.error(`结论：${failed} 个库处理失败（见上），其余${totalLegacy > 0 ? `处理 ${totalLegacy} 行` : '无需迁移'}。`)
+    process.exitCode = 1
+  } else if (totalLegacy === 0) {
+    console.log('结论：所有库都已经是新键，无需迁移。')
+  } else if (apply) {
+    console.log(`结论：完成，共处理 ${totalLegacy} 行。请重启服务或让应用重新读取预设。`)
+  } else {
+    console.log(`结论：共需处理 ${totalLegacy} 行。确认无误后加 --apply 重新执行。`)
+  }
 }
 
 main()
