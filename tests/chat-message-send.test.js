@@ -4,8 +4,7 @@ const api = vi.hoisted(() => ({
   createChat: vi.fn(),
   listenAgentProcess: vi.fn(),
   listenChatStreamDelta: vi.fn(),
-  sendChatMessage: vi.fn(),
-  sendChatMessageStream: vi.fn()
+  sendChatMessage: vi.fn()
 }))
 const images = vi.hoisted(() => ({ encodeImageDraft: vi.fn() }))
 
@@ -45,8 +44,6 @@ describe('chat message send cancellation', () => {
       refreshSessionsOnly: vi.fn(),
       setInput: vi.fn(),
       clearInputImages: vi.fn(),
-      modelSelection: { parameters: {} },
-      language: 'zh-CN',
       setMessages,
       updatePendingReply: vi.fn(),
       requestScrollToEnd: vi.fn(),
@@ -63,7 +60,6 @@ describe('chat message send cancellation', () => {
 
     expect(api.listenAgentProcess).not.toHaveBeenCalled()
     expect(api.sendChatMessage).not.toHaveBeenCalled()
-    expect(api.sendChatMessageStream).not.toHaveBeenCalled()
     expect(setMessages).not.toHaveBeenCalled()
   })
 })

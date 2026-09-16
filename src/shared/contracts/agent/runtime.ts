@@ -86,6 +86,6 @@ export interface AgentRuntimePort {
     options?: { beforeIndex?: number | undefined; limit?: number | undefined }
   ): AgentTrajectorySnapshot
   cancel(conversationId: string): Promise<boolean>
-  disposeConversation(conversationId: string): Promise<void>
+  disposeConversation(conversationId: string, runtimeThreadIds?: readonly string[]): Promise<void>
   close(): Promise<void>
 }

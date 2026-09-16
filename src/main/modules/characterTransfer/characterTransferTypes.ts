@@ -5,7 +5,6 @@ import type { VariableConfig } from '@shared/contracts/variables/schemas'
 export interface PortableCharacter {
   name: string
   group: string
-  characterMode: 'story' | 'agent'
   frontendBeautyEnabled: boolean
   profileAge: string
   profileSex: string
@@ -28,6 +27,7 @@ export interface PortableCharacterPackage {
   assets: PortableAsset[]
   settingLibraryJson: string
   variableConfigJson: string
+  regexRules: RegexRule[]
 }
 
 export interface DecodedCharacterCard {

@@ -1,10 +1,41 @@
 import { AUTHOR_FRONTEND_SOURCE } from '@eleckoi/author-sdk';
+import { AUTHOR_LIBRARY_HOST_KEY } from './authorRuntimeLibraries.js';
 
 function scriptString(value) {
   return JSON.stringify(value).replaceAll('<', '\\u003c').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029');
 }
 
-function hostBootstrap(channel) {
+function htmlAttribute(value) {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function authorLibrariesBootstrap(runtime) {
+  if (!runtime?.scriptUrl || !runtime?.styleUrl) return '';
+  return `
+<link rel="stylesheet" href="${htmlAttribute(runtime.styleUrl)}" data-eleckoi-author-libraries>
+<script src="${htmlAttribute(runtime.scriptUrl)}" data-eleckoi-author-libraries></script>
+<script>
+(() => {
+  const hostLibraries = parent[${scriptString(AUTHOR_LIBRARY_HOST_KEY)}];
+  if (hostLibraries) {
+    window.YAML = hostLibraries.YAML;
+    window.Zod = hostLibraries.Zod;
+    window.z = hostLibraries.Zod.z;
+  }
+  window.ElecKoiLibraries = Object.freeze({
+    ready: true,
+    versions: Object.freeze(${scriptString(runtime.versions || {})})
+  });
+  window.dispatchEvent(new CustomEvent('eleckoi:libraries-ready', { detail: window.ElecKoiLibraries }));
+})();
+</script>`;
+}
+
+function hostBootstrap(channel, runtime) {
   return `
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta charset="utf-8">
@@ -104,6 +135,7 @@ function hostBootstrap(channel) {
   addEventListener('load', scheduleHeight, { once: true });
 })();
 </script>
+${authorLibrariesBootstrap(runtime)}
 <script>${AUTHOR_FRONTEND_SOURCE}</script>`;
 }
 
@@ -124,8 +156,8 @@ function injectIntoDocument(source, injection) {
   return `<!doctype html><html><head>${injection}</head><body>${source}</body></html>`;
 }
 
-export function buildRichMessageHtml(document, channel) {
-  const injection = hostBootstrap(channel);
+export function buildRichMessageHtml(document, channel, runtime) {
+  const injection = hostBootstrap(channel, runtime);
   return document.kind === 'full-document'
     ? injectIntoDocument(document.source, injection)
     : `<!doctype html><html><head>${injection}</head><body>${document.source}</body></html>`;

@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
+import { readSessionSnapshot } from './session-snapshot.mjs'
 
 export const name = 'eleckoi-setting-library-tools'
 export const inject = ['tools']
 
 export function apply(ctx) {
-  if (process.env.ELECKOI_SETTING_LIBRARY_ENABLED !== '1' || !process.env.ELECKOI_SETTING_LIBRARY_STATE_FILE) return
   return [
     ctx.tools.register(globTool()),
     ctx.tools.register(grepTool()),
@@ -24,8 +24,9 @@ function globTool() {
       path: { type: 'string', description: '可选的精确目录路径；留空表示整个设定库。' }
     },
     output: output(),
-    async execute(args) {
-      const catalog = await runtimeCatalogOf(readBridge())
+    async execute(args, exec) {
+      const bridgeFile = settingBridgeFor(exec)
+      const catalog = await runtimeCatalogOf(readBridge(bridgeFile), bridgeFile)
       const scope = normalizePath(args.path || '', true)
       if (scope === null || !directoryExists(catalog, scope)) return fail('invalid_path', 'path 必须是当前虚拟设定库中真实存在的目录。')
       let matcher
@@ -56,9 +57,10 @@ function grepTool() {
       limit: { type: 'integer' }
     },
     output: output(),
-    async execute(args) {
+    async execute(args, exec) {
+      const bridgeFile = settingBridgeFor(exec)
       if (!String(args.pattern || '')) return fail('invalid_arguments', 'pattern 不能为空。')
-      const catalog = await runtimeCatalogOf(readBridge())
+      const catalog = await runtimeCatalogOf(readBridge(bridgeFile), bridgeFile)
       const scope = normalizePath(args.path || '', true)
       if (scope === null || !directoryExists(catalog, scope)) return fail('invalid_path', 'path 必须是当前虚拟设定库中真实存在的目录。')
       let expression, pathMatcher
@@ -89,10 +91,11 @@ function readTool() {
     description: '读取 Glob 或 Grep 已返回的虚拟设定文件完整正文。路径没有 .md 后缀；不得猜测路径；不会修改设定。',
     parameters: { paths: { type: 'array', items: { type: 'string' }, required: true, description: '1 到 16 个完整虚拟设定文件路径。' } },
     output: output(),
-    async execute(args) {
+    async execute(args, exec) {
+      const bridgeFile = settingBridgeFor(exec)
       const paths = [...new Set((args.paths || []).map((path) => normalizePath(path, false)).filter(Boolean))]
       if (!paths.length || paths.length > 16) return fail('invalid_arguments', '一次必须读取 1 到 16 个文件。')
-      const catalog = await runtimeCatalogOf(readBridge())
+      const catalog = await runtimeCatalogOf(readBridge(bridgeFile), bridgeFile)
       const byPath = new Map(catalog.entries.map((entry) => [entry.path, entry]))
       const missing = paths.filter((path) => !byPath.has(path))
       if (missing.length) return { ...fail('not_found', '存在当前虚拟设定库没有的路径，请重新使用 Glob 或 Grep。'), paths: missing }
@@ -122,13 +125,14 @@ function patchTool() {
       overwrite: { type: 'boolean', description: 'move_file 遇到同名目标文件时是否覆盖；默认 true。' }
     },
     output: output(),
-    async execute(args) {
-      const bridge = readBridge()
+    async execute(args, exec) {
+      const bridgeFile = settingBridgeFor(exec)
+      const bridge = readBridge(bridgeFile)
       const original = structuredClone(bridge.library)
       try {
         const result = applyOperation(bridge.library, args)
         delete bridge.runtimeResolution
-        writeBridge(bridge)
+        writeBridge(bridgeFile, bridge)
         return { status: 'ok', scope: 'current_conversation', ...result }
       } catch (error) {
         bridge.library = original
@@ -269,7 +273,7 @@ function isFixedEntry(entry) {
     || ['opening', 'history_compaction'].includes(entry.kind)
 }
 
-async function runtimeCatalogOf(bridge) {
+async function runtimeCatalogOf(bridge, bridgeFile) {
   const catalog = catalogOf(bridge.library)
   if (bridge.runtimeResolution?.version === 1) return applyRuntimeResolution(catalog, bridge.runtimeResolution)
   const keywordEntries = catalog.entries.filter((entry) => entry.readStrategy === 'keyword')
@@ -315,7 +319,7 @@ async function runtimeCatalogOf(bridge) {
       .map((entry) => [entry.raw.id, entry.resolvedReferences]))
   }
   bridge.runtimeResolution = resolution
-  writeBridge(bridge)
+  writeBridge(bridgeFile, bridge)
   return applyRuntimeResolution(catalog, resolution)
 }
 
@@ -636,12 +640,17 @@ function requireEntry(library, path) {
   return entry
 }
 
-function readBridge() {
-  const bridge = JSON.parse(readFileSync(process.env.ELECKOI_SETTING_LIBRARY_STATE_FILE, 'utf8'))
+function readBridge(bridgeFile) {
+  const bridge = JSON.parse(readFileSync(bridgeFile, 'utf8'))
   if (!bridge?.enabled || !bridge.library) throw new Error('设定库运行时尚未准备好。')
   return bridge
 }
-function writeBridge(value) { writeFileSync(process.env.ELECKOI_SETTING_LIBRARY_STATE_FILE, JSON.stringify(value, null, 2), 'utf8') }
+function writeBridge(bridgeFile, value) { writeFileSync(bridgeFile, JSON.stringify(value, null, 2), 'utf8') }
+function settingBridgeFor(exec) {
+  const snapshot = readSessionSnapshot(process.env.ELECKOI_SESSION_SNAPSHOT_ROOT, exec?.agent?.session?.id)
+  if (!snapshot.settingLibraryEnabled || !snapshot.settingStateFile) throw new Error('当前 Session 未启用设定库工具。')
+  return snapshot.settingStateFile
+}
 function output() { return { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value, null, 2) }] } }
 function requiredFiles(catalog) { return catalog.entries.filter((entry) => entry.readStrategy === 'required' || entry.promotedToRequiredThisTurn === true).map(summary) }
 function summary(entry) { return { path: entry.path, title: entry.raw.title, read_strategy: entry.readStrategy, selection_hint: entry.selectionHint } }

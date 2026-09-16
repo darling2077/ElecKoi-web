@@ -20,8 +20,8 @@ export function importPreset(source, document) {
   return desktopClient.request('command.agent_presets.import', { source, document });
 }
 
-export function exportPreset(presetId) {
-  return desktopClient.request('command.agent_presets.export', { presetId });
+export function exportPreset(presetId, format) {
+  return desktopClient.request('command.agent_presets.export', { presetId, format });
 }
 
 export function setActivePreset(presetId) {

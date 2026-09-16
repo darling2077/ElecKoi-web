@@ -40,6 +40,7 @@ export function ChatWindow() {
       <section className="chat-window-body">
         <ChatPanel
           hasActiveChat={Boolean(chat.sessionId || chat.chatCharacter?.character_id)}
+          conversationId={chat.sessionId}
           hasCharacters={Boolean(chat.characters?.items?.length)}
           currentTitle={chat.currentTitle}
           characterId={chat.chatCharacter?.character_id || ""}
@@ -54,7 +55,6 @@ export function ChatWindow() {
           modelConfigs={chat.chatModelConfigs}
           selectedModelConfigId={chat.selectedChatModelConfigId}
           selectedModel={chat.selectedChatModel}
-          modelParameters={chat.chatModelParameters}
           modelOptionsByKey={chat.modelOptionsByKey}
           onLoadModelOptions={chat.loadModelOptions}
           onSelectModel={chat.selectChatModel}
@@ -68,6 +68,7 @@ export function ChatWindow() {
             setChatBackgroundOpen(true);
           }}
           onRegenerate={chat.regenerateReply}
+          onDeleteMessages={chat.deleteMessagesFrom}
           onEditMessage={(message, replacementMessage) => chat.regenerateReply({
             targetMessageId: message.id,
             replacementMessage,

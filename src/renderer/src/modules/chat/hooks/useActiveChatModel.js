@@ -16,7 +16,6 @@ const DEFAULT_SELECTION = {
   capability: "chat",
   configId: "",
   model: "",
-  parameters: { stream: true, temperature: 1, topP: 1 },
 };
 
 function errorMessage(error, fallback) {
@@ -35,7 +34,7 @@ export function useActiveChatModel({ modelConfigs, setStatus }) {
 
   async function selectChatModel(nextSelection) {
     const previous = modelSelection;
-    const next = normalizeModelSelection(nextSelection, modelSelection.parameters);
+    const next = normalizeModelSelection(nextSelection);
     setModelSelection(next);
     try {
       await saveActiveModelSelection(toActiveModelSelection(next));

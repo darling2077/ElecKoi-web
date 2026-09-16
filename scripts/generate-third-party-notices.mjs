@@ -136,5 +136,11 @@ function render(dependencies, noticeTexts) {
 }
 
 function normalizeText(value) {
-  return value.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').trim()
+  return value
+    .replace(/^\uFEFF/, '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trim()
 }

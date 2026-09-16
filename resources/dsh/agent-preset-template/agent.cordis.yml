@@ -22,7 +22,7 @@
   config:
     search: true
     fetch: true
-    searchMaxResults: !!js Number(process.env.ELECKOI_WEB_SEARCH_MAX_RESULTS ?? 5)
+    searchMaxResults: __ELECKOI_WEB_SEARCH_MAX_RESULTS__
     searchMaxQueries: 3
     searchTimeoutMs: 35000
     fetchTimeoutMs: 30000
@@ -75,6 +75,8 @@ __ELECKOI_SUBAGENT_OPTIONS__
 # ELECKOI:roleplay-workflow:BEGIN
 - id: roleplay-plan-tool
   name: __ELECKOI_ROLEPLAY_PLAN_TOOL_PLUGIN__
+  config:
+    steps: __ELECKOI_ROLEPLAY_PLAN_STEPS__
 # ELECKOI:roleplay-workflow:END
 
 # ELECKOI:workflow:BEGIN
@@ -96,7 +98,7 @@ __ELECKOI_SUBAGENT_OPTIONS__
     - id: compaction-basic
       name: '@deepseek-ai/dsh-compaction-basic'
       config:
-        thresholdRatio: !!js Number(process.env.ELECKOI_COMPACTION_THRESHOLD_RATIO ?? 0.8)
+        thresholdRatio: __ELECKOI_COMPACTION_THRESHOLD_RATIO__
         retainRatio: 0.16
         maxTokens: 8192
         compactionRetries: 1

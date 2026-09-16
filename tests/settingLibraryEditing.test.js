@@ -27,12 +27,14 @@ function openingEntry() {
 }
 
 describe('setting-library editor model', () => {
-  it('creates the three Android-aligned draft types without changing their semantics', () => {
+  it('creates new settings as Agent-readable entries while keeping preset prompts explicit', () => {
     vi.stubGlobal('crypto', { randomUUID: () => 'draft-id' })
     const standard = createEntryDraft('', 1, [], 'standard')
     const reference = createEntryDraft('', 2, [standard], 'reference')
-    expect(standard).toMatchObject({ title: '新建设定', enabled: false, triggerMode: 'always', dynamicMode: 'single_condition' })
+    const prompt = createEntryDraft('', 3, [standard, reference], 'prompt')
+    expect(standard).toMatchObject({ title: '新建设定', enabled: false, triggerMode: 'agent_tool', agentReadStrategy: 'normal', dynamicMode: 'single_condition', position: null })
     expect(reference).toMatchObject({ title: '新建设定 2', enabled: true, triggerMode: 'agent_tool', agentReadStrategy: 'variable_condition', dynamicMode: 'ejs_reference' })
+    expect(prompt).toMatchObject({ title: '新建设定 3', enabled: false, triggerMode: 'always', position: 'after_instructions' })
     vi.unstubAllGlobals()
   })
 

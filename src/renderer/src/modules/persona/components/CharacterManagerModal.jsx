@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ExportIcon, ImportIcon, PlusIcon, TrashIcon, XIcon } from "../../../ui/icons/index.jsx";
 import { DshSearchField } from "../../../ui/ui/DshSearchField.jsx";
 import { AddGroupDialog } from "./AddGroupDialog.jsx";
@@ -31,9 +31,34 @@ export function CharacterManagerModal({
 }) {
   const [deleteMode, setDeleteMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const exportControlRef = useRef(null);
+  const exportMenuRef = useRef(null);
 
   const selectedCount = selectedIds.length;
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
+  useEffect(() => {
+    function closeExportMenu(event) {
+      if (event.type === "keydown") {
+        if (event.key !== "Escape") return;
+      } else if (exportControlRef.current?.contains(event.target)) return;
+      setExportOpen(false);
+      setExportError("");
+    }
+    window.addEventListener("pointerdown", closeExportMenu);
+    window.addEventListener("keydown", closeExportMenu);
+    return () => {
+      window.removeEventListener("pointerdown", closeExportMenu);
+      window.removeEventListener("keydown", closeExportMenu);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (exportOpen) exportMenuRef.current?.querySelector("button")?.focus();
+  }, [exportOpen]);
 
   function toggleSelected(characterId) {
     setSelectedIds((current) => (current.includes(characterId) ? current.filter((id) => id !== characterId) : [...current, characterId]));
@@ -48,6 +73,20 @@ export function CharacterManagerModal({
     if (!selectedIds.length) return;
     await onDeleteCharacters(selectedIds);
     cancelDeleteMode();
+  }
+
+  async function exportCharacter(format) {
+    if (exporting) return;
+    setExporting(true);
+    setExportError("");
+    try {
+      await onExportCharacters(format);
+      setExportOpen(false);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "导出失败，请重试。");
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -99,10 +138,27 @@ export function CharacterManagerModal({
                   <ImportIcon />
                   导入角色
                 </button>
-                <button type="button" onClick={onExportCharacters}>
-                  <ExportIcon />
-                  导出角色
-                </button>
+                <div className="character-manager-export" ref={exportControlRef}>
+                  <button
+                    type="button"
+                    aria-haspopup="menu"
+                    aria-expanded={exportOpen}
+                    onClick={() => {
+                      setExportError("");
+                      setExportOpen((current) => !current);
+                    }}
+                  >
+                    <ExportIcon />
+                    导出角色
+                  </button>
+                  {exportOpen ? (
+                    <div className="character-manager-export-menu" ref={exportMenuRef} role="menu" aria-label="选择角色卡格式">
+                      <button type="button" role="menuitem" disabled={exporting} onClick={() => exportCharacter("png")}>PNG 角色卡</button>
+                      <button type="button" role="menuitem" disabled={exporting} onClick={() => exportCharacter("json")}>JSON 角色卡</button>
+                      {exportError ? <span role="alert">{exportError}</span> : null}
+                    </div>
+                  ) : null}
+                </div>
                 <button type="button" onClick={() => setDeleteMode(true)}>
                   <TrashIcon />
                   删除

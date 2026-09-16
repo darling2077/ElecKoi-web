@@ -5,8 +5,8 @@ import { VARIABLE_INITIALIZATION_OBJECT_ID } from "../../../../../shared/contrac
 import { VariableEntryIcon, VariableGroupIcon } from "./VariableConfigTree.jsx";
 import { variablePointerPath } from "../model/variableConfigEditing.js";
 
-function Field({ label, children, wide = false, hint = "" }) {
-  return <label className={`variable-field${wide ? " is-wide" : ""}`}><span>{label}</span>{children}{hint ? <small>{hint}</small> : null}</label>;
+function Field({ label, children, wide = false, fill = false, hint = "" }) {
+  return <label className={`variable-field${wide ? " is-wide" : ""}${fill ? " is-fill" : ""}`}><span>{label}</span>{children}{hint ? <small>{hint}</small> : null}</label>;
 }
 
 function InitializationEditor({ config, onChange }) {
@@ -18,11 +18,11 @@ function InitializationEditor({ config, onChange }) {
         <button type="button" role="tab" aria-selected={tab === "schema"} onClick={() => setTab("schema")}>Zod 校验</button>
       </div>
       {tab === "preview" ? (
-      <Field label="生成的初始状态">
+        <Field label="生成的初始状态" fill>
           <textarea className="variable-code-area" readOnly value={generatedInitialStatePreviewJson(config.objects, config.variables)} />
         </Field>
       ) : (
-        <Field label="变量总校验" hint="运行时提供全局 z，请直接填写 z.object(...)，无需 import。">
+        <Field label="变量总校验" fill hint="运行时提供全局 z，请直接填写 z.object(...)，无需 import。">
           <textarea className="variable-code-area" value={config.schemaCode} onChange={(event) => onChange({ ...config, schemaCode: event.target.value })} placeholder="z.object({ ... })" />
         </Field>
       )}
@@ -91,7 +91,7 @@ export function VariableConfigInspector({ config, selected, nameInputRef, onClos
   if (!selected.value) return null;
   const fixed = selected.kind === "object" && selected.value.id === VARIABLE_INITIALIZATION_OBJECT_ID;
   return (
-    <aside className="variable-inspector" aria-label="变量编辑器">
+    <aside className={`variable-inspector${fixed ? " is-initialization" : ""}`} aria-label="变量编辑器">
       <header className="variable-inspector-header">
         <div>{selected.kind === "object" ? <VariableGroupIcon initialization={fixed} size={18} /> : <VariableEntryIcon type={selected.value.type} size={18} />}<strong>{fixed ? "变量运行配置" : selected.kind === "object" ? selected.value.name : selected.value.title}</strong></div>
         <button type="button" aria-label="关闭编辑器" onClick={onClose}><X size={18} /></button>

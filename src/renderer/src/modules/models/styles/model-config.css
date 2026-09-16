@@ -1450,14 +1450,6 @@ button.model-group-row:hover {
   background: #f7f7f7;
 }
 
-.model-parameter-with-toggle {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
-  align-items: center;
-  gap: 8px;
-}
-
-.model-parameter-with-toggle input[type="checkbox"],
 .model-capability-toggle input[type="checkbox"] {
   width: 18px;
   height: 18px;

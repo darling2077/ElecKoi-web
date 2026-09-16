@@ -1,9 +1,12 @@
 name: ElecKoi Windows Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v0.1.2
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -24,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -40,10 +45,10 @@ jobs:
 
       - name: Verify tag matches package version
         run: |
-          $tagVersion = $env:GITHUB_REF_NAME.TrimStart('v')
+          $tagVersion = '${{ inputs.tag }}'.TrimStart('v')
           $packageVersion = node -p "require('./package.json').version"
           if ($tagVersion -ne $packageVersion) {
-            throw "Tag $env:GITHUB_REF_NAME does not match package.json version $packageVersion"
+            throw "Tag ${{ inputs.tag }} does not match package.json version $packageVersion"
           }
 
       - name: Install locked dependencies
@@ -71,6 +76,7 @@ jobs:
       - name: Publish verified GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           $assets = @(
             (Get-ChildItem release -File -Filter '*-setup.exe').FullName
@@ -78,10 +84,11 @@ jobs:
             (Resolve-Path release/latest.yml).Path
           )
           $notes = @"
-          1. 新增对话运行轨迹查看。
-          2. 新增对话动态设定管理。
-          3. 修复聊天消息中的状态标签、代码块及换行显示问题。
-          4. 优化角色列表与部分交互体验。
-          5. 修复自动更新安装时可能出现的主进程错误。
+          1. 新增消息内富交互内容的音频、对话操作与资源加载支持。
+          2. 优化 DSH 多会话运行、会话恢复与异常重启。
+          3. 完善 Top P、推理强度及不同模型接口的能力适配。
+          4. 完善角色卡、Agent 预设和设定库的导入导出。
+          5. 修复数据库升级、消息状态、变量与本地媒体保存问题。
+          6. 优化侧边栏折叠、模型配置和变量编辑体验。
           "@
-          gh release create $env:GITHUB_REF_NAME @assets --verify-tag --notes $notes --title "ElecKoi $env:GITHUB_REF_NAME"
+          gh release create $env:RELEASE_TAG @assets --verify-tag --notes $notes --title "ElecKoi $env:RELEASE_TAG"

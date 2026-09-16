@@ -79,7 +79,7 @@ function ChatDisplayPreview({ preferences, persona }) {
 
   return (
     <div className={`chat-display-preview${profile.assistant_bubble_enabled ? " assistant-bubble-enabled" : ""}`} style={style}>
-      <div className="chat-display-preview-bar"><strong>万界旅行手册</strong></div>
+      <div className="chat-display-preview-bar"><strong>示例角色</strong></div>
       <div className={`message-area layout-${layout}`}>
         <MessageBubble
           message={{ id: "preview-user", role: "user", content: "今晚从这里继续。", status: "complete" }}

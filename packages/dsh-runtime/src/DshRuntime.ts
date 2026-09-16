@@ -1,10 +1,21 @@
 import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative } from 'node:path'
-import { DeepSeekHarness, type ContentBlock, type HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
+import {
+  DeepSeekHarness,
+  TransportClosedError,
+  type ContentBlock,
+  type HarnessNotification
+} from '@deepseek-ai/dsh-sdk-client'
 import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { commitPreparedImageFile, prepareImageFile, readImageFile } from '@deepseek-ai/dsh-attachment-local'
 import { DshProcessProjector, DshReplyProjector, finalReplyText } from './notifications'
+import {
+  createDshProviderCatalog,
+  resolveDshProviderBinding,
+  type DshProviderCatalog
+} from './modelProfiles'
 import {
   DshGenerationStatsProjector,
   emptyStoredGenerationStats,
@@ -39,26 +50,28 @@ const imageLimits: ImageAttachmentLimits = {
 }
 const imageNormalizationPolicy = { maxDimension: 2048, maxBytes: 4 * 1024 * 1024 }
 
-interface Session {
-  harness: DeepSeekHarness
-  settingsKey: string
-}
-
 interface ActiveRun {
   cancelled: boolean
+  runtimeThreadId: string
 }
 
 export class DshRuntime {
-  private readonly sessions = new Map<string, Session>()
   private readonly activeRuns = new Map<string, ActiveRun>()
+  private readonly conversationSessions = new Map<string, string>()
   private readonly generationStatsProjectors = new Map<string, DshGenerationStatsProjector>()
   private readonly trajectoryEvents = new Map<string, DshSessionEventRecord[]>()
   private readonly runtimeBin: string
+  private harness: DeepSeekHarness | undefined
+  private harnessKey = ''
+  private harnessStartTask: Promise<DeepSeekHarness> | undefined
+  private recoveryTask: Promise<void> | undefined
+  private closed = false
 
   constructor(private readonly options: DshRuntimeOptions) {
     mkdirSync(options.workspaceRoot, { recursive: true })
     mkdirSync(join(options.runtimeDataRoot, 'home'), { recursive: true })
     mkdirSync(join(options.runtimeDataRoot, 'sessions'), { recursive: true })
+    mkdirSync(join(options.runtimeDataRoot, 'session-snapshots'), { recursive: true })
     this.runtimeBin = createRequire(import.meta.url)
       .resolve('@deepseek-ai/dsh-sdk-jsonrpc-demo/packaged-bin')
   }
@@ -117,14 +130,34 @@ export class DshRuntime {
     subagentSettings?: DshModelSettings
   ): Promise<'complete' | 'cancelled'> {
     if (this.activeRuns.has(conversationId)) throw new Error('这个对话仍有回复正在生成。')
-    const run: ActiveRun = { cancelled: false }
+    const selectedAgentPreset = agentPreset ?? defaultAgentPreset()
+    const selectedWebSearch = webSearch ?? defaultWebSearchSettings()
+    const effectiveSubagentSettings = subagentSettings ?? settings
+    const catalog = createDshProviderCatalog([
+      ...(this.options.modelCatalog?.() ?? []),
+      settings,
+      effectiveSubagentSettings
+    ])
+    const mainBinding = resolveDshProviderBinding(catalog, settings)
+    const subagentBinding = resolveDshProviderBinding(catalog, effectiveSubagentSettings)
+    const harness = await this.ensureHarness(catalog, selectedWebSearch, settings)
+    const run: ActiveRun = { cancelled: false, runtimeThreadId }
     this.activeRuns.set(conversationId, run)
     try {
       const sessionRoot = join(this.options.runtimeDataRoot, 'sessions', safeConversationDirectory(conversationId))
       mkdirSync(sessionRoot, { recursive: true })
       if (discardRuntimeThreadIds.length > 0) {
-        await this.disposeSession(conversationId)
-        discardPersistedRuntimeThreads(sessionRoot, discardRuntimeThreadIds, runtimeThreadId)
+        await this.disposeRuntimeThreads(discardRuntimeThreadIds, runtimeThreadId)
+        discardPersistedRuntimeThreads(
+          join(this.options.runtimeDataRoot, 'sessions'),
+          discardRuntimeThreadIds,
+          runtimeThreadId
+        )
+        discardSessionSnapshots(
+          join(this.options.runtimeDataRoot, 'session-snapshots'),
+          discardRuntimeThreadIds,
+          runtimeThreadId
+        )
         this.discardGenerationStats(conversationId, sessionRoot, discardRuntimeThreadIds, runtimeThreadId)
       }
       const variableStateFile = join(sessionRoot, 'eleckoi-variable-state.json')
@@ -133,23 +166,45 @@ export class DshRuntime {
       writeSettingBridge(settingStateFile, conversationContext, variableContext)
       const contextFile = join(sessionRoot, 'eleckoi-conversation-context.json')
       writeContextBridge(contextFile, text, conversationContext)
-      const selectedAgentPreset = agentPreset ?? defaultAgentPreset()
-      this.materializeAgentPreset(selectedAgentPreset, toolPolicy, subagentSettings)
-      const session = await this.getSession(
-        conversationId,
-        settings,
+      const effectiveToolPolicy = sessionToolPolicy(
+        toolPolicy,
         variableContext !== undefined,
         conversationContext?.settingLibrary !== undefined,
-        toolPolicy,
-        selectedAgentPreset,
-        webSearch,
-        subagentSettings
+        selectedAgentPreset.roleplayPlan.steps.length > 0
       )
-      if (run.cancelled) {
-        await this.disposeSession(conversationId)
-        return 'cancelled'
-      }
-      const processProjector = new DshProcessProjector(runtimeThreadId, subagentSettings?.model ?? settings.model)
+      const mountedPresetId = this.materializeAgentPreset(
+        selectedAgentPreset,
+        effectiveToolPolicy,
+        effectiveSubagentSettings,
+        subagentBinding.provider,
+        selectedWebSearch,
+        settings
+      )
+      writeSessionSnapshot(
+        join(this.options.runtimeDataRoot, 'session-snapshots'),
+        runtimeThreadId,
+        {
+          conversationId,
+          runtimeThreadId,
+          mountedPresetId,
+          model: requestSnapshot(settings, mainBinding),
+          subagentModel: requestSnapshot(effectiveSubagentSettings, subagentBinding),
+          variableStateFile,
+          settingStateFile,
+          contextFile,
+          variablesEnabled: variableContext !== undefined,
+          settingLibraryEnabled: conversationContext?.settingLibrary !== undefined,
+          disabledToolGroupIds: effectiveToolPolicy.disabledGroupIds,
+          roleplayPlanSteps: selectedAgentPreset.roleplayPlan.steps,
+          historyCompactionInstructions: selectedAgentPreset.historyCompactionInstructions ?? '',
+          conversationContext: conversationContext ?? {
+            characterId: '', characterName: '', persona: {}, history: []
+          }
+        }
+      )
+      this.conversationSessions.set(conversationId, runtimeThreadId)
+      if (run.cancelled) return 'cancelled'
+      const processProjector = new DshProcessProjector(runtimeThreadId, effectiveSubagentSettings.model)
       const replyProjector = new DshReplyProjector(runtimeThreadId)
       const generationStatsProjector = this.generationStatsProjector(conversationId, runtimeThreadId, sessionRoot)
       const content: string | ContentBlock[] = inputImages.length === 0
@@ -161,9 +216,14 @@ export class DshRuntime {
               attachment: attachment as unknown as ImageAttachmentRef
             }))
           ]
-      const result = await session.harness.run(content, {
-        sessionId: runtimeThreadId,
-        onNotification: (notification) => {
+      const result = await this.runWithRecovery(
+        harness,
+        catalog,
+        selectedWebSearch,
+        settings,
+        content,
+        runtimeThreadId,
+        (notification) => {
           this.captureTrajectoryEvent(conversationId, runtimeThreadId, notification)
           if (run.cancelled) return
           const generationStats = generationStatsProjector.project(notification, runtimeThreadId)
@@ -176,10 +236,9 @@ export class DshRuntime {
           const processItem = processProjector.project(notification)
           if (processItem !== undefined) callbacks.onProcessItem?.(processItem)
         }
-      })
+      )
       if (run.cancelled) return 'cancelled'
       if (!result.events.some((event) => event.type === 'turn/end')) {
-        await this.disposeSession(conversationId)
         throw new Error('Agent 会话提前结束，本轮消息未实际执行，请重试。')
       }
       if (variableContext !== undefined) callbacks.onVariableState?.(readVariableBridgeState(variableStateFile))
@@ -198,14 +257,38 @@ export class DshRuntime {
     const run = this.activeRuns.get(conversationId)
     if (run === undefined) return false
     run.cancelled = true
-    await this.disposeSession(conversationId)
+    const harness = this.harness
+    if (harness !== undefined) {
+      try {
+        await harness.client.request('session/cancel', { sessionId: run.runtimeThreadId })
+      } catch (error) {
+        if (!(error instanceof TransportClosedError)) throw error
+      }
+    }
     return true
   }
 
-  async disposeConversation(conversationId: string): Promise<void> {
+  async disposeConversation(conversationId: string, runtimeThreadIds: readonly string[] = []): Promise<void> {
     const run = this.activeRuns.get(conversationId)
-    if (run !== undefined) run.cancelled = true
-    await this.disposeSession(conversationId)
+    if (run !== undefined) {
+      run.cancelled = true
+      await this.stop(conversationId)
+    }
+    const runtimeThreadId = this.conversationSessions.get(conversationId)
+    const discardedThreadIds = [...new Set([
+      ...runtimeThreadIds,
+      ...(runtimeThreadId ? [runtimeThreadId] : [])
+    ])]
+    if (discardedThreadIds.length > 0) {
+      await this.disposeRuntimeThreads(discardedThreadIds, '')
+      discardPersistedRuntimeThreads(join(this.options.runtimeDataRoot, 'sessions'), discardedThreadIds, '')
+      discardSessionSnapshots(join(this.options.runtimeDataRoot, 'session-snapshots'), discardedThreadIds, '')
+    }
+    rmSync(join(this.options.runtimeDataRoot, 'sessions', safeConversationDirectory(conversationId)), {
+      recursive: true,
+      force: true
+    })
+    this.conversationSessions.delete(conversationId)
     this.activeRuns.delete(conversationId)
     clearConversationEntries(this.trajectoryEvents, conversationId)
     clearConversationEntries(this.generationStatsProjectors, conversationId)
@@ -228,17 +311,27 @@ export class DshRuntime {
   }
 
   async close(): Promise<void> {
+    if (this.closed) return
+    this.closed = true
     for (const run of this.activeRuns.values()) run.cancelled = true
-    await Promise.all([...this.sessions.keys()].map((conversationId) => this.disposeSession(conversationId)))
+    await Promise.allSettled([
+      ...(this.harnessStartTask === undefined ? [] : [this.harnessStartTask]),
+      ...(this.recoveryTask === undefined ? [] : [this.recoveryTask])
+    ])
+    const harness = this.harness
+    this.harness = undefined
+    this.harnessKey = ''
+    if (harness !== undefined) await harness.close()
     this.activeRuns.clear()
+    this.conversationSessions.clear()
     this.trajectoryEvents.clear()
     this.generationStatsProjectors.clear()
   }
 
   async verify(): Promise<void> {
     const agentPreset = defaultAgentPreset()
-    this.materializeAgentPreset(agentPreset)
-    const harness = this.createHarness(this.options.workspaceRoot, {
+    const settings: DshModelSettings = {
+      configId: 'eleckoi-runtime-health-check',
       apiKey: 'eleckoi-runtime-health-check',
       baseUrl: 'https://api.deepseek.com',
       model: 'deepseek-chat',
@@ -247,7 +340,10 @@ export class DshRuntime {
       customHeaders: {},
       contextWindow: 128000,
       supportsImageInput: false
-    }, undefined, false, false, undefined, agentPreset)
+    }
+    const catalog = createDshProviderCatalog([settings])
+    this.materializeAgentPreset(agentPreset, undefined, settings, resolveDshProviderBinding(catalog, settings).provider)
+    const harness = this.createHarness(catalog, defaultWebSearchSettings(), settings)
     try {
       await harness.start()
     } finally {
@@ -255,111 +351,148 @@ export class DshRuntime {
     }
   }
 
-  private async getSession(
-    conversationId: string,
-    settings: DshModelSettings,
-    variablesEnabled: boolean,
-    settingLibraryEnabled: boolean,
-    toolPolicy: DshToolPolicy | undefined,
-    agentPreset: DshAgentPreset,
-    webSearch?: DshWebSearchSettings,
-    subagentSettings?: DshModelSettings
-  ): Promise<Session> {
-    const settingsKey = JSON.stringify({ settings, subagentSettings, variablesEnabled, settingLibraryEnabled, toolPolicy, agentPreset, webSearch })
-    const existing = this.sessions.get(conversationId)
-    if (existing !== undefined && existing.settingsKey === settingsKey) return existing
-    if (existing !== undefined) await this.disposeSession(conversationId)
-
-    const workspace = join(this.options.workspaceRoot, safeConversationDirectory(conversationId))
-    mkdirSync(workspace, { recursive: true })
-    const sessionRoot = join(this.options.runtimeDataRoot, 'sessions', safeConversationDirectory(conversationId))
-    mkdirSync(sessionRoot, { recursive: true })
-    const harness = this.createHarness(workspace, settings, sessionRoot, variablesEnabled, settingLibraryEnabled, toolPolicy, agentPreset, webSearch, subagentSettings)
-    const session: Session = { harness, settingsKey }
-    this.sessions.set(conversationId, session)
-    return session
-  }
-
   private createHarness(
-    workspace: string,
-    settings: DshModelSettings,
-    sessionRoot = join(this.options.runtimeDataRoot, 'sessions'),
-    variablesEnabled = false,
-    settingLibraryEnabled = false,
-    toolPolicy?: DshToolPolicy,
-    agentPreset: DshAgentPreset = defaultAgentPreset(),
-    webSearch: DshWebSearchSettings = defaultWebSearchSettings(),
-    subagentSettings?: DshModelSettings
+    catalog: DshProviderCatalog,
+    webSearch: DshWebSearchSettings,
+    defaultSettings: DshModelSettings
   ): DeepSeekHarness {
-    const effectiveSubagentSettings = subagentSettings ?? settings
+    const binding = resolveDshProviderBinding(catalog, defaultSettings)
     const harness = new DeepSeekHarness({
       launch: {
         command: this.options.executablePath,
         args: [this.runtimeBin, this.options.configPath],
-        cwd: workspace,
+        cwd: this.options.workspaceRoot,
         env: {
           ...process.env,
           ELECTRON_RUN_AS_NODE: '1',
-          ELECKOI_API_KEY: settings.apiKey,
-          ELECKOI_BASE_URL: settings.baseUrl,
-          ELECKOI_API_FORMAT: settings.apiFormat,
-          ELECKOI_CUSTOM_HEADERS: JSON.stringify(settings.customHeaders),
-          ELECKOI_CONTEXT_WINDOW: String(settings.contextWindow),
-          ELECKOI_COMPACTION_THRESHOLD_RATIO: String(
-            settings.autoCompactTokenLimit === undefined
-              ? 0.8
-              : settings.autoCompactTokenLimit / settings.contextWindow
-          ),
-          ELECKOI_TEMPERATURE: settings.temperature === undefined ? '' : String(settings.temperature),
-          ELECKOI_MAX_TOKENS: String(effectiveMaxTokens(settings)),
-          ELECKOI_REASONING_EFFORT: settings.reasoningEffort || '',
-          ELECKOI_MODEL_INPUT_MODALITIES: JSON.stringify(settings.supportsImageInput ? ['text', 'image'] : ['text']),
-          ...(settings.proxyUrl ? {
-            HTTP_PROXY: settings.proxyUrl,
-            HTTPS_PROXY: settings.proxyUrl,
-            NODE_USE_ENV_PROXY: '1'
-          } : {}),
-          DSH_MODEL: settings.model,
-          DSH_SYSTEM_PROMPT: settings.systemPrompt,
-          DSH_CWD: workspace,
+          ELECKOI_DSH_PROVIDERS: JSON.stringify(catalog.providers),
+          ...catalog.credentials,
+          DSH_MODEL: defaultSettings.model,
+          DSH_SYSTEM_PROMPT: 'You are ElecKoi.',
+          DSH_CWD: this.options.workspaceRoot,
           DSH_HOME: join(this.options.runtimeDataRoot, 'home'),
-          DSH_SESSION_ROOT: sessionRoot,
-          ELECKOI_VARIABLE_STATE_FILE: join(sessionRoot, 'eleckoi-variable-state.json'),
-          ELECKOI_VARIABLES_ENABLED: variablesEnabled ? '1' : '0',
-          ELECKOI_CONVERSATION_CONTEXT_FILE: join(sessionRoot, 'eleckoi-conversation-context.json'),
-          ELECKOI_SETTING_LIBRARY_STATE_FILE: join(sessionRoot, 'eleckoi-setting-library-state.json'),
-          ELECKOI_SETTING_LIBRARY_ENABLED: settingLibraryEnabled ? '1' : '0',
-          ELECKOI_DISABLED_TOOL_GROUPS: JSON.stringify(toolPolicy?.disabledGroupIds ?? []),
+          DSH_SESSION_ROOT: join(this.options.runtimeDataRoot, 'sessions'),
+          ELECKOI_SESSION_SNAPSHOT_ROOT: join(this.options.runtimeDataRoot, 'session-snapshots'),
           DSH_WEB_SEARCH_PROVIDER: webSearch.mode === 'tavily' ? 'tavily' : 'deepseek-official',
-          ELECKOI_NATIVE_WEB_SEARCH_API_KEY: officialDeepSeekWebSearchApiKey(settings),
+          ELECKOI_NATIVE_WEB_SEARCH_API_KEY: officialDeepSeekWebSearchApiKey(defaultSettings),
           ELECKOI_WEB_SEARCH_MAX_RESULTS: String(webSearch.maxResults),
           ELECKOI_TAVILY_API_KEY: webSearch.tavilyApiKey,
-          ELECKOI_AGENT_PRESET: agentPreset.id,
-          ELECKOI_AGENT_PRESET_VERSION: agentPreset.versionId,
-          ELECKOI_ROLEPLAY_PLAN_STEPS: JSON.stringify(agentPreset.roleplayPlan.steps),
-          ELECKOI_HISTORY_COMPACTION_INSTRUCTIONS: agentPreset.historyCompactionInstructions ?? '',
-          ELECKOI_SUBAGENT_API_KEY: effectiveSubagentSettings.apiKey,
-          ELECKOI_SUBAGENT_BASE_URL: effectiveSubagentSettings.baseUrl,
-          ELECKOI_SUBAGENT_API_FORMAT: effectiveSubagentSettings.apiFormat,
-          ELECKOI_SUBAGENT_CUSTOM_HEADERS: JSON.stringify(effectiveSubagentSettings.customHeaders),
-          ELECKOI_SUBAGENT_CONTEXT_WINDOW: String(effectiveSubagentSettings.contextWindow),
-          ELECKOI_SUBAGENT_MAX_TOKENS: String(effectiveMaxTokens(effectiveSubagentSettings)),
-          ELECKOI_SUBAGENT_TEMPERATURE: effectiveSubagentSettings.temperature === undefined ? '' : String(effectiveSubagentSettings.temperature),
-          ELECKOI_SUBAGENT_REASONING_EFFORT: effectiveSubagentSettings.reasoningEffort || '',
-          ELECKOI_SUBAGENT_MODEL_INPUT_MODALITIES: JSON.stringify(effectiveSubagentSettings.supportsImageInput ? ['text', 'image'] : ['text']),
-          ELECKOI_SUBAGENT_MODEL: effectiveSubagentSettings.model,
           DSH_TELEMETRY_DISABLED: '1'
         },
         shutdownTimeoutMs: 1500,
         disposeEofGraceMs: 2500,
         disposeGraceMs: 1500
       },
-      cwd: workspace,
-      provider: 'eleckoi-runtime',
-      model: settings.model,
-      ...(settings.maxTokens ? { maxTokens: settings.maxTokens } : {})
+      cwd: this.options.workspaceRoot,
+      provider: binding.provider,
+      model: binding.model
     })
     return harness
+  }
+
+  private async ensureHarness(
+    catalog: DshProviderCatalog,
+    webSearch: DshWebSearchSettings,
+    defaultSettings: DshModelSettings
+  ): Promise<DeepSeekHarness> {
+    if (this.closed) throw new Error('DSH 运行时已经关闭。')
+    const key = JSON.stringify({
+      providers: catalog.providers,
+      credentials: catalog.credentials,
+      webSearch,
+      nativeWebSearchKey: officialDeepSeekWebSearchApiKey(defaultSettings)
+    })
+    if (this.harness !== undefined && this.harnessKey === key) return this.harness
+    if (this.harnessStartTask !== undefined) {
+      await this.harnessStartTask
+      if (this.harness !== undefined && this.harnessKey === key) return this.harness
+    }
+    const startTask = (async () => {
+      if (this.harness !== undefined && this.harnessKey === key) return this.harness
+      if (this.harness !== undefined && this.activeRuns.size > 0) {
+        throw new Error('模型连接配置已变化；请等待当前回复完成后再试。')
+      }
+      const previous = this.harness
+      this.harness = undefined
+      this.harnessKey = ''
+      if (previous !== undefined) await previous.close()
+      const harness = this.createHarness(catalog, webSearch, defaultSettings)
+      await harness.start()
+      this.harness = harness
+      this.harnessKey = key
+      return harness
+    })()
+    this.harnessStartTask = startTask
+    try {
+      return await startTask
+    } finally {
+      if (this.harnessStartTask === startTask) this.harnessStartTask = undefined
+    }
+  }
+
+  private async runWithRecovery(
+    harness: DeepSeekHarness,
+    catalog: DshProviderCatalog,
+    webSearch: DshWebSearchSettings,
+    defaultSettings: DshModelSettings,
+    content: string | ContentBlock[],
+    runtimeThreadId: string,
+    onNotification: (notification: HarnessNotification) => void
+  ) {
+    try {
+      return await harness.run(content, { sessionId: runtimeThreadId, onNotification })
+    } catch (error) {
+      if (!(error instanceof TransportClosedError)) throw error
+      await this.recoverHarness(harness, catalog, webSearch, defaultSettings)
+      const recovered = this.harness
+      if (recovered === undefined) throw error
+      return recovered.run(content, { sessionId: runtimeThreadId, onNotification })
+    }
+  }
+
+  private async recoverHarness(
+    failedHarness: DeepSeekHarness,
+    catalog: DshProviderCatalog,
+    webSearch: DshWebSearchSettings,
+    defaultSettings: DshModelSettings
+  ): Promise<void> {
+    if (this.harness !== failedHarness) return
+    this.recoveryTask ??= (async () => {
+      if (this.harness !== failedHarness) return
+      this.harness = undefined
+      this.harnessKey = ''
+      try {
+        await failedHarness.close()
+      } catch {
+        // The transport is already gone; close remains best-effort here.
+      }
+      if (this.closed) return
+      const recovered = this.createHarness(catalog, webSearch, defaultSettings)
+      await recovered.start()
+      this.harness = recovered
+      this.harnessKey = JSON.stringify({
+        providers: catalog.providers,
+        credentials: catalog.credentials,
+        webSearch,
+        nativeWebSearchKey: officialDeepSeekWebSearchApiKey(defaultSettings)
+      })
+    })().finally(() => {
+      this.recoveryTask = undefined
+    })
+    await this.recoveryTask
+  }
+
+  private async disposeRuntimeThreads(threadIds: readonly string[], selectedThreadId: string): Promise<void> {
+    const harness = this.harness
+    if (harness === undefined) return
+    for (const sessionId of new Set(threadIds)) {
+      if (!sessionId || sessionId === selectedThreadId) continue
+      try {
+        await harness.client.request('session/dispose', { sessionId })
+      } catch (error) {
+        if (!(error instanceof TransportClosedError)) throw error
+      }
+    }
   }
 
   private captureTrajectoryEvent(
@@ -385,22 +518,33 @@ export class DshRuntime {
   private materializeAgentPreset(
     preset: DshAgentPreset,
     toolPolicy?: DshToolPolicy,
-    subagentSettings?: DshModelSettings
-  ): void {
+    subagentSettings?: DshModelSettings,
+    subagentProvider?: string,
+    webSearch: DshWebSearchSettings = defaultWebSearchSettings(),
+    mainSettings?: DshModelSettings
+  ): string {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(preset.id)) throw new Error('预设编号不能用于 DSH Agent Preset。')
+    const mountedPresetId = runtimePresetId(preset, toolPolicy, subagentSettings, subagentProvider, webSearch, mainSettings)
     const root = join(this.options.runtimeDataRoot, 'home', '.agent-presets')
-    const directory = join(root, preset.id)
+    const directory = join(root, mountedPresetId)
     mkdirSync(directory, { recursive: true })
     const pluginRoot = join(dirname(this.options.presetTemplatePath), '..')
     let composition = readFileSync(this.options.presetTemplatePath, 'utf8')
       .replace('__ELECKOI_SETTING_LIBRARY_TOOLS_PLUGIN__', JSON.stringify(join(pluginRoot, 'setting-library-tools.mjs')))
       .replace('__ELECKOI_VARIABLE_TOOLS_PLUGIN__', JSON.stringify(join(pluginRoot, 'variable-tools.mjs')))
       .replace('__ELECKOI_ROLEPLAY_PLAN_TOOL_PLUGIN__', JSON.stringify(join(pluginRoot, 'roleplay-plan-tool.mjs')))
+      .replace('__ELECKOI_ROLEPLAY_PLAN_STEPS__', JSON.stringify(preset.roleplayPlan.steps))
+      .replace('__ELECKOI_WEB_SEARCH_MAX_RESULTS__', String(webSearch.maxResults))
+      .replace('__ELECKOI_COMPACTION_THRESHOLD_RATIO__', String(
+        mainSettings?.autoCompactTokenLimit === undefined
+          ? 0.8
+          : mainSettings.autoCompactTokenLimit / mainSettings.contextWindow
+      ))
       .replaceAll('__ELECKOI_SUBAGENT_OPTIONS__', subagentSettings ? [
         '    agentOptions:',
-        "      provider: 'eleckoi-subagent'",
+        `      provider: ${JSON.stringify(subagentProvider ?? 'custom')}`,
         `      model: ${JSON.stringify(subagentSettings.model)}`,
-        `      maxTokens: ${effectiveMaxTokens(subagentSettings)}`
+        ...(subagentSettings.maxTokens === undefined ? [] : [`      maxTokens: ${subagentSettings.maxTokens}`])
       ].join('\n') : '')
     const disabled = new Set(toolPolicy?.disabledGroupIds ?? [])
     composition = applyPresetToolPolicy(composition, disabled)
@@ -410,12 +554,7 @@ export class DshRuntime {
       `description: ${JSON.stringify(`ElecKoi 预设版本 ${preset.versionId}`)}`,
       ''
     ].join('\n'))
-  }
-
-  private async disposeSession(conversationId: string): Promise<void> {
-    const session = this.sessions.get(conversationId)
-    this.sessions.delete(conversationId)
-    if (session !== undefined) await session.harness.close()
+    return mountedPresetId
   }
 
   private generationStatsProjector(conversationId: string, runtimeThreadId: string, sessionRoot: string): DshGenerationStatsProjector {
@@ -454,16 +593,75 @@ function defaultWebSearchSettings(): DshWebSearchSettings {
   return { mode: 'provider_native', maxResults: 5, tavilyApiKey: '' }
 }
 
+function sessionToolPolicy(
+  policy: DshToolPolicy | undefined,
+  variablesEnabled: boolean,
+  settingLibraryEnabled: boolean,
+  roleplayWorkflowEnabled: boolean
+): DshToolPolicy {
+  const disabled = new Set(policy?.disabledGroupIds ?? [])
+  if (!variablesEnabled) disabled.add('builtin:variables')
+  if (!settingLibraryEnabled) disabled.add('builtin:setting-library')
+  if (!roleplayWorkflowEnabled) disabled.add('builtin:roleplay-workflow')
+  return { disabledGroupIds: [...disabled] }
+}
+
+function requestSnapshot(settings: DshModelSettings, binding: { provider: string; model: string; reasoningEffort?: string }) {
+  return {
+    configId: settings.configId,
+    provider: binding.provider,
+    model: binding.model,
+    systemPrompt: settings.systemPrompt,
+    ...(settings.temperature === undefined ? {} : { temperature: settings.temperature }),
+    ...(settings.topP === undefined ? {} : { topP: settings.topP }),
+    ...(settings.maxTokens === undefined ? {} : { maxTokens: settings.maxTokens }),
+    ...(binding.reasoningEffort === undefined ? {} : { reasoningEffort: binding.reasoningEffort })
+  }
+}
+
+function runtimePresetId(
+  preset: DshAgentPreset,
+  toolPolicy: DshToolPolicy | undefined,
+  subagentSettings: DshModelSettings | undefined,
+  subagentProvider: string | undefined,
+  webSearch: DshWebSearchSettings,
+  mainSettings: DshModelSettings | undefined
+): string {
+  const fingerprint = createHash('sha256').update(JSON.stringify({
+    preset,
+    disabledToolGroupIds: [...(toolPolicy?.disabledGroupIds ?? [])].sort(),
+    subagent: subagentSettings === undefined ? null : {
+      provider: subagentProvider,
+      model: subagentSettings.model,
+      maxTokens: subagentSettings.maxTokens
+    },
+    webSearchMaxResults: webSearch.maxResults,
+    compactionRatio: mainSettings?.autoCompactTokenLimit === undefined
+      ? 0.8
+      : mainSettings.autoCompactTokenLimit / mainSettings.contextWindow
+  })).digest('hex').slice(0, 16)
+  const prefix = preset.id.replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'preset'
+  return `${prefix}-${fingerprint}`
+}
+
+function writeSessionSnapshot(root: string, runtimeThreadId: string, value: Record<string, unknown>): void {
+  mkdirSync(root, { recursive: true })
+  writeAtomically(join(root, `${safeRuntimeThreadFile(runtimeThreadId)}.json`), JSON.stringify(value, null, 2))
+}
+
+function discardSessionSnapshots(root: string, threadIds: readonly string[], selectedThreadId: string): void {
+  for (const threadId of new Set(threadIds)) {
+    if (!threadId || threadId === selectedThreadId) continue
+    rmSync(join(root, `${safeRuntimeThreadFile(threadId)}.json`), { force: true })
+  }
+}
+
 function officialDeepSeekWebSearchApiKey(settings: DshModelSettings): string {
   try {
     return new URL(settings.baseUrl).hostname.toLowerCase() === 'api.deepseek.com' ? settings.apiKey : ''
   } catch {
     return ''
   }
-}
-
-function effectiveMaxTokens(settings: DshModelSettings): number {
-  return settings.maxTokens ?? Math.min(32_768, settings.contextWindow)
 }
 
 function writeAtomically(path: string, content: string): void {

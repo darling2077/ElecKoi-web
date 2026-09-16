@@ -1,198 +1,105 @@
 import { describe, expect, it } from 'vitest'
-import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
-import { projectRequest } from '../resources/dsh/conversation-context.mjs'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import {
+  createConversationSeed,
+  projectPreStepMessages,
+  renderRuntimeContext,
+  settingInjections
+} from '../resources/dsh/conversation-context.mjs'
 
-const model = 'deepseek-chat'
-
-function user(text, source = { kind: 'user' }) {
-  return createUserMessage({ content: [{ type: 'text', text }], source })
-}
-
-function assistant(text, provider = 'eleckoi-runtime') {
-  return createAssistantMessage({
-    content: [{ type: 'text', text }],
-    source: { provider, model }
-  })
-}
+const model = { provider: 'moonshotai-cn', model: 'kimi-k3' }
 
 function text(message) {
   return message.content.filter((part) => part.type === 'text').map((part) => part.text).join('')
 }
 
-describe('Android-aligned DSH conversation projection', () => {
-  it('replaces native history with authoritative role-preserving product history', () => {
-    const projected = projectRequest({
-      provider: 'eleckoi-upstream',
-      model,
-      system: 'system',
-      messages: [
-        user('旧插件上下文', { kind: 'plugin', plugin: 'old-context' }),
-        user('旧用户消息'),
-        assistant('不应进入重新生成请求的旧回复'),
-        user('你好')
-      ]
-    }, {
-      currentUserInput: '你好',
-      history: [{ role: 'assistant', content: '你好啊', speakerName: '测试角色' }],
-      persona: {}
-    })
+function context(entries, promptPositions = []) {
+  return {
+    history: [],
+    settingLibrary: { entries, promptPositions }
+  }
+}
 
-    expect(projected.messages.map((message) => message.role)).toEqual(['assistant', 'user'])
-    expect(projected.messages.map(text)).toEqual(['你好啊', '你好'])
-    expect(projected.messages.filter((message) => text(message) === '你好')).toHaveLength(1)
-    expect(JSON.stringify(projected.messages)).not.toContain('prior transcript')
-    expect(JSON.stringify(projected.messages)).not.toContain('不应进入重新生成请求的旧回复')
-  })
-
-  it('projects configured positions around the current user without flattening roles', () => {
-    const projected = projectRequest({
-      provider: 'eleckoi-upstream',
-      model,
-      system: 'base',
-      messages: [user('继续')]
-    }, {
-      currentUserInput: '继续',
-      history: [
-        { role: 'user', content: '上一问' },
-        { role: 'assistant', content: '上一答' }
-      ],
-      persona: { assistant_name: '测试角色' },
-      settingLibrary: {
-        entries: [
-          { id: 'before', enabled: true, content: '当前输入前', kind: 'normal', triggerMode: 'always', position: 'before_latest_user_input', insertRole: 'user', order: 1 },
-          { id: 'after', enabled: true, content: '当前输入后', kind: 'normal', triggerMode: 'always', position: 'after_latest_user_input', insertRole: 'assistant', order: 1 }
-        ],
-        promptPositions: []
+describe('DSH conversation context', () => {
+  it('creates a balanced seed from product history without the current prompt', () => {
+    const seed = createConversationSeed({
+      conversationContext: {
+        history: [
+          { role: 'assistant', content: '开场' },
+          { role: 'user', content: '上一问' },
+          { role: 'assistant', content: '上一答' }
+        ]
       }
-    })
+    }, model)
 
-    expect(projected.messages.map((message) => `${message.role}:${text(message)}`)).toEqual([
-      'user:上一问',
-      'assistant:上一答',
-      'user:当前输入前',
-      'user:继续',
-      'assistant:当前输入后'
-    ])
-    expect(projected.system).toBe('base')
+    expect(seed.map((event) => event.seq)).toEqual(seed.map((_, index) => index))
+    expect(seed.filter((event) => event.type === 'turn/start')).toHaveLength(2)
+    expect(seed.filter((event) => event.type === 'turn/end')).toHaveLength(2)
+    expect(seed.filter((event) => event.type === 'step/start')).toHaveLength(2)
+    expect(seed.filter((event) => event.type === 'step/end')).toHaveLength(2)
+    expect(seed.filter((event) => event.type === 'user/message').map((event) => text(event.data))).toEqual(['上一问'])
+    expect(seed.filter((event) => event.type === 'assistant/message').map((event) => text(event.data.message))).toEqual(['开场', '上一答'])
+    expect(JSON.stringify(seed)).not.toContain('最新用户输入')
+    expect(seed.filter((event) => event.type === 'assistant/message')[0].data.message.source).toEqual({
+      kind: 'model',
+      ...model
+    })
   })
 
-  it('does not inject character identity outside the setting library', () => {
-    const projected = projectRequest({
-      provider: 'eleckoi-upstream',
-      model,
-      system: 'base',
-      messages: [user('你是谁')]
-    }, {
-      currentUserInput: '你是谁',
-      history: [],
-      characterName: '旧身份角色',
-      persona: {
-        assistant_name: '旧身份角色',
-        description: '角色说明',
-        personality: '角色性格',
-        scenario: '角色场景'
-      },
-      settingLibrary: {
-        entries: [{
-          id: 'identity',
-          kind: 'normal',
-          enabled: false,
-          content: '你是旧身份角色，这是唯一身份设定。',
-          triggerMode: 'always',
-          position: 'instructions',
-          insertRole: 'system',
-          order: 1
-        }],
-        promptPositions: []
-      }
+  it('logs entries before the latest input through agent/pre-step order', () => {
+    const latest = createUserMessage({
+      content: [{ type: 'text', text: '最新用户输入' }],
+      source: { kind: 'user' }
     })
+    const projected = projectPreStepMessages([latest], context([
+      setting('after-instructions', '系统后', 'after_instructions', 1),
+      setting('before-history', '历史前', 'before_history', 1),
+      setting('before-latest', '输入前', 'before_latest_user_input', 1),
+      setting('after-latest', '输入后', 'after_latest_user_input', 1)
+    ]))
 
-    expect(projected.system).toBe('base')
-    expect(JSON.stringify(projected)).not.toContain('旧身份角色')
-    expect(JSON.stringify(projected)).not.toContain('角色说明')
+    expect(projected.map(text)).toEqual(['系统后', '历史前', '输入前', '最新用户输入'])
+    expect(projected.slice(0, 3).every((message) => message.source?.plugin === 'eleckoi-conversation-context')).toBe(true)
   })
 
-  it('injects the preset-owned hidden tool timeline after the tool flow', () => {
-    const projected = projectRequest({
-      provider: 'eleckoi-upstream',
-      model,
-      system: 'base',
-      messages: [user('继续')]
-    }, {
-      currentUserInput: '继续',
-      history: [],
-      persona: {},
-      settingLibrary: {
-        entries: [{
-          id: 'hidden', kind: 'hidden_tool_timeline', enabled: true, content: '只显示最终正文',
-          triggerMode: 'always', position: 'after_tool_flow', insertRole: 'user', order: 1
-        }],
-        promptPositions: []
-      }
-    })
-
-    expect(projected.messages.map(text)).toEqual(['继续', '只显示最终正文'])
+  it('keeps post-input and tool-flow context on DSH runtime context', () => {
+    const rendered = renderRuntimeContext(context([
+      setting('before', '输入前', 'before_latest_user_input', 1),
+      setting('after-history', '历史后', 'after_history', 1),
+      setting('after-input', '输入后', 'after_latest_user_input', 1),
+      setting('before-tools', '工具前', 'before_tool_flow', 1),
+      setting('after-tools', '工具后', 'after_tool_flow', 1)
+    ]))
+    expect(rendered).toBe('历史后\n\n输入后\n\n工具前\n\n工具后')
   })
 
-  it('does not auto-inject the hidden timeline when it is configured for Agent reading', () => {
-    const projected = projectRequest({
-      provider: 'eleckoi-upstream',
-      model,
-      system: 'base',
-      messages: [user('继续')]
-    }, {
-      currentUserInput: '继续',
-      history: [],
-      persona: {},
-      settingLibrary: {
-        entries: [{
-          id: 'hidden', kind: 'hidden_tool_timeline', enabled: true, content: '按需读取的协议',
-          triggerMode: 'agent_tool', position: 'after_tool_flow', insertRole: 'user', order: 1
-        }],
-        promptPositions: []
-      }
-    })
+  it('uses custom position anchors and ignores disabled/on-demand entries', () => {
+    const entries = settingInjections(context([
+      { ...setting('custom', '自定义位置', 'after_history', 2), promptPositionId: 'custom-position' },
+      { ...setting('disabled', '不应出现', 'after_history', 1), enabled: false },
+      { ...setting('on-demand', '按需读取', 'after_tool_flow', 1), triggerMode: 'agent_tool' }
+    ], [{ id: 'custom-position', anchor: 'before_latest_user_input', order: 7 }]))
 
-    expect(projected.messages.map(text)).toEqual(['继续'])
-  })
-
-  it('uses the preset summary template for isolated compaction and removes interactive tools', () => {
-    const projected = projectRequest({
-      provider: 'eleckoi-upstream',
-      model,
-      purpose: 'compaction',
-      system: 'interactive system',
-      tools: [{ name: 'search', description: '', parameters: {} }],
-      stop: ['</FINAL>'],
-      messages: [user('较早对话'), user('DSH native compaction instruction', { kind: 'plugin', plugin: 'compaction' })]
-    }, { currentUserInput: '较早对话', history: [], persona: {} }, '只保留角色剧情')
-
-    expect(projected.system).toContain('只执行内部历史压缩')
-    expect(projected.tools).toBeUndefined()
-    expect(projected.stop).toBeUndefined()
-    expect(text(projected.messages.at(-1))).toContain('只保留角色剧情')
-    expect(text(projected.messages.at(-1))).not.toContain('DSH native compaction instruction')
-  })
-
-  it('keeps a DSH compaction checkpoint instead of restoring already-compressed product history', () => {
-    const checkpoint = user('checkpoint\n<compacted-summary>摘要</compacted-summary>', { kind: 'plugin', plugin: 'compaction' })
-    const projected = projectRequest({
-      provider: 'eleckoi-upstream',
-      model,
-      messages: [checkpoint, assistant('<FINAL>最近回复</FINAL>'), user('继续')]
-    }, {
-      currentUserInput: '继续',
-      history: [
-        { role: 'user', content: '已经压缩的旧消息' },
-        { role: 'assistant', content: '最近回复' }
-      ],
-      persona: {}
-    })
-
-    expect(projected.messages.map(text)).toEqual([
-      'checkpoint\n<compacted-summary>摘要</compacted-summary>',
-      '最近回复',
-      '继续'
-    ])
+    expect(entries).toEqual([expect.objectContaining({
+      id: 'custom',
+      anchor: 'before_latest_user_input',
+      content: '自定义位置',
+      positionOrder: 7,
+      order: 2
+    })])
   })
 })
+
+function setting(id, content, position, order) {
+  return {
+    id,
+    enabled: true,
+    content,
+    kind: 'normal',
+    triggerMode: 'always',
+    position,
+    promptPositionId: '',
+    insertRole: 'user',
+    order
+  }
+}

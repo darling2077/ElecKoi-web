@@ -1,0 +1,122 @@
+diff --git a/dist/api/anthropic-messages.js b/dist/api/anthropic-messages.js
+index e1538a5dfcf2225da9dc3ec622576564ee7c8530..7512970f4bc50fc956ca31b2534b2f77857f3367 100644
+--- a/dist/api/anthropic-messages.js
++++ b/dist/api/anthropic-messages.js
+@@ -832,6 +832,9 @@ function buildParams(model, context, isOAuthToken, options) {
+         compat.supportsTemperature) {
+         params.temperature = options.temperature;
+     }
++    if (options?.topP !== undefined) {
++        params.top_p = options.topP;
++    }
+     if (immediateTools.length > 0 || deferredTools.length > 0) {
+         params.tools = [
+             ...convertTools(immediateTools, isOAuthToken, compat.supportsEagerToolInputStreaming, compat.supportsStrictTools, compat.supportsCacheControlOnTools ? cacheControl : undefined),
+diff --git a/dist/api/azure-openai-responses.js b/dist/api/azure-openai-responses.js
+index d40f2bba38093d88ad8e6a3c80a521f79d231ed2..9dc38a5c8b029299c2ac9a6da798d77ed597e52e 100644
+--- a/dist/api/azure-openai-responses.js
++++ b/dist/api/azure-openai-responses.js
+@@ -214,6 +214,9 @@ function buildParams(model, context, options, deploymentName, grammarToolInputPr
+     if (options?.temperature !== undefined) {
+         params.temperature = options?.temperature;
+     }
++    if (options?.topP !== undefined) {
++        params.top_p = options.topP;
++    }
+     if (context.tools && context.tools.length > 0) {
+         params.tools = convertResponsesTools(context.tools, {
+             supportsStrictMode: model.compat?.supportsStrictMode ?? true,
+diff --git a/dist/api/google-generative-ai.js b/dist/api/google-generative-ai.js
+index e5db9352c61629ab16158b78ee3a6bbd96bf1a9b..1c3db315b46de3a78e47bffb5a21ca47192e26ef 100644
+--- a/dist/api/google-generative-ai.js
++++ b/dist/api/google-generative-ai.js
+@@ -282,6 +282,9 @@ function buildParams(model, context, options = {}) {
+     if (options.temperature !== undefined) {
+         generationConfig.temperature = options.temperature;
+     }
++    if (options.topP !== undefined) {
++        generationConfig.topP = options.topP;
++    }
+     if (options.maxTokens !== undefined) {
+         generationConfig.maxOutputTokens = options.maxTokens;
+     }
+diff --git a/dist/api/google-vertex.js b/dist/api/google-vertex.js
+index 71b489759f10c39842693555019598848fbae141..d28a2b617639396156b9c587c22386a8f1fea716 100644
+--- a/dist/api/google-vertex.js
++++ b/dist/api/google-vertex.js
+@@ -356,6 +356,9 @@ function buildParams(model, context, options = {}) {
+     if (options.temperature !== undefined) {
+         generationConfig.temperature = options.temperature;
+     }
++    if (options.topP !== undefined) {
++        generationConfig.topP = options.topP;
++    }
+     if (options.maxTokens !== undefined) {
+         generationConfig.maxOutputTokens = options.maxTokens;
+     }
+diff --git a/dist/api/mistral-conversations.js b/dist/api/mistral-conversations.js
+index 67f9341a6f7d855dce25054fd48cd9077e8e04a1..dba9005c2a406a79926f17b422fc989a4a5075da 100644
+--- a/dist/api/mistral-conversations.js
++++ b/dist/api/mistral-conversations.js
+@@ -360,6 +360,8 @@ function buildChatPayload(model, context, messages, options) {
+         payload.tools = toFunctionTools(context.tools);
+     if (options?.temperature !== undefined)
+         payload.temperature = options.temperature;
++    if (options?.topP !== undefined)
++        payload.top_p = options.topP;
+     if (options?.maxTokens !== undefined)
+         payload.maxTokens = options.maxTokens;
+     if (options?.toolChoice)
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index 48464f2bf56b9369d5c202e4f02fc4f13d35b412..4c2bcd8059d229dc9c9a28a267c292a3c04eb36d 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -608,6 +608,9 @@ function buildParams(model, context, options, compat = getCompat(model), cacheRe
+     if (options?.temperature !== undefined) {
+         params.temperature = options.temperature;
+     }
++    if (options?.topP !== undefined) {
++        params.top_p = options.topP;
++    }
+     const deferredToolNames = compat.deferredToolsMode === "kimi" ? getDeferredToolNames(context.messages) : new Set();
+     const activeTools = context.tools?.filter((tool) => !deferredToolNames.has(tool.name));
+     if (activeTools && activeTools.length > 0) {
+diff --git a/dist/api/openai-responses.js b/dist/api/openai-responses.js
+index 52fcb306b5512c99518e7a05cd99d6ac55c7c8f0..4b7842240d6604c3453f0ea95423fc2f54b1dfcf 100644
+--- a/dist/api/openai-responses.js
++++ b/dist/api/openai-responses.js
+@@ -238,6 +238,9 @@ function buildParams(model, context, options, compat = getCompat(model), grammar
+     if (options?.temperature !== undefined) {
+         params.temperature = options?.temperature;
+     }
++    if (options?.topP !== undefined) {
++        params.top_p = options.topP;
++    }
+     if (options?.serviceTier !== undefined) {
+         params.service_tier = options.serviceTier;
+     }
+diff --git a/dist/api/simple-options.js b/dist/api/simple-options.js
+index 216a45feebc02acef047d1ff133729fb0751b76c..ff46c2e370a1f1c118d193d14b1f0f4289b3183c 100644
+--- a/dist/api/simple-options.js
++++ b/dist/api/simple-options.js
+@@ -13,6 +13,7 @@ export function buildBaseOptions(model, context, options, apiKey) {
+         : undefined;
+     return {
+         temperature: options?.temperature,
++        topP: options?.topP,
+         samplingParams,
+         maxTokens: clampMaxTokensToContext(model, context, options?.maxTokens ?? model.maxTokens),
+         signal: options?.signal,
+diff --git a/dist/types.d.ts b/dist/types.d.ts
+index f61c9ea00420e71de3957d7436e5889a9a41557f..874e965643ad66463c56a00a4afd60d93fcb17f1 100644
+--- a/dist/types.d.ts
++++ b/dist/types.d.ts
+@@ -110,6 +110,8 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
+      */
+     onResponse?: (response: ProviderResponse, model: Model<Api>) => void | Promise<void>;
+     temperature?: number;
++    /** Nucleus sampling probability. Omit to leave the provider default unchanged. */
++    topP?: number;
+     /**
+      * Arbitrary sampling parameters merged into the request body as-is, after the named request
+      * fields, so keys here override them. Lets custom OpenAI-compatible servers (llama.cpp, vLLM,

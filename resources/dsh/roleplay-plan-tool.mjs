@@ -1,12 +1,13 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
-
 const validStatuses = new Set(['pending', 'inProgress', 'completed'])
 
 export const name = 'eleckoi-roleplay-plan-tool'
 export const inject = ['tools']
 
-export function apply(ctx) {
-  const steps = roleplayPlanSteps()
+export function apply(ctx, config = {}) {
+  const steps = Array.isArray(config.steps)
+    ? config.steps.map((step) => String(step).trim()).filter(Boolean).slice(0, 20)
+    : []
   if (!steps.length) return
   return ctx.tools.register(defineTool({
     name: 'update_roleplay_plan',
@@ -39,16 +40,6 @@ export function apply(ctx) {
       return canonicalizePlan(args, steps)
     }
   }))
-}
-
-function roleplayPlanSteps() {
-  try {
-    const value = JSON.parse(process.env.ELECKOI_ROLEPLAY_PLAN_STEPS || '[]')
-    if (!Array.isArray(value)) return []
-    return value.map((step) => String(step).trim()).filter(Boolean).slice(0, 20)
-  } catch {
-    return []
-  }
 }
 
 function canonicalizePlan(args, steps) {

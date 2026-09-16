@@ -37,6 +37,10 @@ export function deleteCharacters(characterIds) {
   return desktopClient.request("command.characters.delete", { characterIds: characterIds || [] });
 }
 
+export function exportCharacter(characterId, format) {
+  return desktopClient.request("command.characters.export", { characterId, format });
+}
+
 export function prepareCharacterImports(source, files) {
   return desktopClient.request("command.characters.import.prepare", { source, files });
 }

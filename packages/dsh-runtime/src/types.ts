@@ -1,16 +1,24 @@
-export interface DshModelSettings {
-  apiKey: string
+export type DshReasoningEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+export interface DshModelIdentity {
   baseUrl: string
   model: string
-  systemPrompt: string
   apiFormat: 'openai-completions' | 'openai-responses' | 'anthropic-messages' | 'google-generative-ai'
+}
+
+export interface DshModelSettings extends DshModelIdentity {
+  /** Stable product model-config identity used to bind one process-wide route. */
+  configId: string
+  apiKey: string
+  systemPrompt: string
   customHeaders: Record<string, string>
   contextWindow: number
+  contextWindowOverride?: number | undefined
   autoCompactTokenLimit?: number | undefined
   maxTokens?: number | undefined
   temperature?: number | undefined
   topP?: number | undefined
-  reasoningEffort?: string | undefined
+  reasoningEffort?: DshReasoningEffort | undefined
   supportsImageInput: boolean
   proxyUrl?: string | undefined
 }
@@ -141,4 +149,6 @@ export interface DshRuntimeOptions {
   runtimeDataRoot: string
   executablePath: string
   presetTemplatePath: string
+  /** All enabled chat models registered when the one long-lived DSH process boots. */
+  modelCatalog?: (() => readonly DshModelSettings[]) | undefined
 }

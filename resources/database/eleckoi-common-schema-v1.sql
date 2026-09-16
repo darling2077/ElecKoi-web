@@ -3,7 +3,7 @@ PRAGMA foreign_keys = ON;
 
 BEGIN TRANSACTION;
 
-CREATE TABLE IF NOT EXISTS `chat_sessions` (`id` TEXT NOT NULL, `workspaceId` TEXT NOT NULL, `title` TEXT NOT NULL, `characterId` TEXT NOT NULL, `characterName` TEXT NOT NULL, `characterAvatar` TEXT NOT NULL, `characterMode` TEXT NOT NULL, `permissionMode` TEXT NOT NULL, `historySummary` TEXT NOT NULL, `historyMessageCount` INTEGER NOT NULL, `historyUserMessageCount` INTEGER NOT NULL, `createdAt` TEXT NOT NULL, `updatedAt` TEXT NOT NULL, PRIMARY KEY(`id`));
+CREATE TABLE IF NOT EXISTS `chat_sessions` (`id` TEXT NOT NULL, `title` TEXT NOT NULL, `characterId` TEXT NOT NULL, `characterName` TEXT NOT NULL, `characterAvatar` TEXT NOT NULL, `historySummary` TEXT NOT NULL, `historyMessageCount` INTEGER NOT NULL, `historyUserMessageCount` INTEGER NOT NULL, `createdAt` TEXT NOT NULL, `updatedAt` TEXT NOT NULL, PRIMARY KEY(`id`));
 
 CREATE INDEX IF NOT EXISTS `index_chat_sessions_characterId` ON `chat_sessions` (`characterId`);
 
@@ -11,11 +11,9 @@ CREATE INDEX IF NOT EXISTS `index_chat_sessions_updatedAt` ON `chat_sessions` (`
 
 CREATE TABLE IF NOT EXISTS `chat_session_character_snapshots` (`sessionId` TEXT NOT NULL, `personaJson` TEXT NOT NULL, PRIMARY KEY(`sessionId`), FOREIGN KEY(`sessionId`) REFERENCES `chat_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
 
-CREATE TABLE IF NOT EXISTS `chat_session_model_settings` (`sessionId` TEXT NOT NULL, `settingsJson` TEXT NOT NULL, PRIMARY KEY(`sessionId`), FOREIGN KEY(`sessionId`) REFERENCES `chat_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
-
 CREATE TABLE IF NOT EXISTS `chat_session_variable_states` (`sessionId` TEXT NOT NULL, `kind` TEXT NOT NULL, `stateJson` TEXT NOT NULL, PRIMARY KEY(`sessionId`, `kind`), FOREIGN KEY(`sessionId`) REFERENCES `chat_sessions`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
 
-CREATE TABLE IF NOT EXISTS `characters` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `avatar` TEXT NOT NULL, `squareImage` TEXT NOT NULL, `coverImage` TEXT NOT NULL, `groupName` TEXT NOT NULL, `orderIndex` INTEGER NOT NULL, `groupViewOrder` INTEGER NOT NULL, `folder` TEXT NOT NULL, `characterMode` TEXT NOT NULL, `frontendBeautyEnabled` INTEGER NOT NULL, `assistantName` TEXT NOT NULL, `assistantAvatar` TEXT NOT NULL, `profileAge` TEXT NOT NULL, `profileSex` TEXT NOT NULL, `profileHeight` TEXT NOT NULL, `profileBirthday` TEXT NOT NULL, `profileLike` TEXT NOT NULL, `showOpening` INTEGER NOT NULL, `chatBackground` TEXT NOT NULL, `chatBackgroundOpacity` REAL NOT NULL, `chatBackgroundBlur` REAL NOT NULL, `chatBackgroundScrim` REAL NOT NULL, PRIMARY KEY(`id`));
+CREATE TABLE IF NOT EXISTS `characters` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `avatar` TEXT NOT NULL, `squareImage` TEXT NOT NULL, `coverImage` TEXT NOT NULL, `groupName` TEXT NOT NULL, `orderIndex` INTEGER NOT NULL, `groupViewOrder` INTEGER NOT NULL, `folder` TEXT NOT NULL, `frontendBeautyEnabled` INTEGER NOT NULL, `assistantName` TEXT NOT NULL, `assistantAvatar` TEXT NOT NULL, `profileAge` TEXT NOT NULL, `profileSex` TEXT NOT NULL, `profileHeight` TEXT NOT NULL, `profileBirthday` TEXT NOT NULL, `profileLike` TEXT NOT NULL, `showOpening` INTEGER NOT NULL, `chatBackground` TEXT NOT NULL, `chatBackgroundOpacity` REAL NOT NULL, `chatBackgroundBlur` REAL NOT NULL, `chatBackgroundScrim` REAL NOT NULL, PRIMARY KEY(`id`));
 
 CREATE TABLE IF NOT EXISTS `character_text_contents` (`characterId` TEXT NOT NULL, `kind` TEXT NOT NULL, `content` TEXT NOT NULL, PRIMARY KEY(`characterId`, `kind`), FOREIGN KEY(`characterId`) REFERENCES `characters`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
 
@@ -61,15 +59,7 @@ CREATE TABLE IF NOT EXISTS `regex_state` (`singletonId` INTEGER NOT NULL, `activ
 
 CREATE INDEX IF NOT EXISTS `index_regex_state_activeVersionId` ON `regex_state` (`activeVersionId`);
 
-CREATE TABLE IF NOT EXISTS `global_tool_config` (`singletonId` INTEGER NOT NULL, `payloadJson` TEXT NOT NULL, `updatedAt` TEXT NOT NULL, PRIMARY KEY(`singletonId`));
-
-CREATE TABLE IF NOT EXISTS `frontend_projects` (`id` TEXT NOT NULL, `characterId` TEXT NOT NULL, `name` TEXT NOT NULL, `entryFile` TEXT NOT NULL, `filesJson` TEXT NOT NULL, `importedAt` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`characterId`) REFERENCES `characters`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
-
-CREATE INDEX IF NOT EXISTS `index_frontend_projects_characterId` ON `frontend_projects` (`characterId`);
-
-CREATE TABLE IF NOT EXISTS `character_frontend_settings` (`characterId` TEXT NOT NULL, `selectedProjectId` TEXT, `messageRendererEnabled` INTEGER NOT NULL, PRIMARY KEY(`characterId`), FOREIGN KEY(`characterId`) REFERENCES `characters`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`selectedProjectId`) REFERENCES `frontend_projects`(`id`) ON UPDATE NO ACTION ON DELETE SET NULL );
-
-CREATE INDEX IF NOT EXISTS `index_character_frontend_settings_selectedProjectId` ON `character_frontend_settings` (`selectedProjectId`);
+CREATE TABLE IF NOT EXISTS `web_search_settings` (`singletonId` INTEGER NOT NULL, `mode` TEXT NOT NULL, `maxResults` INTEGER NOT NULL, `tavilyApiKey` TEXT NOT NULL, `updatedAt` TEXT NOT NULL, PRIMARY KEY(`singletonId`));
 
 CREATE TABLE IF NOT EXISTS `cleanup_operations` (`id` TEXT NOT NULL, `kind` TEXT NOT NULL, `targetId` TEXT NOT NULL, `state` TEXT NOT NULL, `attemptCount` INTEGER NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `updatedAtEpochMs` INTEGER NOT NULL, `lastError` TEXT NOT NULL, PRIMARY KEY(`id`));
 
@@ -77,17 +67,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS `index_cleanup_operations_kind_targetId` ON `c
 
 CREATE INDEX IF NOT EXISTS `index_cleanup_operations_state_updatedAtEpochMs` ON `cleanup_operations` (`state`, `updatedAtEpochMs`);
 
-CREATE TABLE IF NOT EXISTS `agent_conversations` (`id` TEXT NOT NULL, `surface` TEXT NOT NULL, `activeBranchId` TEXT NOT NULL, `createdAt` TEXT NOT NULL, `updatedAt` TEXT NOT NULL, `revision` INTEGER NOT NULL, PRIMARY KEY(`id`));
+CREATE TABLE IF NOT EXISTS `agent_conversations` (`id` TEXT NOT NULL, `activeBranchId` TEXT NOT NULL, PRIMARY KEY(`id`));
 
 CREATE INDEX IF NOT EXISTS `index_agent_conversations_activeBranchId` ON `agent_conversations` (`activeBranchId`);
 
-CREATE TABLE IF NOT EXISTS `agent_conversation_display_cache` (`conversationId` TEXT NOT NULL, `chunkIndex` INTEGER NOT NULL, `ledgerRevision` INTEGER NOT NULL, `payloadJson` TEXT NOT NULL, `rendererVersion` INTEGER NOT NULL, `updatedAt` TEXT NOT NULL, PRIMARY KEY(`conversationId`, `chunkIndex`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
-
-CREATE TABLE IF NOT EXISTS `agent_branches` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `parentBranchId` TEXT, `forkedFromTurnId` TEXT, `headSequence` INTEGER NOT NULL, `name` TEXT NOT NULL, `reason` TEXT NOT NULL, `createdAt` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
+CREATE TABLE IF NOT EXISTS `agent_branches` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
 
 CREATE INDEX IF NOT EXISTS `index_agent_branches_conversationId` ON `agent_branches` (`conversationId`);
-
-CREATE INDEX IF NOT EXISTS `index_agent_branches_conversationId_createdAt` ON `agent_branches` (`conversationId`, `createdAt`);
 
 CREATE TABLE IF NOT EXISTS `conversation_speakers` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `sourceSpeakerId` TEXT NOT NULL, `kind` TEXT NOT NULL, `displayName` TEXT NOT NULL, `avatarAssetId` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
 
@@ -95,15 +81,13 @@ CREATE INDEX IF NOT EXISTS `index_conversation_speakers_conversationId` ON `conv
 
 CREATE UNIQUE INDEX IF NOT EXISTS `index_conversation_speakers_conversationId_sourceSpeakerId` ON `conversation_speakers` (`conversationId`, `sourceSpeakerId`);
 
-CREATE TABLE IF NOT EXISTS `agent_turns` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `speakerId` TEXT NOT NULL, `sourceMessageId` TEXT NOT NULL, `kind` TEXT NOT NULL, `provider` TEXT NOT NULL, `model` TEXT NOT NULL, `createdAt` TEXT NOT NULL, `variableStateJson` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`speakerId`) REFERENCES `conversation_speakers`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT );
+CREATE TABLE IF NOT EXISTS `agent_turns` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `speakerId` TEXT NOT NULL, `kind` TEXT NOT NULL, `createdAt` TEXT NOT NULL, `variableStateJson` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`speakerId`) REFERENCES `conversation_speakers`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT );
 
 CREATE INDEX IF NOT EXISTS `index_agent_turns_conversationId` ON `agent_turns` (`conversationId`);
 
 CREATE INDEX IF NOT EXISTS `index_agent_turns_speakerId` ON `agent_turns` (`speakerId`);
 
-CREATE INDEX IF NOT EXISTS `index_agent_turns_conversationId_sourceMessageId` ON `agent_turns` (`conversationId`, `sourceMessageId`);
-
-CREATE TABLE IF NOT EXISTS `agent_responses` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `turnId` TEXT NOT NULL, `responseIndex` INTEGER NOT NULL, `speakerId` TEXT NOT NULL, `sourceMessageId` TEXT NOT NULL, `status` TEXT NOT NULL, `provider` TEXT NOT NULL, `model` TEXT NOT NULL, `createdAt` TEXT NOT NULL, `variableStateJson` TEXT NOT NULL, `runtimeThreadId` TEXT NOT NULL, `runtimeTurnId` TEXT NOT NULL, `turnStartedAtMillis` INTEGER NOT NULL, `turnCompletedAtMillis` INTEGER, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`turnId`) REFERENCES `agent_turns`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`speakerId`) REFERENCES `conversation_speakers`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT );
+CREATE TABLE IF NOT EXISTS `agent_responses` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `turnId` TEXT NOT NULL, `responseIndex` INTEGER NOT NULL, `speakerId` TEXT NOT NULL, `status` TEXT NOT NULL, `createdAt` TEXT NOT NULL, `variableStateJson` TEXT NOT NULL, `runtimeThreadId` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`turnId`) REFERENCES `agent_turns`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`speakerId`) REFERENCES `conversation_speakers`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT );
 
 CREATE INDEX IF NOT EXISTS `index_agent_responses_conversationId` ON `agent_responses` (`conversationId`);
 
@@ -123,17 +107,13 @@ CREATE INDEX IF NOT EXISTS `index_agent_content_parts_conversationId` ON `agent_
 
 CREATE INDEX IF NOT EXISTS `index_agent_content_parts_ownerType_ownerId` ON `agent_content_parts` (`ownerType`, `ownerId`);
 
-CREATE TABLE IF NOT EXISTS `generation_attempts` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `kind` TEXT NOT NULL, `ownerId` TEXT NOT NULL, `parentAttemptId` TEXT, `outputMessageId` TEXT NOT NULL, `attemptNumber` INTEGER NOT NULL, `state` TEXT NOT NULL, `createdAtMillis` INTEGER NOT NULL, `startedAtMillis` INTEGER, `finishedAtMillis` INTEGER, `errorMessage` TEXT NOT NULL, `outputPath` TEXT NOT NULL, `supersededByAttemptId` TEXT, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
+CREATE TABLE IF NOT EXISTS `generation_attempts` (`id` TEXT NOT NULL, `conversationId` TEXT NOT NULL, `ownerId` TEXT NOT NULL, `state` TEXT NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`conversationId`) REFERENCES `agent_conversations`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
 
 CREATE INDEX IF NOT EXISTS `index_generation_attempts_conversationId` ON `generation_attempts` (`conversationId`);
 
-CREATE UNIQUE INDEX IF NOT EXISTS `index_generation_attempts_conversationId_kind_ownerId_attemptNumber` ON `generation_attempts` (`conversationId`, `kind`, `ownerId`, `attemptNumber`);
+CREATE UNIQUE INDEX IF NOT EXISTS `index_generation_attempts_conversationId_ownerId` ON `generation_attempts` (`conversationId`, `ownerId`);
 
 CREATE INDEX IF NOT EXISTS `index_generation_attempts_conversationId_state` ON `generation_attempts` (`conversationId`, `state`);
-
-CREATE INDEX IF NOT EXISTS `index_generation_attempts_parentAttemptId` ON `generation_attempts` (`parentAttemptId`);
-
-CREATE INDEX IF NOT EXISTS `index_generation_attempts_outputMessageId` ON `generation_attempts` (`outputMessageId`);
 
 CREATE TABLE IF NOT EXISTS `setting_libraries` (`characterId` TEXT NOT NULL, `name` TEXT NOT NULL, `activeVersionId` TEXT NOT NULL, `listAllExpanded` INTEGER NOT NULL, `expandedGroupIdsJson` TEXT NOT NULL, `promptPositionsJson` TEXT NOT NULL, `updatedAt` TEXT NOT NULL, PRIMARY KEY(`characterId`), FOREIGN KEY(`characterId`) REFERENCES `characters`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
 
@@ -169,7 +149,7 @@ CREATE TABLE IF NOT EXISTS `agent_preset_state` (`singletonId` INTEGER NOT NULL,
 
 CREATE TABLE IF NOT EXISTS `agent_preset_library_groups` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `sortIndex` INTEGER NOT NULL, PRIMARY KEY(`id`));
 
-CREATE TABLE IF NOT EXISTS `agent_presets` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `modelFamily` TEXT NOT NULL, `modelTagsJson` TEXT NOT NULL DEFAULT '[]', `libraryGroupId` TEXT NOT NULL DEFAULT '', `activeVersionId` TEXT NOT NULL DEFAULT '', `authorName` TEXT NOT NULL DEFAULT '', `authorAvatarPath` TEXT NOT NULL DEFAULT '', `usageInstructions` TEXT NOT NULL DEFAULT '', `sortIndex` INTEGER NOT NULL, `expandedGroupIdsJson` TEXT NOT NULL, PRIMARY KEY(`id`));
+CREATE TABLE IF NOT EXISTS `agent_presets` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `modelFamily` TEXT NOT NULL, `modelTagsJson` TEXT NOT NULL DEFAULT '[]', `libraryGroupId` TEXT NOT NULL DEFAULT '', `activeVersionId` TEXT NOT NULL DEFAULT '', `authorName` TEXT NOT NULL DEFAULT '', `authorAvatarPath` TEXT NOT NULL DEFAULT '', `sortIndex` INTEGER NOT NULL, `expandedGroupIdsJson` TEXT NOT NULL, PRIMARY KEY(`id`));
 
 CREATE TABLE IF NOT EXISTS `agent_preset_contents` (`presetId` TEXT NOT NULL, `kind` TEXT NOT NULL, `content` TEXT NOT NULL, PRIMARY KEY(`presetId`, `kind`), FOREIGN KEY(`presetId`) REFERENCES `agent_presets`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE );
 
@@ -209,6 +189,6 @@ CREATE VIEW `setting_library_version_entries` AS SELECT link.characterId, link.v
         JOIN setting_entry_contents AS content ON content.characterId = link.characterId
           AND content.entryId = link.entryId AND content.revisionId = link.revisionId;
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 COMMIT;

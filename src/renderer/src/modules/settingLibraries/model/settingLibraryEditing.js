@@ -36,6 +36,7 @@ export function createEntryDraft(groupId, order, entries, draftKind = "standard"
   const timestamp = new Date().toISOString();
   const siblingNames = new Set(entries.filter((entry) => entry.groupId === groupId).map((entry) => entry.title));
   const isReference = draftKind === "reference";
+  const isPrompt = draftKind === "prompt";
   return {
     id: createId("setting"),
     title: uniqueName("新建设定", siblingNames),
@@ -57,9 +58,9 @@ export function createEntryDraft(groupId, order, entries, draftKind = "standard"
     keywordIgnoreCase: true,
     keywordWholeWord: false,
     keywordRecursionDepth: 0,
-    triggerMode: isReference ? "agent_tool" : "always",
+    triggerMode: isPrompt ? "always" : "agent_tool",
     enabled: isReference,
-    position: "after_instructions",
+    position: isPrompt ? "after_instructions" : null,
     promptPositionId: "",
     insertRole: "user",
     order: 1,

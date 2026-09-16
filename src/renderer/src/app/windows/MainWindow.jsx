@@ -241,7 +241,6 @@ export function MainWindow() {
         modelConfigs={chat.chatModelConfigs}
         selectedModelConfigId={chat.selectedChatModelConfigId}
         selectedModel={chat.selectedChatModel}
-        modelParameters={chat.chatModelParameters}
         modelOptionsByKey={chat.modelOptionsByKey}
         onLoadModelOptions={chat.loadModelOptions}
         onSelectModel={chat.selectChatModel}
@@ -257,6 +256,7 @@ export function MainWindow() {
           changeActiveSection("presets");
         }}
         onRegenerate={chat.regenerateReply}
+        onDeleteMessages={chat.deleteMessagesFrom}
          onEditMessage={(message, replacementMessage) => chat.regenerateReply({
           targetMessageId: message.id,
           replacementMessage,

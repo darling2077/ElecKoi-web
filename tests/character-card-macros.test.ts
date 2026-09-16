@@ -10,7 +10,8 @@ import type {
 } from '../src/shared/contracts/agent/runtime'
 import {
   characterCardMacroValues,
-  resolveCharacterCardMacros
+  resolveCharacterCardMacros,
+  resolveCharacterCardMacrosInJson
 } from '../src/shared/foundation/characterCardMacros'
 
 const values = { userName: '用户$1', characterName: '测试角色' }
@@ -49,15 +50,31 @@ describe('角色卡宏', () => {
 
   it('解析变量配置中的描述和更新规则', () => {
     const context = {
-      initialStateJson: '{}',
+      initialStateJson: '{"user":{"name":"{{user}}"}}',
       schemaCode: '',
-      stateJson: '{}',
+      stateJson: '{"user":{"name":"{{ USER }}"}}',
       objects: [{ description: '{{char}}状态', updateRule: '{{user}}观察' }],
       variables: [{ description: '{{user}}好感度', updateRule: '{{char}}改变' }]
     } as AgentVariableRuntimeContext
     const resolved = resolveVariableContextCharacterCardMacros(context, values)
     expect(resolved?.objects[0]).toMatchObject({ description: '测试角色状态', updateRule: '用户$1观察' })
     expect(resolved?.variables[0]).toMatchObject({ description: '用户$1好感度', updateRule: '测试角色改变' })
+    expect(JSON.parse(resolved?.initialStateJson ?? '{}')).toEqual({ user: { name: '用户$1' } })
+    expect(JSON.parse(resolved?.stateJson ?? '{}')).toEqual({ user: { name: '用户$1' } })
+  })
+
+  it('只解析变量状态 JSON 的字符串值并安全保留特殊字符', () => {
+    const source = '{"name":"{{user}}","nested":["{{char}}",1],"{{user}}":"键名不变"}'
+    const resolved = resolveCharacterCardMacrosInJson(source, {
+      userName: '测试用户"$1',
+      characterName: '角色'
+    })
+    expect(JSON.parse(resolved)).toEqual({
+      name: '测试用户"$1',
+      nested: ['角色', 1],
+      '{{user}}': '键名不变'
+    })
+    expect(resolveCharacterCardMacrosInJson('{invalid {{user}}', values)).toBe('{invalid {{user}}')
   })
 
   it('解析设定库正文、读取提示和开场白', () => {
@@ -101,17 +118,20 @@ describe('角色卡宏', () => {
       conversationId: 'conversation-a',
       role: 'assistant' as const,
       content: '{{char}}正在看{{user}}。',
-      variableStateJson: '{}',
+      variableStateJson: '{"name":"{{user}}"}',
       status: 'complete' as const,
       createdAt: ''
     }
 
-    expect(projector.project(message, collection, values).displayContent)
-      .toBe('测试角色正在看用户$1。')
-    expect(projector.project(message, collection, {
+    const first = projector.project(message, collection, values)
+    expect(first.displayContent).toBe('测试角色正在看用户$1。')
+    expect(JSON.parse(first.variableStateJson)).toEqual({ name: '用户$1' })
+    const second = projector.project(message, collection, {
       userName: '新用户',
       characterName: '新角色'
-    }).displayContent).toBe('新角色正在看新用户。')
+    })
+    expect(second.displayContent).toBe('新角色正在看新用户。')
+    expect(JSON.parse(second.variableStateJson)).toEqual({ name: '新用户' })
     expect(message.content).toBe('{{char}}正在看{{user}}。')
   })
 })

@@ -1,4 +1,4 @@
-import { gunzipSync } from 'node:zlib'
+import { gzipSync, gunzipSync } from 'node:zlib'
 import { randomUUID } from 'node:crypto'
 import type { RegexRule } from '@shared/contracts/regex/schemas'
 import type { SettingLibrary, SettingLibraryEntry, SettingLibraryGroup } from '@shared/contracts/settingLibrary/schemas'
@@ -11,12 +11,12 @@ import type { DecodedCharacterCard, PortableCharacterPackage } from './character
 
 type JsonObject = Record<string, unknown>
 
-const MAX_INPUT_BYTES = 64 * 1024 * 1024
+const MAX_INPUT_BYTES = 96 * 1024 * 1024
 const MAX_EXPANDED_BYTES = 96 * 1024 * 1024
 const MAX_ATTACHMENTS_BYTES = 48 * 1024 * 1024
 
 export function decodeCharacterCard(bytes: Uint8Array, source: 'eleckoi' | 'sillytavern'): DecodedCharacterCard {
-  if (bytes.length > MAX_INPUT_BYTES) throw new Error('角色卡不能超过 64 MB')
+  if (bytes.length > MAX_INPUT_BYTES) throw new Error('角色卡不能超过 96 MB')
   return source === 'sillytavern' ? decodeSillyTavern(bytes) : decodeElecKoi(bytes)
 }
 
@@ -24,22 +24,27 @@ function decodeElecKoi(bytes: Uint8Array): DecodedCharacterCard {
   if (!isPng(bytes)) {
     const text = new TextDecoder().decode(bytes).trim()
     if (!text.startsWith('{')) throw new Error('无法识别这个角色卡')
-    return decodeStandardCard(parseJsonObject(text, '角色卡 JSON 已损坏'))
+    const packageData = decodePortableRoot(parseJsonObject(text, 'ElecKoi 角色卡 JSON 已损坏'))
+    return {
+      packageData,
+      complete: true,
+      summary: 'ElecKoi 完整角色卡',
+      regexRules: packageData.regexRules
+    }
   }
   const chunks = readPngText(bytes)
   const portable = chunks.get('eleckoi-card')
   if (portable) {
+    const packageData = decodePortablePackage(portable)
     return {
-      packageData: decodePortablePackage(portable),
+      packageData,
       sourceImage: bytes,
       complete: true,
       summary: 'ElecKoi 完整角色卡',
-      regexRules: []
+      regexRules: packageData.regexRules
     }
   }
-  const standard = chunks.get('chara')
-  if (!standard) throw new Error('图片里没有角色卡数据')
-  return { ...decodeStandardCard(parseEncodedJson(standard, '标准角色卡数据损坏')), sourceImage: bytes }
+  throw new Error('图片里没有 ElecKoi 角色卡数据')
 }
 
 function decodeSillyTavern(bytes: Uint8Array): DecodedCharacterCard {
@@ -52,22 +57,6 @@ function decodeSillyTavern(bytes: Uint8Array): DecodedCharacterCard {
   const encoded = chunks.get('ccv3')?.trim() || chunks.get('chara')?.trim()
   if (!encoded) throw new Error('图片里没有酒馆角色卡数据')
   return { ...convertSillyTavernCard(parseEncodedJson(encoded, '酒馆角色卡数据无法解码')), sourceImage: bytes }
-}
-
-function decodeStandardCard(root: JsonObject): DecodedCharacterCard {
-  const data = record(root.data) ?? root
-  const name = string(data.name).trim() || '导入角色'
-  const opening = string(data.first_mes)
-  const result: DecodedCharacterCard = {
-    packageData: {
-      character: portableCharacter({ name, opening, show_opening: !!opening }),
-      assets: [], settingLibraryJson: '', variableConfigJson: ''
-    },
-    complete: false,
-    summary: '标准角色卡',
-    regexRules: []
-  }
-  return result
 }
 
 function convertSillyTavernCard(root: JsonObject): DecodedCharacterCard {
@@ -89,7 +78,7 @@ function convertSillyTavernCard(root: JsonObject): DecodedCharacterCard {
         opening: openings[0] ?? '',
         show_opening: openings.length > 0
       }),
-      assets: [], settingLibraryJson: '', variableConfigJson: ''
+      assets: [], settingLibraryJson: '', variableConfigJson: '', regexRules: []
     },
     complete: false,
     summary: `剧情小说模式 · 世界书 ${worldBookCount} · 开场白 ${openings.length} · 正则 ${regexRules.length} · 变量 ${variableConversion.config?.variables.length ?? 0}`,
@@ -224,11 +213,23 @@ function convertedRegexRules(extensions: JsonObject | undefined): RegexRule[] {
     .map((rule, order) => ({ ...rule, order }))
 }
 
-function decodePortablePackage(encoded: string): PortableCharacterPackage {
+export function encodeCharacterCardJson(value: PortableCharacterPackage): string {
+  return JSON.stringify(portableRoot(value), null, 2)
+}
+
+export function encodePortableCharacterPayload(value: PortableCharacterPackage): string {
+  return gzipSync(Buffer.from(encodeCharacterCardJson(value), 'utf8')).toString('base64')
+}
+
+export function decodePortablePackage(encoded: string): PortableCharacterPackage {
   let expanded: Buffer
   try { expanded = gunzipSync(Buffer.from(encoded, 'base64'), { maxOutputLength: MAX_EXPANDED_BYTES }) }
   catch (error) { throw new Error('ElecKoi 角色卡数据损坏', { cause: error }) }
   const root = parseJsonObject(expanded.toString('utf8'), 'ElecKoi 角色卡数据损坏')
+  return decodePortableRoot(root)
+}
+
+function decodePortableRoot(root: JsonObject): PortableCharacterPackage {
   if (root.format !== 'eleckoi.character-card') throw new Error('这不是 ElecKoi 角色卡')
   if (root.version !== 1) throw new Error('暂不支持这个角色卡版本')
   const character = portableCharacter(record(root.character) ?? {})
@@ -242,16 +243,76 @@ function decodePortablePackage(encoded: string): PortableCharacterPackage {
     character,
     assets,
     settingLibraryJson: string(root.setting_library),
-    variableConfigJson: string(root.variable_config)
+    variableConfigJson: string(root.variable_config),
+    regexRules: decodePortableRegexRules(root.regex_rules)
   }
 }
 
+function portableRoot(value: PortableCharacterPackage): JsonObject {
+  return {
+    format: 'eleckoi.character-card',
+    version: 1,
+    character: {
+      name: value.character.name,
+      group: value.character.group,
+      frontend_beauty_enabled: value.character.frontendBeautyEnabled,
+      profile_age: value.character.profileAge,
+      profile_sex: value.character.profileSex,
+      profile_height: value.character.profileHeight,
+      profile_birthday: value.character.profileBirthday,
+      profile_like: value.character.profileLike,
+      image_prompt: value.character.imagePrompt,
+      opening: value.character.opening,
+      show_opening: value.character.showOpening
+    },
+    assets: value.assets.map((asset) => ({
+      key: asset.key,
+      media_type: asset.mediaType,
+      data: Buffer.from(asset.bytes).toString('base64')
+    })),
+    setting_library: value.settingLibraryJson,
+    variable_config: value.variableConfigJson,
+    regex_rules: value.regexRules.map((rule) => ({
+      id: rule.id,
+      name: rule.name,
+      pattern: rule.pattern,
+      replacement: rule.replacement,
+      targets: rule.targets,
+      enabled: rule.enabled,
+      display_only: rule.displayOnly,
+      prompt_only: rule.promptOnly,
+      run_on_edit: rule.runOnEdit,
+      order: rule.order
+    }))
+  }
+}
+
+function decodePortableRegexRules(value: unknown): RegexRule[] {
+  return objectList(value).map((source, index) => {
+    const rule: RegexRule = {
+      id: string(source.id).trim() || `regex-${randomUUID()}`,
+      name: string(source.name).slice(0, 60),
+      pattern: string(source.pattern).slice(0, 4_000),
+      replacement: string(source.replacement),
+      targets: stringList(source.targets).filter((target): target is RegexRule['targets'][number] => (
+        ['UserInput', 'AiOutput', 'SlashCommand', 'SettingContent', 'Reasoning'].includes(target)
+      )),
+      enabled: boolean(source.enabled, true),
+      displayOnly: boolean(source.display_only),
+      promptOnly: boolean(source.prompt_only),
+      runOnEdit: boolean(source.run_on_edit),
+      order: Math.max(0, integer(source.order, index))
+    }
+    const validationMessage = validateRegexRule(rule)
+    if (validationMessage) throw new Error(`角色卡正则“${rule.name || rule.id}”无效：${validationMessage}`)
+    return rule
+  }).sort((left, right) => left.order - right.order)
+}
+
 function portableCharacter(value: JsonObject): PortableCharacterPackage['character'] {
-  const mode = string(value.character_mode) || 'story'
   return {
     name: (string(value.name) || '导入角色').slice(0, 120),
     group: string(value.group).slice(0, 40),
-    characterMode: mode === 'agent' ? 'agent' : 'story',
     frontendBeautyEnabled: boolean(value.frontend_beauty_enabled),
     profileAge: string(value.profile_age), profileSex: string(value.profile_sex),
     profileHeight: string(value.profile_height), profileBirthday: string(value.profile_birthday),

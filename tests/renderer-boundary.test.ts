@@ -24,10 +24,10 @@ describe('Renderer trust boundary', () => {
 
   it('allows HTTPS URLs and rejects local or custom protocols', () => {
     expect(isAllowedExternalUrl('https://example.com/search?q=eleckoi')).toBe(true)
-    expect(isAllowedExternalUrl('mqqapi://card/show_pslcard?src_type=internal&version=1&uin=1041463229&card_type=group&source=qrcode')).toBe(false)
-    expect(isAllowedExternalUrl('mqqapi://card/show_pslcard?uin=123456789&card_type=group')).toBe(false)
-    expect(isAllowedExternalUrl('mqqapi://message/open?uin=1041463229')).toBe(false)
-    expect(isAllowedExternalUrl('tencent://groupwpa/?subcmd=all&param=7b2267726f757055696e223a3132333435363738397d')).toBe(false)
+    expect(isAllowedExternalUrl('mqqapi://card/show_pslcard?src_type=internal&version=1&uin=000000000&card_type=group&source=qrcode')).toBe(false)
+    expect(isAllowedExternalUrl('mqqapi://card/show_pslcard?uin=000000000&card_type=group')).toBe(false)
+    expect(isAllowedExternalUrl('mqqapi://message/open?uin=000000000')).toBe(false)
+    expect(isAllowedExternalUrl('tencent://groupwpa/?subcmd=all&param=7b2267726f757055696e223a307d')).toBe(false)
     expect(isAllowedExternalUrl('http://example.com')).toBe(false)
     expect(isAllowedExternalUrl('file:///C:/private/secret.txt')).toBe(false)
     expect(isAllowedExternalUrl('javascript:alert(1)')).toBe(false)

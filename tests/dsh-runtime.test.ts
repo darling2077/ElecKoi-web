@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { once } from 'node:events'
 import { tmpdir } from 'node:os'
@@ -16,28 +16,37 @@ describe('packaged DSH runtime composition', () => {
       runtimeDataRoot: join(root, 'runtime'),
       executablePath: process.execPath
     })
-    const closeSession = vi.fn(async () => undefined)
+    const request = vi.fn(async () => ({}))
     const internals = runtime as unknown as {
-      sessions: Map<string, { harness: { close(): Promise<void> }; settingsKey: string }>
+      harness: { client: { request: typeof request }; close(): Promise<void> } | undefined
+      conversationSessions: Map<string, string>
       activeRuns: Map<string, { cancelled: boolean }>
       trajectoryEvents: Map<string, unknown[]>
       generationStatsProjectors: Map<string, unknown>
     }
-    internals.sessions.set('target', { harness: { close: closeSession }, settingsKey: '{}' })
-    internals.activeRuns.set('target', { cancelled: false })
+    internals.harness = { client: { request }, close: async () => undefined }
+    internals.conversationSessions.set('target', 'thread-a')
     internals.trajectoryEvents.set('target\u0000thread-a', [{}])
     internals.trajectoryEvents.set('other\u0000thread-b', [{}])
     internals.generationStatsProjectors.set('target\u0000thread-a', {})
     internals.generationStatsProjectors.set('other\u0000thread-b', {})
+    const targetRoot = join(root, 'runtime', 'sessions', 'target')
+    const threadRoot = join(targetRoot, 'project-a', 'thread-a')
+    const snapshotPath = join(root, 'runtime', 'session-snapshots', 'thread-a.json')
+    await mkdir(threadRoot, { recursive: true })
+    await writeFile(join(threadRoot, 'session.jsonl'), '{"type":"session","id":"thread-a"}\n')
+    await writeFile(snapshotPath, '{"runtimeThreadId":"thread-a"}')
 
     try {
       await runtime.disposeConversation('target')
 
-      expect(closeSession).toHaveBeenCalledOnce()
-      expect(internals.sessions.has('target')).toBe(false)
+      expect(request).toHaveBeenCalledWith('session/dispose', { sessionId: 'thread-a' })
+      expect(internals.conversationSessions.has('target')).toBe(false)
       expect(internals.activeRuns.has('target')).toBe(false)
       expect([...internals.trajectoryEvents.keys()]).toEqual(['other\u0000thread-b'])
       expect([...internals.generationStatsProjectors.keys()]).toEqual(['other\u0000thread-b'])
+      await expect(readdir(targetRoot)).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(readFile(snapshotPath)).rejects.toMatchObject({ code: 'ENOENT' })
     } finally {
       await runtime.close()
       await rm(root, { recursive: true, force: true })
@@ -104,6 +113,7 @@ describe('packaged DSH runtime composition', () => {
 
     try {
       await expect(runtime.stream('conversation-local-test', '你好', {
+        configId: 'local-test-config',
         apiKey: 'local-test-key',
         baseUrl: `http://127.0.0.1:${address.port}`,
         model: 'deepseek-chat',
@@ -159,12 +169,14 @@ describe('packaged DSH runtime composition', () => {
       expect(JSON.stringify(requests[0]?.body.tools)).toContain('web_fetch')
       expect(JSON.stringify(requests[0]?.body.tools)).toContain('update_roleplay_plan')
 
-      const persistedRoot = join(root, 'runtime', 'sessions', 'conversation-local-test')
-      expect((await readdir(persistedRoot, { recursive: true })).some((entry) => entry.split(/[\\/]/).at(-1) === 'runtime-thread-a')).toBe(true)
+      const persistedSessionRoot = join(root, 'runtime', 'sessions')
+      expect((await readdir(persistedSessionRoot, { recursive: true })).some((entry) => entry.split(/[\\/]/).at(-1) === 'runtime-thread-a')).toBe(true)
+      const persistedRoot = join(persistedSessionRoot, 'conversation-local-test')
       const settingBridge = JSON.parse(await readFile(join(persistedRoot, 'eleckoi-setting-library-state.json'), 'utf8'))
       expect(settingBridge.history).toEqual([{ role: 'assistant', content: '你好啊', speakerName: '角色 A' }])
       expect(settingBridge.variableState).toEqual({})
       await expect(runtime.stream('conversation-local-test', '你好', {
+        configId: 'local-main',
         apiKey: 'local-test-key',
         baseUrl: `http://127.0.0.1:${address.port}`,
         model: 'deepseek-chat',
@@ -192,9 +204,199 @@ describe('packaged DSH runtime composition', () => {
       expect(JSON.stringify(regenerationDialogue[1]?.content)).toContain('你好')
       expect(JSON.stringify(regenerationDialogue)).not.toContain('本地 Agent 回复')
       expect(regenerationDialogue.filter((message) => message.role === 'user' && message.content === '你好')).toHaveLength(1)
-      const persistedAfterRegeneration = await readdir(persistedRoot, { recursive: true })
+      const persistedAfterRegeneration = await readdir(persistedSessionRoot, { recursive: true })
       expect(persistedAfterRegeneration.some((entry) => entry.split(/[\\/]/).at(-1) === 'runtime-thread-a')).toBe(false)
       expect(persistedAfterRegeneration.some((entry) => entry.split(/[\\/]/).at(-1) === 'runtime-thread-b')).toBe(true)
+    } finally {
+      await runtime.close()
+      server.close()
+      await once(server, 'close')
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('keeps concurrent chats and immutable request parameters isolated in one recoverable process', async () => {
+    const requests: Array<{ authorization: string | undefined; body: Record<string, unknown> }> = []
+    const server = createServer(async (request, response) => {
+      let rawBody = ''
+      for await (const chunk of request) rawBody += chunk.toString()
+      const body = JSON.parse(rawBody) as Record<string, unknown>
+      requests.push({ authorization: request.headers.authorization, body })
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, body.model === 'model-a' ? 30 : 10))
+      response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+      const base = { id: `chatcmpl-${requests.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
+      response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] })}\n\n`)
+      response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: { content: `回复-${body.model}` }, finish_reason: null }] })}\n\n`)
+      response.write(`data: ${JSON.stringify({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`)
+      response.end('data: [DONE]\n\n')
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('Local test server did not expose a TCP port')
+
+    const endpoint = `http://127.0.0.1:${address.port}`
+    const modelA = {
+      configId: 'model-a-config', apiKey: 'key-a', baseUrl: endpoint, model: 'model-a',
+      systemPrompt: 'A 系统提示', apiFormat: 'openai-completions' as const, customHeaders: {},
+      contextWindow: 128_000, temperature: 0.2, topP: 0, supportsImageInput: false
+    }
+    const modelB = {
+      configId: 'model-b-config', apiKey: 'key-b', baseUrl: endpoint, model: 'model-b',
+      systemPrompt: 'B 系统提示', apiFormat: 'openai-completions' as const, customHeaders: {},
+      contextWindow: 128_000, temperature: 0.8, supportsImageInput: false
+    }
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-multisession-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'), runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath, modelCatalog: () => [modelA, modelB]
+    })
+    const callbacks = { onDelta: () => undefined, onFinal: () => undefined }
+    const contextA = { characterId: 'a', characterName: '角色 A', persona: {}, history: [{ role: 'assistant' as const, content: '仅 A 历史' }] }
+    const contextB = { characterId: 'b', characterName: '角色 B', persona: {}, history: [{ role: 'assistant' as const, content: '仅 B 历史' }] }
+
+    try {
+      await Promise.all([
+        runtime.stream('conversation-a', '问题 A', modelA, callbacks, undefined, contextA, 'session-a'),
+        runtime.stream('conversation-b', '问题 B', modelB, callbacks, undefined, contextB, 'session-b')
+      ])
+      const internals = runtime as unknown as { harness: { client: { child?: { kill(): boolean; once(event: string, listener: () => void): void } } } }
+      const firstHarness = internals.harness
+      expect(requests).toHaveLength(2)
+      const a = requests.find((item) => item.body.model === 'model-a')
+      const b = requests.find((item) => item.body.model === 'model-b')
+      expect(a?.authorization).toBe('Bearer key-a')
+      expect(a?.body).toMatchObject({ temperature: 0.2, top_p: 0 })
+      expect(JSON.stringify(a?.body.messages)).toContain('仅 A 历史')
+      expect(JSON.stringify(a?.body.messages)).not.toContain('仅 B 历史')
+      expect(b?.authorization).toBe('Bearer key-b')
+      expect(b?.body).toMatchObject({ temperature: 0.8 })
+      expect(b?.body).not.toHaveProperty('top_p')
+      expect(JSON.stringify(b?.body.messages)).toContain('仅 B 历史')
+      expect(JSON.stringify(b?.body.messages)).not.toContain('仅 A 历史')
+
+      await runtime.stream('conversation-a', '问题 A2', modelA, callbacks, undefined, contextA, 'session-a')
+      expect(internals.harness).toBe(firstHarness)
+
+      const child = (firstHarness.client as unknown as { child: { kill(): boolean; once(event: string, listener: () => void): void } }).child
+      const exited = new Promise<void>((resolveExit) => child.once('exit', resolveExit))
+      child.kill()
+      await exited
+      await runtime.stream('conversation-b', '问题 B2', modelB, callbacks, undefined, contextB, 'session-b')
+      expect(internals.harness).not.toBe(firstHarness)
+      const recovered = requests.at(-1)
+      expect(recovered?.body.model).toBe('model-b')
+      expect(JSON.stringify(recovered?.body.messages)).toContain('问题 B')
+      expect(JSON.stringify(recovered?.body.messages)).not.toContain('问题 A')
+    } finally {
+      await runtime.close()
+      server.close()
+      await once(server, 'close')
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('forwards Top P through the Anthropic Messages protocol', async () => {
+    const requests: Array<{
+      apiKey: string | undefined
+      anthropicVersion: string | undefined
+      body: Record<string, unknown>
+    }> = []
+    const server = createServer(async (request, response) => {
+      let rawBody = ''
+      for await (const chunk of request) rawBody += chunk.toString()
+      const body = JSON.parse(rawBody) as Record<string, unknown>
+      requests.push({
+        apiKey: request.headers['x-api-key'] as string | undefined,
+        anthropicVersion: request.headers['anthropic-version'] as string | undefined,
+        body
+      })
+      response.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache'
+      })
+      response.write('event: message_start\n')
+      response.write(`data: ${JSON.stringify({
+        type: 'message_start',
+        message: {
+          id: 'msg-local-anthropic',
+          type: 'message',
+          role: 'assistant',
+          content: [],
+          model: 'claude-local-test',
+          stop_reason: null,
+          stop_sequence: null,
+          usage: { input_tokens: 8, output_tokens: 0 }
+        }
+      })}\n\n`)
+      response.write('event: content_block_start\n')
+      response.write(`data: ${JSON.stringify({
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' }
+      })}\n\n`)
+      response.write('event: content_block_delta\n')
+      response.write(`data: ${JSON.stringify({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Anthropic 本地回复' }
+      })}\n\n`)
+      response.write('event: content_block_stop\n')
+      response.write(`data: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`)
+      response.write('event: message_delta\n')
+      response.write(`data: ${JSON.stringify({
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn', stop_sequence: null },
+        usage: { output_tokens: 4 }
+      })}\n\n`)
+      response.write('event: message_stop\n')
+      response.end(`data: ${JSON.stringify({ type: 'message_stop' })}\n\n`)
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('Local test server did not expose a TCP port')
+
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-anthropic-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'),
+      runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath
+    })
+    const finals: string[] = []
+
+    try {
+      await expect(runtime.stream('conversation-anthropic-test', '你好', {
+        configId: 'local-anthropic',
+        apiKey: 'local-anthropic-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: 'claude-local-test',
+        systemPrompt: '只返回本地测试文本。',
+        apiFormat: 'anthropic-messages',
+        customHeaders: {},
+        contextWindow: 128_000,
+        autoCompactTokenLimit: 96_000,
+        topP: 0.72,
+        supportsImageInput: false
+      }, {
+        onDelta: () => undefined,
+        onFinal: (content) => finals.push(content)
+      })).resolves.toBe('complete')
+
+      expect(finals).toEqual(['Anthropic 本地回复'])
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.apiKey).toBe('local-anthropic-key')
+      expect(requests[0]?.anthropicVersion).toBeTruthy()
+      expect(requests[0]?.body).toMatchObject({
+        model: 'claude-local-test',
+        stream: true,
+        top_p: 0.72
+      })
+      expect(requests[0]?.body).not.toHaveProperty('temperature')
     } finally {
       await runtime.close()
       server.close()
@@ -276,6 +478,7 @@ describe('packaged DSH runtime composition', () => {
         'conversation-subagent-test',
         '请调用子代理完成验证。',
         {
+          configId: 'main-config',
           apiKey: 'main-key',
           baseUrl: `http://127.0.0.1:${address.port}`,
           model: 'main-model',
@@ -302,6 +505,7 @@ describe('packaged DSH runtime composition', () => {
         },
         undefined,
         {
+          configId: 'child-config',
           apiKey: 'child-key',
           baseUrl: `http://127.0.0.1:${address.port}`,
           model: 'child-model',
@@ -324,7 +528,7 @@ describe('packaged DSH runtime composition', () => {
       expect(child?.childRouteHeader).toBe('child')
       expect(child?.body).toMatchObject({ model: 'child-model', temperature: 0.25 })
       expect(child?.body.max_tokens ?? child?.body.max_completion_tokens).toBe(4_321)
-      expect(child?.body.reasoning_effort).toBe('high')
+      expect(child?.body).not.toHaveProperty('reasoning_effort')
       expect(child?.body).toHaveProperty('messages')
       expect(requests.filter((item) => item.body.model === 'main-model')).toHaveLength(2)
       expect(requests.find((item) => item.body.model === 'main-model')?.authorization).toBe('Bearer main-key')

@@ -1,4 +1,3 @@
-// Exact tree glyphs ported from the provided PC harness source at version 0.1.1-rc.2.
 export function DshTriangleRightIcon({ size = 14, className }) {
   return (
     <svg width={size} height={size} className={className} viewBox="0 0 14 14" fill="none" aria-hidden="true">

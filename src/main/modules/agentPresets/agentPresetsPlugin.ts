@@ -28,7 +28,7 @@ export const agentPresetsPlugin = {
         changed()
         return result
       }),
-      ctx.desktopGateway.register('command.agent_presets.export', ({ presetId }) => agentPresets.export(presetId)),
+      ctx.desktopGateway.register('command.agent_presets.export', ({ presetId, format }) => agentPresets.export(presetId, format)),
       ctx.desktopGateway.register('command.agent_presets.set_active', ({ presetId }) => {
         const catalog = agentPresets.setActive(presetId)
         changed()

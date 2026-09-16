@@ -19,8 +19,7 @@ const defaults: { [TKey in SettingKey]: SettingValue<TKey> } = {
   'models.active': {
     capability: 'chat',
     config_id: '',
-    model: '',
-    parameters: { stream: true, temperature: 1, top_p: 1 }
+    model: ''
   }
 }
 

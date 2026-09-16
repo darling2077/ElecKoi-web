@@ -7,7 +7,10 @@ import type { ChatMessage } from '@shared/contracts/entities/chat'
 import { MessageDisplayProjector } from './MessageDisplayProjector'
 import { RichMessageHeightRepository } from './RichMessageHeightRepository'
 import { buildVariableViewerTimeline } from '@shared/foundation/variables/viewerTimeline'
-import { characterCardMacroValues } from '@shared/foundation/characterCardMacros'
+import {
+  characterCardMacroValues,
+  resolveCharacterCardMacrosInJson
+} from '@shared/foundation/characterCardMacros'
 
 function presentMessages(
   ctx: Context,
@@ -34,7 +37,7 @@ function details(ctx: Context, projector: MessageDisplayProjector, conversationI
 
 function requireStoryConversation(ctx: Context, characterId: string, conversationId: string): void {
   const binding = ctx.conversations.getCharacterBinding(conversationId)
-  if (binding.characterId !== characterId || binding.characterMode !== 'story') {
+  if (binding.characterId !== characterId) {
     throw new Error('这段对话不属于当前故事角色。')
   }
 }
@@ -67,10 +70,8 @@ export const conversationsPlugin = {
     const conversations = new ConversationRepository(
       ctx.database,
       cleanup,
-      (characterId, db, context) => resolveConversationSeed(
+      (characterId, db) => resolveConversationSeed(
         characterId,
-        context.characterMode,
-        context.metadata,
         db,
         ctx.settingLibraries,
         ctx.variables
@@ -118,7 +119,19 @@ export const conversationsPlugin = {
       ctx.desktopGateway.register('query.conversations.variable_timeline', ({ conversationId }) => {
         conversations.get(conversationId)
         const state = ctx.variableStates.viewerStates(conversationId)
-        return buildVariableViewerTimeline(messages.list(conversationId), state.initialStateJson, state.currentStateJson)
+        const metadata = conversations.getMetadata(conversationId)
+        const macroValues = characterCardMacroValues(metadata, metadata.characterPersona.user_name)
+        const initialStateJson = macroValues
+          ? resolveCharacterCardMacrosInJson(state.initialStateJson, macroValues)
+          : state.initialStateJson
+        const currentStateJson = macroValues
+          ? resolveCharacterCardMacrosInJson(state.currentStateJson, macroValues)
+          : state.currentStateJson
+        return buildVariableViewerTimeline(
+          presentMessages(ctx, projector, conversationId, messages.list(conversationId)),
+          initialStateJson,
+          currentStateJson
+        )
       }),
       ctx.desktopGateway.register('query.conversations.rich_heights', ({ conversationId }) => {
         conversations.get(conversationId)

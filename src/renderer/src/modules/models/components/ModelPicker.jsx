@@ -8,17 +8,8 @@ import {
   DshRefreshIcon,
   DshSearchIcon,
 } from "../../../ui/icons/dshComposerIcons.jsx";
-
-const REASONING_EFFORTS = [
-  { id: "", label: "跟随模型" },
-  { id: "off", label: "关闭" },
-  { id: "minimal", label: "极低" },
-  { id: "low", label: "低" },
-  { id: "medium", label: "中" },
-  { id: "high", label: "高" },
-  { id: "xhigh", label: "极高" },
-  { id: "max", label: "最高" },
-];
+import { useModelCapabilities } from "../hooks/useModelCapabilities.js";
+import { reasoningOptions } from "../model/modelReasoningOptions.js";
 
 function configName(config) {
   return String(config?.name || "").trim() || "未命名";
@@ -52,10 +43,8 @@ function parameterDraft(option) {
     autoCompactTokenLimit: option?.autoCompactTokenLimit ?? "",
     maxOutputTokens: option?.maxOutputTokens ?? "",
     reasoningEffort: option?.reasoningEffort || "",
-    temperatureEnabled: option?.temperature !== null,
-    temperature: option?.temperature ?? 1,
-    topPEnabled: option?.topP !== null,
-    topP: option?.topP ?? 1,
+    temperature: option?.temperature ?? "",
+    topP: option?.topP ?? "",
   };
 }
 
@@ -69,8 +58,8 @@ function normalizedParameters(draft, automaticContextWindow) {
   const contextWindowTokens = optionalNumber(draft.contextWindowTokens);
   const autoCompactTokenLimit = optionalNumber(draft.autoCompactTokenLimit);
   const maxOutputTokens = optionalNumber(draft.maxOutputTokens);
-  const temperature = draft.temperatureEnabled ? optionalNumber(draft.temperature) : null;
-  const topP = draft.topPEnabled ? optionalNumber(draft.topP) : null;
+  const temperature = optionalNumber(draft.temperature);
+  const topP = optionalNumber(draft.topP);
   const context = contextWindowTokens ?? automaticContextWindow;
   const invalid = [contextWindowTokens, autoCompactTokenLimit, maxOutputTokens, temperature, topP].some(Number.isNaN)
     || (contextWindowTokens !== null && (contextWindowTokens < 4096 || contextWindowTokens > 4_000_000))
@@ -94,11 +83,9 @@ export function ModelPicker({
   configs = [],
   selectedConfigId,
   selectedModel,
-  modelParameters,
   modelOptionsByKey,
   title = "选择模型",
   allowFollowMain = false,
-  showStream = true,
   elevated = false,
   renderTrigger,
   onLoadModels,
@@ -157,6 +144,11 @@ export function ModelPicker({
   );
   const selectedOption = selectedOptions.find((item) => item.id === parameterModelId) || null;
   const [draft, setDraft] = useState(() => parameterDraft(selectedOption));
+  const modelCapabilities = useModelCapabilities(selectedConfig, parameterModelId);
+  const reasoningEffortOptions = reasoningOptions(modelCapabilities.reasoningEfforts, "跟随模型");
+  const selectedReasoningEffort = reasoningEffortOptions.some((item) => item.id === draft.reasoningEffort)
+    ? draft.reasoningEffort
+    : "";
   const automaticContextWindow = normalizeProviderId(selectedConfig?.provider) === "deepseek"
     && (!selectedConfig?.base_url || selectedConfig.base_url.includes("api.deepseek.com"))
     ? 1_000_000
@@ -186,13 +178,12 @@ export function ModelPicker({
       capability: "chat",
       configId: config.id,
       model: modelId,
-      parameters: modelParameters || {},
     });
     setFocusedConfigId(config.id);
   }
 
   function followMainModel() {
-    onSelect?.({ capability: "chat", configId: "", model: "", parameters: {} });
+    onSelect?.({ capability: "chat", configId: "", model: "" });
     setTab("models");
   }
 
@@ -232,16 +223,6 @@ export function ModelPicker({
       .then(() => onSaveModelConfig({ ...selectedConfig, model_options: options }))
       .catch((error) => onNotify?.("error", error.message || "保存模型参数失败"))
       .finally(() => setSavingParameters(false));
-  }
-
-  function toggleStream() {
-    if (!selectedConfig || !parameterModelId) return;
-    onSelect?.({
-      capability: "chat",
-      configId: selectedConfig.id,
-      model: parameterModelId,
-      parameters: { ...(modelParameters || {}), stream: !modelParameters?.stream },
-    });
   }
 
   const triggerLabel = (selectedChatConfig ? selectedModel : "") || selectedConfig?.model || "选择模型";
@@ -355,10 +336,9 @@ export function ModelPicker({
               <div className="chat-model-parameters" aria-busy={savingParameters}>
                 <ParameterGroup title="连接与能力">
                   <ParameterSwitch label="此模型支持图片" checked={draft.supportsImageInput} onChange={(checked) => updateDraft({ supportsImageInput: checked }, true)} />
-                  {showStream ? <ParameterSwitch label="流式输出" checked={Boolean(modelParameters?.stream)} onChange={toggleStream} /> : null}
                 </ParameterGroup>
                 <ParameterGroup title="推理">
-                  <ParameterSelect label="推理强度" value={draft.reasoningEffort} options={REASONING_EFFORTS} onChange={(value) => updateDraft({ reasoningEffort: value }, true)} />
+                  <ParameterSelect label="推理强度" value={selectedReasoningEffort} options={reasoningEffortOptions} onChange={(value) => updateDraft({ reasoningEffort: value }, true)} />
                 </ParameterGroup>
                 <ParameterGroup title="上限">
                   <ParameterNumber label="上下文窗口" value={draft.contextWindowTokens} placeholder={automaticContextWindow} min={4096} max={4_000_000} onChange={(value) => updateDraft({ contextWindowTokens: value })} onCommit={saveParameters} />
@@ -366,8 +346,8 @@ export function ModelPicker({
                   <ParameterNumber label="最大输出" value={draft.maxOutputTokens} placeholder="自动" min={1} onChange={(value) => updateDraft({ maxOutputTokens: value })} onCommit={saveParameters} />
                 </ParameterGroup>
                 <ParameterGroup title="采样">
-                  <ParameterNumber label="温度" value={draft.temperature} min={0} max={2} step={0.01} disabled={!draft.temperatureEnabled} toggle={draft.temperatureEnabled} onToggle={(checked) => updateDraft({ temperatureEnabled: checked }, true)} onChange={(value) => updateDraft({ temperature: value })} onCommit={saveParameters} />
-                  <ParameterNumber label="Top P" value={draft.topP} min={0} max={1} step={0.01} disabled={!draft.topPEnabled} toggle={draft.topPEnabled} onToggle={(checked) => updateDraft({ topPEnabled: checked }, true)} onChange={(value) => updateDraft({ topP: value })} onCommit={saveParameters} />
+                  <ParameterNumber label="温度" value={draft.temperature} placeholder="上游默认" min={0} max={2} step={0.01} onChange={(value) => updateDraft({ temperature: value })} onCommit={saveParameters} />
+                  <ParameterNumber label="Top P" value={draft.topP} placeholder="上游默认" min={0} max={1} step={0.01} onChange={(value) => updateDraft({ topP: value })} onCommit={saveParameters} />
                 </ParameterGroup>
               </div>
             )}
@@ -399,6 +379,6 @@ function ParameterSwitch({ label, checked, onChange }) {
   return <label className="chat-model-parameter-row"><span>{label}</span><input className="chat-model-switch" type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>;
 }
 
-function ParameterNumber({ label, value, placeholder, min, max, step = 1, disabled, toggle, onToggle, onChange, onCommit }) {
-  return <label className="chat-model-parameter-row"><span>{label}</span><span className="chat-model-number-control"><input type="number" value={value} placeholder={String(placeholder ?? "")} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(event.target.value)} onBlur={() => onCommit()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} />{onToggle ? <input className="chat-model-switch" type="checkbox" checked={toggle} onChange={(event) => onToggle(event.target.checked)} /> : null}</span></label>;
+function ParameterNumber({ label, value, placeholder, min, max, step = 1, disabled, onChange, onCommit }) {
+  return <label className="chat-model-parameter-row"><span>{label}</span><span className="chat-model-number-control"><input type="number" value={value} placeholder={String(placeholder ?? "")} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(event.target.value)} onBlur={() => onCommit()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></span></label>;
 }

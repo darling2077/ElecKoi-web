@@ -1,7 +1,11 @@
 import type Database from 'better-sqlite3'
+import { applyCurrentStorageCleanup, isLegacyDevelopmentV2Storage, migration0002 } from './migrations/0002RuntimeClean'
 import { commonSchemaSql } from './migrations/commonSchemaSql'
 
-export const BASELINE_ID = 'eleckoi-common-v1-2026-09-11-agent-presets'
+export const BASELINE_ID = 'eleckoi-common'
+export const CURRENT_SCHEMA_VERSION = 2
+const PRE_RELEASE_V2_BASELINES = [BASELINE_ID, 'eleckoi-common-v1-2026-09-14-runtime-clean'] as const
+const migrations = [migration0002] as const
 const desktopSql = `
   CREATE TABLE desktop_schema (id INTEGER PRIMARY KEY CHECK(id = 1), baseline TEXT NOT NULL);
   CREATE TABLE desktop_preferences (key TEXT PRIMARY KEY, valueJson TEXT NOT NULL, updatedAt TEXT NOT NULL);
@@ -21,21 +25,75 @@ function validateSchema(database: Database.Database): void {
   }
 }
 
+function requiredTableNames(): string[] {
+  return [...commonSchemaSql.matchAll(/^CREATE TABLE IF NOT EXISTS `([^`]+)`/gm)]
+    .map((match) => match[1]!)
+    .concat(['desktop_schema', 'desktop_preferences'])
+}
+
+function validateTableInventory(database: Database.Database): void {
+  const installed = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all() as { name: string }[]
+  const required = requiredTableNames()
+  if (required.some((name) => !installed.some((table) => table.name === name)) || installed.length !== required.length) {
+    throw new Error('数据库业务表不完整或包含未知表，拒绝启动。')
+  }
+}
+
+function migrate(database: Database.Database, baseline: string, version: number): void {
+  let nextVersion = version
+  let nextBaseline = baseline
+  while (nextVersion < CURRENT_SCHEMA_VERSION) {
+    const step = migrations.find((candidate) => candidate.fromVersion === nextVersion)
+    if (!step) throw new Error(`数据库迁移链缺少 v${nextVersion} 的下一步，拒绝修改数据。`)
+    if (nextBaseline !== BASELINE_ID && !(step.acceptedBaselines as readonly string[]).includes(nextBaseline)) {
+      throw new Error(`无法识别数据库 v${nextVersion} 的结构标识，拒绝猜测或删除数据。`)
+    }
+    database.transaction(() => {
+      step.apply(database)
+      database.prepare('UPDATE desktop_schema SET baseline = ? WHERE id = 1').run(BASELINE_ID)
+      database.pragma(`user_version = ${step.toVersion}`)
+    }).immediate()
+    nextVersion = step.toVersion
+    nextBaseline = BASELINE_ID
+  }
+}
+
+function normalizePreReleaseV2(database: Database.Database, baseline: string, version: number): void {
+  if (version !== CURRENT_SCHEMA_VERSION || (baseline === BASELINE_ID && !isLegacyDevelopmentV2Storage(database))) return
+  if (!(PRE_RELEASE_V2_BASELINES as readonly string[]).includes(baseline)) {
+    throw new Error('无法识别开发数据库 v2 的结构标识，拒绝猜测或删除数据。')
+  }
+  database.transaction(() => {
+    if (isLegacyDevelopmentV2Storage(database)) {
+      applyCurrentStorageCleanup(database)
+    } else {
+      validateTableInventory(database)
+      validateSchema(database)
+    }
+    database.prepare('UPDATE desktop_schema SET baseline = ? WHERE id = 1').run(BASELINE_ID)
+  }).immediate()
+}
+
 export function installSchema(database: Database.Database): void {
   database.pragma('foreign_keys = ON')
   const tables = database.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[]
   if (tables.length > 0) {
-    const registration = tables.some(({ name }) => name === 'desktop_schema')
-      ? database.prepare('SELECT baseline FROM desktop_schema WHERE id = 1').get() as { baseline: string } | undefined
-      : undefined
-    if (registration?.baseline !== BASELINE_ID || database.pragma('user_version', { simple: true }) !== 1) {
-      throw new Error('此文件不是当前公共 SQLite 开发基线。请显式清理旧开发库或使用新的数据目录；不会自动转换或删除数据。')
+    if (!tables.some(({ name }) => name === 'desktop_schema')) throw new Error('此文件不是 ElecKoi 数据库，拒绝修改或删除数据。')
+    const registration = database.prepare('SELECT baseline FROM desktop_schema WHERE id = 1').get() as { baseline: string } | undefined
+    if (!registration) throw new Error('ElecKoi 数据库缺少结构登记，拒绝修改或删除数据。')
+    const version = database.pragma('user_version', { simple: true }) as number
+    normalizePreReleaseV2(database, registration.baseline, version)
+    if (version < CURRENT_SCHEMA_VERSION || registration.baseline !== BASELINE_ID) migrate(database, registration.baseline, version)
+    if (database.pragma('user_version', { simple: true }) !== CURRENT_SCHEMA_VERSION) {
+      throw new Error(`数据库迁移未到达当前版本 ${CURRENT_SCHEMA_VERSION}。`)
     }
-    const required = [...commonSchemaSql.matchAll(/^CREATE TABLE IF NOT EXISTS `([^`]+)`/gm)].map((match) => match[1]).concat(['desktop_schema', 'desktop_preferences'])
-    if (required.some((name) => !tables.some((table) => table.name === name)) || tables.length !== required.length) {
-      throw new Error('数据库业务表不完整或包含未知表，拒绝启动。')
-    }
+    validateTableInventory(database)
     validateSchema(database)
+    const foreignKeyErrors = database.pragma('foreign_key_check') as unknown[]
+    if (foreignKeyErrors.length > 0 || database.pragma('integrity_check', { simple: true }) !== 'ok') {
+      throw new Error('数据库迁移后的完整性校验失败。')
+    }
     return
   }
   // The installer owns the transaction for both the common schema and desktop registration.

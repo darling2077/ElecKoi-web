@@ -30,8 +30,19 @@ export function useAuthorFrontendActions({
   normalizeLatestChatCharacter,
   refreshSessionsOnly,
   requestScrollToEnd,
+  loadChat,
+  input,
+  inputImages,
+  setInput,
+  sendMessage,
 }) {
   const runsRef = useRef(new Map());
+  const inputRef = useRef(input);
+  const hasInputImagesRef = useRef(Boolean(inputImages?.length));
+  const sendMessageRef = useRef(sendMessage);
+  inputRef.current = input;
+  hasInputImagesRef.current = Boolean(inputImages?.length);
+  sendMessageRef.current = sendMessage;
 
   useEffect(() => {
     const refreshActiveChat = async (targetSessionId) => {
@@ -44,10 +55,20 @@ export function useAuthorFrontendActions({
     const onAuthorAction = (event) => {
       const detail = event.detail || {};
       if (detail.conversationId !== sessionId) return;
-      if (detail.method === 'chat.send' && detail.result?.runId) {
+      if ([
+        'chat.send',
+        'messages.deleteFrom',
+        'messages.regenerate',
+        'messages.editAndRegenerate',
+      ].includes(detail.method) && detail.result?.runId) {
         runsRef.current.set(detail.result.runId, detail.result.messageId || '');
         setIsSending(true);
         requestScrollToEnd('smooth');
+      }
+      if (['chat.create', 'chat.open', 'chat.delete'].includes(detail.method) && detail.result?.chat?.id) {
+        loadChat(detail.result.chat.id).then(() => refreshSessionsOnly({ keepSection: true }))
+          .catch((error) => setStatus(publicError(error, '切换聊天失败')));
+        return;
       }
       refreshActiveChat(detail.conversationId).catch((error) => setStatus(publicError(error, '刷新聊天失败')));
     };
@@ -55,7 +76,36 @@ export function useAuthorFrontendActions({
       if (event.conversationId !== sessionId || !runsRef.current.has(event.runId)) return;
       setMessages((items) => items.map((message) => message.id === event.messageId ? update(message) : message));
     };
+    const onAuthorInputRequest = (event) => {
+      const detail = event.detail || {};
+      if (detail.conversationId !== sessionId || typeof detail.claim !== 'function') return;
+      const operation = detail.claim();
+      const text = typeof detail.params?.text === 'string' ? detail.params.text : '';
+      if (detail.method === 'input.get') {
+        operation.resolve({ text: inputRef.current });
+      } else if (detail.method === 'input.set') {
+        inputRef.current = text;
+        setInput(text);
+        operation.resolve({ text });
+      } else if (detail.method === 'input.append') {
+        const next = `${inputRef.current}${text}`;
+        inputRef.current = next;
+        setInput(next);
+        operation.resolve({ text: next });
+      } else if (detail.method === 'input.clear') {
+        inputRef.current = '';
+        setInput('');
+        operation.resolve({ text: '' });
+      } else if (detail.method === 'input.send') {
+        const submitted = Boolean(inputRef.current.trim()) || hasInputImagesRef.current;
+        if (submitted) void sendMessageRef.current({ preventDefault() {} }, inputRef.current);
+        operation.resolve({ submitted });
+      } else {
+        operation.reject(Object.assign(new Error('未知的输入框操作'), { code: 'METHOD_NOT_FOUND' }));
+      }
+    };
     window.addEventListener('eleckoi:author-action', onAuthorAction);
+    window.addEventListener('eleckoi:author-input-request', onAuthorInputRequest);
     const disposeDelta = listenAgentOutputEvent((event) => updateExternalMessage(event, (message) => ({
       ...message,
       pending: true,
@@ -80,6 +130,7 @@ export function useAuthorFrontendActions({
     });
     return () => {
       window.removeEventListener('eleckoi:author-action', onAuthorAction);
+      window.removeEventListener('eleckoi:author-input-request', onAuthorInputRequest);
       disposeDelta();
       disposeProcess();
       disposeFinished();

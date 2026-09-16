@@ -36,7 +36,6 @@ function mapConversation(conversation, metadata = conversation.metadata || {}) {
     character_name: metadata.characterName || characterPersona.assistant_name || conversation.title || "未命名角色",
     character_avatar: metadata.characterAvatar || characterPersona.assistant_avatar || "",
     character_persona: characterPersona,
-    model_settings: metadata.modelSettings || {},
   };
 }
 
@@ -91,7 +90,6 @@ export async function createChat(title, role = {}) {
       characterName: role.name || role.character_name || role.assistant_name || title || "未命名角色",
       characterAvatar: role.avatar || role.character_avatar || role.assistant_avatar || "",
       characterPersona: role,
-      modelSettings: {},
     },
   });
   return { chat: mapChat(details) };
@@ -100,6 +98,15 @@ export async function createChat(title, role = {}) {
 export async function deleteChat(sessionId) {
   await desktopClient.request("command.conversations.delete", { conversationId: sessionId });
   return { ok: true };
+}
+
+export async function deleteChatMessagesFrom(sessionId, messageId) {
+  const result = await desktopClient.request("command.conversations.messages.delete_from", {
+    conversationId: sessionId,
+    messageId,
+  });
+  const current = await getChat(sessionId);
+  return { ...result, chat: current.chat };
 }
 
 export async function selectChatOpening(sessionId, openingId) {
@@ -208,10 +215,6 @@ export function sendChatMessage(payload, requestId = "") {
   return waitForReply(payload.session_id, payload.message, requestId, "command.agent.start", { images: payload.images || [] });
 }
 
-export function sendChatMessageStream(payload, requestId) {
-  return sendChatMessage(payload, requestId);
-}
-
 export async function readChatImage(conversationId, attachmentId) {
   const image = await desktopClient.request("query.agent.image", { conversationId, attachmentId });
   return `data:${image.mediaType};base64,${image.data}`;
@@ -271,8 +274,4 @@ export async function regenerateChatMessage(sessionId, payload = {}, requestId =
     targetMessageId: String(payload.target_message_id || ""),
     replacementMessage: payload.replacement_message == null ? null : String(payload.replacement_message),
   });
-}
-
-export function regenerateChatMessageStream(sessionId, payload, requestId) {
-  return regenerateChatMessage(sessionId, payload, requestId);
 }

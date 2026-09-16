@@ -1,4 +1,10 @@
 export { DshRuntime } from './DshRuntime'
+export {
+  createDshProviderCatalog,
+  createDshProviderPlan,
+  describeDshModelCapabilities,
+  resolveDshProviderBinding
+} from './modelProfiles'
 export { projectDshTrajectory, readDshTrajectory } from './trajectory'
 export { DshProcessProjector, DshReplyProjector, finalReplyText } from './notifications'
 export {
@@ -8,7 +14,9 @@ export {
 } from './generationStats'
 export type {
   DshRuntimeOptions,
+  DshModelIdentity,
   DshModelSettings,
+  DshReasoningEffort,
   DshStreamCallbacks,
   DshVariableRuntimeContext,
   DshProcessItem,
@@ -21,6 +29,12 @@ export type {
   DshImageAttachmentRef,
   DshImageMediaType
 } from './types'
+export type {
+  DshModelCapabilities,
+  DshProviderBinding,
+  DshProviderCatalog,
+  DshProviderPlan
+} from './modelProfiles'
 export type {
   DshContextBreakdownStats,
   DshContextPressureStats,

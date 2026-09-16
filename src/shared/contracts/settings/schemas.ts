@@ -3,12 +3,7 @@ import { z } from 'zod'
 export const activeModelSelectionSchema = z.object({
   capability: z.literal('chat'),
   config_id: z.string(),
-  model: z.string(),
-  parameters: z.object({
-    stream: z.boolean(),
-    temperature: z.number().min(0).max(2),
-    top_p: z.number().min(0).max(1)
-  }).strict()
+  model: z.string()
 }).strict()
 
 export const appearanceModeSchema = z.enum(['light', 'dark', 'system'])

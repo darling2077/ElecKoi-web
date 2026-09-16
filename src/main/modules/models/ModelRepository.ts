@@ -125,6 +125,18 @@ export class ModelRepository {
     return this.resolveConfig(config, modelId.trim() || config.model.trim(), systemPrompt)
   }
 
+  runtimeCatalog(): RuntimeModelSettings[] {
+    return this.list()
+      .filter((config) => config.enabled !== false && !isImageProvider(config.provider) && Boolean(config.api_key.trim()))
+      .flatMap((config) => {
+        const models = new Set([
+          config.model.trim(),
+          ...config.model_options.map((option) => option.id.trim())
+        ].filter(Boolean))
+        return [...models].map((model) => this.resolveConfig(config, model, ''))
+      })
+  }
+
   private resolveConfig(config: ModelConfig, model: string, systemPrompt: string): RuntimeModelSettings {
     if (!config?.api_key) throw new Error('请先在设置里填写模型 API Key。')
     if (!model) throw new Error('请先在设置里选择模型。')
@@ -139,6 +151,7 @@ export class ModelRepository {
       throw new Error('单次最大输出不能超过当前模型的上下文窗口。')
     }
     return {
+      configId: config.id,
       apiKey: config.api_key,
       baseUrl,
       model,
@@ -146,11 +159,14 @@ export class ModelRepository {
       apiFormat: runtimeApiFormat(config.api_format),
       customHeaders: config.custom_headers ?? {},
       contextWindow,
+      ...(option?.contextWindowTokens !== null && option?.contextWindowTokens !== undefined
+        ? { contextWindowOverride: option.contextWindowTokens }
+        : {}),
       ...(option?.autoCompactTokenLimit ? { autoCompactTokenLimit: option.autoCompactTokenLimit } : {}),
       ...(option?.maxOutputTokens ? { maxTokens: option.maxOutputTokens } : {}),
       ...(option?.temperature !== null && option?.temperature !== undefined ? { temperature: option.temperature } : {}),
       ...(option?.topP !== null && option?.topP !== undefined ? { topP: option.topP } : {}),
-      ...(option?.reasoningEffort?.trim() ? { reasoningEffort: option.reasoningEffort.trim().toLowerCase() } : {}),
+      ...(option?.reasoningEffort ? { reasoningEffort: option.reasoningEffort } : {}),
       supportsImageInput: option?.supportsImageInput === true,
       ...(config.proxy_url.trim() ? { proxyUrl: config.proxy_url.trim() } : {})
     }

@@ -7,7 +7,6 @@ import type {
 } from '@shared/contracts/settingLibrary/schemas'
 
 export const OPENING_ENTRY_ID = 'fixed-opening-assistant'
-export const ROLEPLAY_PLAN_ENTRY_ID = 'fixed-roleplay-plan'
 
 const now = (): string => new Date().toISOString()
 
@@ -32,17 +31,13 @@ function openingEntry(source: SettingLibraryEntry | undefined, timestamp: string
   }
 }
 
-export function isLegacyRoleplayPlanEntry(entry: Pick<SettingLibraryEntry, 'id' | 'kind'>): boolean {
-  return entry.id === ROLEPLAY_PLAN_ENTRY_ID || entry.kind === 'roleplay_plan'
-}
-
 export function emptyEntry(id: string = randomUUID(), timestamp = now()): SettingLibraryEntry {
   return {
     id, title: '', iconId: '', kind: 'normal', groupId: '', content: '', openingMessages: [],
     defaultOpeningMessageId: '', agentSelectionHint: '', agentReadStrategy: 'normal', agentReadCondition: '',
     dynamicMode: 'single_condition', keywords: [], keywordScanDepth: 1, conditionKeywords: [],
     keywordCondition: 'none', keywordUseRegex: false, keywordIgnoreCase: true, keywordWholeWord: false,
-    keywordRecursionDepth: 0, triggerMode: 'always', enabled: true, position: 'after_instructions',
+    keywordRecursionDepth: 0, triggerMode: 'agent_tool', enabled: true, position: null,
     promptPositionId: '', insertRole: 'user', order: 1, viewOrder: 0, groupViewOrder: 0,
     treeViewOrder: 0, createdAt: timestamp, updatedAt: timestamp
   }
@@ -84,7 +79,7 @@ function normalizedVersion(source: SettingLibraryVersion, active: boolean, times
     updatedAt: active ? timestamp : group.updatedAt || timestamp
   }))
   const opening = openingEntry(source.entries.find((entry) => entry.id === OPENING_ENTRY_ID || entry.kind === 'opening'), timestamp)
-  const entries = [opening, ...source.entries.filter((entry) => entry.id !== OPENING_ENTRY_ID && entry.kind !== 'opening' && !isLegacyRoleplayPlanEntry(entry)).map((entry, index) => ({
+  const entries = [opening, ...source.entries.filter((entry) => entry.id !== OPENING_ENTRY_ID && entry.kind !== 'opening').map((entry, index) => ({
     ...entry, title: entry.title.trim().slice(0, 120), groupId: entry.groupId.trim(),
     agentSelectionHint: entry.agentSelectionHint.replace(/\s+/g, ' ').trim().slice(0, 500),
     keywords: [...new Set(entry.keywords.map((item) => item.trim()).filter(Boolean))],

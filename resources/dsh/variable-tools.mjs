@@ -1,13 +1,13 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
+import { readSessionSnapshot } from './session-snapshot.mjs'
 
 const fixedObjectId = 'fixed-variable-initialization-object'
 export const name = 'eleckoi-variable-tools'
 export const inject = ['tools']
 
 export function apply(ctx) {
-  if (process.env.ELECKOI_VARIABLES_ENABLED !== '1' || !process.env.ELECKOI_VARIABLE_STATE_FILE) return
   return [
     ctx.tools.register(globTool()),
     ctx.tools.register(grepTool()),
@@ -32,8 +32,9 @@ function globTool() {
       path: { type: 'string', description: '可选的精确变量组 JSON Pointer；留空表示全部变量。' },
     },
     output: outputDefinition(),
-    async execute(args) {
-      const bridge = readBridge()
+    async execute(args, exec) {
+      const bridgeFile = variableBridgeFor(exec)
+      const bridge = readBridge(bridgeFile)
       const catalog = variableCatalog(bridge)
       const scope = normalizeScope(args.path)
       if (scope === null || !validScope(catalog, scope)) return failure('invalid_path', 'path 必须是当前变量配置中真实存在的 JSON Pointer 变量组。')
@@ -70,10 +71,11 @@ function grepTool() {
       limit: { type: 'integer' },
     },
     output: outputDefinition(),
-    async execute(args) {
+    async execute(args, exec) {
+      const bridgeFile = variableBridgeFor(exec)
       const pattern = String(args.pattern || '')
       if (!pattern) return failure('invalid_arguments', 'pattern 不能为空。')
-      const bridge = readBridge()
+      const bridge = readBridge(bridgeFile)
       const catalog = variableCatalog(bridge)
       const scope = normalizeScope(args.path)
       if (scope === null || !validScope(catalog, scope)) return failure('invalid_path', 'path 必须是当前变量配置中真实存在的 JSON Pointer 变量组。')
@@ -123,10 +125,11 @@ function readTool() {
       paths: { type: 'array', items: { type: 'string' }, required: true, description: '1 到 16 个完整变量 JSON Pointer 路径。' },
     },
     output: outputDefinition(),
-    async execute(args) {
+    async execute(args, exec) {
+      const bridgeFile = variableBridgeFor(exec)
       const paths = [...new Set(args.paths.filter((path) => typeof path === 'string' && path.startsWith('/')))]
       if (!paths.length || paths.length > 16) return failure('invalid_arguments', '一次必须读取 1 到 16 个变量路径。')
-      const bridge = readBridge()
+      const bridge = readBridge(bridgeFile)
       const byPath = new Map(variableCatalog(bridge).map((entry) => [entry.path, entry]))
       const missing = paths.filter((path) => !byPath.has(path))
       if (missing.length) return { ...failure('not_found', '存在当前变量配置中没有的路径，请重新使用 Glob 或 Grep。'), paths: missing }
@@ -176,9 +179,10 @@ function patchTool() {
       },
     },
     output: outputDefinition(),
-    async execute(args) {
+    async execute(args, exec) {
+      const bridgeFile = variableBridgeFor(exec)
       if (!args.operations.length || args.operations.length > 200) return failure('invalid_arguments', 'operations 必须包含 1 到 200 项。')
-      const bridge = readBridge()
+      const bridge = readBridge(bridgeFile)
       let next
       try { next = applyOperations(bridge.state, args.operations) } catch (error) {
         return { ...failure('patch_error', errorMessage(error)), paths: operationPaths(args.operations), state_unchanged: true }
@@ -202,7 +206,7 @@ function patchTool() {
         }
         next = validation.state
       }
-      writeBridge({ ...bridge, state: next })
+      writeBridge(bridgeFile, { ...bridge, state: next })
       return {
         status: 'ok',
         applied_operations: args.operations.length,
@@ -213,22 +217,22 @@ function patchTool() {
   })
 }
 
-function readBridge() {
-  const value = JSON.parse(readFileSync(requireStateFile(), 'utf8'))
+function readBridge(bridgeFile) {
+  const value = JSON.parse(readFileSync(bridgeFile, 'utf8'))
   if (!value?.enabled || !isObject(value.config) || !isObject(value.state) || !isObject(value.config.initialState)) {
     throw new Error('变量运行时尚未准备好。')
   }
   return value
 }
 
-function writeBridge(value) {
-  writeFileSync(requireStateFile(), JSON.stringify(value, null, 2), 'utf8')
+function writeBridge(bridgeFile, value) {
+  writeFileSync(bridgeFile, JSON.stringify(value, null, 2), 'utf8')
 }
 
-function requireStateFile() {
-  const path = process.env.ELECKOI_VARIABLE_STATE_FILE
-  if (!path) throw new Error('变量状态文件没有配置。')
-  return path
+function variableBridgeFor(exec) {
+  const snapshot = readSessionSnapshot(process.env.ELECKOI_SESSION_SNAPSHOT_ROOT, exec?.agent?.session?.id)
+  if (!snapshot.variablesEnabled || !snapshot.variableStateFile) throw new Error('当前 Session 未启用变量工具。')
+  return snapshot.variableStateFile
 }
 
 function variableCatalog(bridge) {

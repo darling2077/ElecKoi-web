@@ -83,6 +83,11 @@ for (const specifier of manifest.localPlugins ?? []) {
   readFileSync(resolve(root, 'resources/dsh', specifier))
 }
 
+for (const specifier of manifest.localModules ?? []) {
+  if (!specifier.startsWith('./')) throw new Error(`本地 DSH 支持模块必须使用相对路径：${specifier}`)
+  readFileSync(resolve(root, 'resources/dsh', specifier))
+}
+
 for (const specifier of manifest.presetLocalPlugins ?? []) {
   if (!specifier.startsWith('./')) throw new Error(`本地 DSH 预设插件必须使用相对路径：${specifier}`)
   readFileSync(resolve(root, 'resources/dsh', specifier))

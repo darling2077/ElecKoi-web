@@ -60,6 +60,15 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
     await harness.terminal
 
     expect(harness.events.filter((event) => event.name === 'agent.output.delta')).toHaveLength(2)
+    const createdMessages = new MessageRepository(harness.database).list(harness.conversationId)
+    expect(harness.events.find((event) => event.name === 'messages.changed')).toEqual({
+      name: 'messages.changed',
+      payload: {
+        conversationId: harness.conversationId,
+        reason: 'sent',
+        messageIds: createdMessages.map((message) => message.id)
+      }
+    })
     expect(harness.events.find((event) => event.name === 'agent.run.finished')).toMatchObject({
       payload: { message: { content: '你好', status: 'complete' } }
     })
@@ -303,8 +312,6 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
       expect(harness.database.native.prepare(`SELECT * FROM ${table}`).all()).toEqual([])
     }
     expect(harness.database.native.prepare('SELECT historyMessageCount,historyUserMessageCount FROM chat_sessions').get()).toEqual({ historyMessageCount: 0, historyUserMessageCount: 0 })
-    expect(harness.database.native.prepare('SELECT revision FROM agent_conversations').get()).toEqual({ revision: 0 })
-    expect(harness.database.native.prepare('SELECT headSequence FROM agent_branches').get()).toEqual({ headSequence: -1 })
     expect(harness.coordinator.inspect(harness.conversationId).active).toBe(false)
     expect(harness.events).toEqual([])
   })
@@ -335,8 +342,7 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
     harness.userSettings.write('models.active', {
       capability: 'chat',
       config_id: 'global-model',
-      model: 'global-chat',
-      parameters: { stream: true, temperature: 1, top_p: 1 }
+      model: 'global-chat'
     })
 
     harness.coordinator.start(harness.conversationId, '全局模型测试')
@@ -394,6 +400,7 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
     await harness.terminal
 
     expect(runtimeInput?.subagentSettings).toEqual({
+      configId: 'child-config',
       apiKey: 'child-key',
       baseUrl: 'https://child.example.com/v1',
       model: 'child-model',
@@ -401,6 +408,7 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
       apiFormat: 'anthropic-messages',
       customHeaders: { 'X-Child-Route': 'enabled' },
       contextWindow: 196_000,
+      contextWindowOverride: 196_000,
       autoCompactTokenLimit: 140_000,
       maxTokens: 12_000,
       temperature: 0.35,
@@ -556,6 +564,75 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
     expect(order).toEqual(['cancel', 'dispose'])
     expect(harness.conversations.exists(harness.conversationId)).toBe(false)
     expect(harness.database.native.prepare('SELECT * FROM generation_attempts').all()).toEqual([])
+  })
+
+  it.each([
+    { label: 'regeneration', replacement: undefined, reason: 'regenerated', expectedText: '原始问题' },
+    { label: 'edit and regeneration', replacement: '修改后的问题', reason: 'edited', expectedText: '修改后的问题' }
+  ])('announces $label after the replacement messages are durable', async ({ replacement, reason, expectedText }) => {
+    const harness = createHarness({
+      run: async (_input, callbacks) => {
+        callbacks.onFinal('新的回复')
+        return 'complete'
+      }
+    })
+    const messages = new MessageRepository(harness.database)
+    const user = messages.create(harness.conversationId, 'user', '原始问题', 'complete')
+    const assistant = messages.create(harness.conversationId, 'assistant', '原始回复', 'complete', undefined, 'old-thread')
+
+    const accepted = replacement === undefined
+      ? harness.coordinator.regenerate(harness.conversationId, assistant.id)
+      : harness.coordinator.regenerate(harness.conversationId, assistant.id, replacement)
+
+    expect(harness.events).toContainEqual({
+      name: 'messages.changed',
+      payload: {
+        conversationId: harness.conversationId,
+        reason,
+        messageIds: [user.id, accepted.messageId]
+      }
+    })
+    await harness.terminal
+    expect(messages.list(harness.conversationId).map((message) => message.content)).toEqual([expectedText, '新的回复'])
+  })
+
+  it('coordinates message-tail deletion with runtime and unreferenced image cleanup', async () => {
+    const disposed: Array<{ conversationId: string; threadIds: readonly string[] | undefined }> = []
+    const discarded: string[][] = []
+    const harness = createHarness({
+      disposeConversation: async (conversationId, threadIds) => {
+        disposed.push({ conversationId, threadIds })
+      }
+    }, undefined, undefined, undefined, (attachmentIds) => discarded.push([...attachmentIds]))
+    const messages = new MessageRepository(harness.database)
+    const image = {
+      attachmentId: `sha256:${'e'.repeat(64)}`,
+      mediaType: 'image/png' as const,
+      bytes: 10,
+      width: 1,
+      height: 1
+    }
+    const user = messages.create(harness.conversationId, 'user', '带图消息', 'complete', undefined, '', [image])
+    const assistant = messages.create(harness.conversationId, 'assistant', '回复', 'complete', undefined, 'thread-delete')
+
+    const result = await harness.coordinator.deleteMessagesFrom(harness.conversationId, user.id)
+
+    expect(result).toEqual({ ok: true, deletedMessageCount: 2, remainingMessageCount: 0 })
+    expect(disposed).toEqual([{
+      conversationId: harness.conversationId,
+      threadIds: ['thread-delete']
+    }])
+    expect(discarded).toEqual([[image.attachmentId]])
+    expect(messages.list(harness.conversationId)).toEqual([])
+    expect(harness.events).toContainEqual({ name: 'records.changed', payload: { module: 'conversations' } })
+    expect(harness.events).toContainEqual({
+      name: 'messages.changed',
+      payload: {
+        conversationId: harness.conversationId,
+        reason: 'deleted',
+        messageIds: [user.id, assistant.id]
+      }
+    })
   })
 
   it('waits for image preparation and discards the detached image before deletion', async () => {

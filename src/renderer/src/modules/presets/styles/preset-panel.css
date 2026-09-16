@@ -1028,7 +1028,8 @@
   font-weight: 650;
 }
 
-.preset-manager-titlebar > button {
+.preset-manager-titlebar > button,
+.preset-manager-export > button {
   display: inline-grid;
   grid-auto-flow: column;
   width: auto;
@@ -1046,12 +1047,14 @@
   white-space: nowrap;
 }
 
-.preset-manager-titlebar > button:hover:not(:disabled) {
+.preset-manager-titlebar > button:hover:not(:disabled),
+.preset-manager-export > button:hover:not(:disabled) {
   color: var(--blue);
   background: color-mix(in srgb, var(--blue) 10%, var(--surface-raised));
 }
 
-.preset-manager-titlebar > button:disabled {
+.preset-manager-titlebar > button:disabled,
+.preset-manager-export > button:disabled {
   opacity: .45;
   cursor: default;
 }
@@ -1071,6 +1074,54 @@
   width: 34px;
   padding: 0;
   color: var(--muted);
+}
+
+.preset-manager-export {
+  position: relative;
+  min-width: 0;
+}
+
+.preset-manager-export > button {
+  width: 100%;
+}
+
+.preset-manager-export-menu {
+  position: absolute;
+  z-index: 8;
+  top: calc(100% + 6px);
+  right: 0;
+  display: grid;
+  width: 132px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  box-shadow: 0 10px 28px color-mix(in srgb, #000 16%, transparent);
+}
+
+.preset-manager-titlebar .preset-manager-export-menu button {
+  justify-content: start;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text);
+  background: transparent;
+  font-size: 13px;
+  text-align: left;
+}
+
+.preset-manager-titlebar .preset-manager-export-menu button:hover:not(:disabled) {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 10%, var(--surface-raised));
+}
+
+.preset-manager-export-menu span[role="alert"] {
+  padding: 5px 8px;
+  color: var(--danger, #d92d20);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .preset-manager-error {

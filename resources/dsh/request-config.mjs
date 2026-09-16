@@ -1,29 +1,49 @@
-/** Applies ElecKoi's current per-model request settings at the DSH request seam. */
+import { readSessionSnapshot } from './session-snapshot.mjs'
 
-export const name = 'eleckoi-request-config'
-
-export function apply(ctx) {
-  const mainTemperature = optionalNumber(process.env.ELECKOI_TEMPERATURE)
-  const subagentTemperature = optionalNumber(process.env.ELECKOI_SUBAGENT_TEMPERATURE)
-
-  if (mainTemperature === undefined && subagentTemperature === undefined) return
-
-  return ctx.on('agent/request', async ({ agent }, next) => {
-    const temperature = agent.options.provider === 'eleckoi-subagent'
-      ? subagentTemperature
-      : mainTemperature
-    return {
-      ...(await next()),
-      ...(temperature === undefined ? {} : { temperature }),
+/**
+ * Installs a request configuration on one Agent scope. A complete immutable
+ * value is captured at prompt assembly, then applied through DSH's official
+ * agent/request waterfall for that exact model step.
+ */
+export function installRequestConfig(agentCtx, snapshotRoot, sourceSessionId, child = false) {
+  let assembled
+  const disposeAssembly = agentCtx.on('system-prompt/assemble', async (_assembly, _context, next) => {
+    const snapshot = readSessionSnapshot(snapshotRoot, sourceSessionId)
+    assembled = structuredClone(child ? snapshot.subagentModel : snapshot.model)
+    const result = await next()
+    return assembled === undefined ? result : {
+      ...result,
+      variables: {
+        ...result.variables,
+        provider: assembled.provider,
+        model: assembled.model
+      }
     }
   })
-}
-
-function optionalNumber(value) {
-  if (value === undefined || value.trim() === '') return undefined
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2) {
-    throw new Error(`ELECKOI_TEMPERATURE must be between 0 and 2; received ${value}`)
+  const disposeRequest = agentCtx.on('agent/request', async (_payload, next) => {
+    const inherited = await next()
+    if (!assembled) return inherited
+    const {
+      provider: _provider,
+      model: _model,
+      reasoningEffort: _reasoningEffort,
+      temperature: _temperature,
+      topP: _topP,
+      maxTokens: _maxTokens,
+      ...rest
+    } = inherited
+    return {
+      ...rest,
+      provider: assembled.provider,
+      model: assembled.model,
+      ...(assembled.reasoningEffort === undefined ? {} : { reasoningEffort: assembled.reasoningEffort }),
+      ...(assembled.temperature === undefined ? {} : { temperature: assembled.temperature }),
+      ...(assembled.topP === undefined ? {} : { topP: assembled.topP }),
+      ...(assembled.maxTokens === undefined ? {} : { maxTokens: assembled.maxTokens })
+    }
+  })
+  return () => {
+    disposeRequest()
+    disposeAssembly()
   }
-  return parsed
 }

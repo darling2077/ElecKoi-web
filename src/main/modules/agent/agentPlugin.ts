@@ -23,7 +23,7 @@ export const agentPlugin = {
   ],
   provide: 'agentSessions',
   apply(ctx: Context) {
-    const runtime = new DshAgentRuntime(ctx.appPaths)
+    const runtime = new DshAgentRuntime(ctx.appPaths, ctx.models)
     const generations = new GenerationRepository(ctx.database, ctx.messages)
     const attachmentCleanup = new AgentAttachmentCleanupRepository(ctx.database, runtime, ctx.messages)
     attachmentCleanup.drain()
@@ -59,6 +59,9 @@ export const agentPlugin = {
       ctx.desktopGateway.register('command.agent.regenerate', ({ conversationId, targetMessageId, replacementMessage }) => (
         sessions.regenerate(conversationId, targetMessageId, replacementMessage === null ? undefined : replacementMessage)
       )),
+      ctx.desktopGateway.register('command.conversations.messages.delete_from', ({ conversationId, messageId }) => (
+        sessions.deleteMessagesFrom(conversationId, messageId)
+      )),
       ctx.desktopGateway.register('query.agent.inspect', ({ conversationId }) => (
         sessions.inspect(conversationId)
       )),
@@ -67,6 +70,9 @@ export const agentPlugin = {
       )),
       ctx.desktopGateway.register('query.agent.trajectory', ({ conversationId, beforeIndex, limit }) => (
         sessions.trajectory(conversationId, { beforeIndex, limit })
+      )),
+      ctx.desktopGateway.register('query.agent.model_capabilities', (input) => (
+        runtime.describeModelCapabilities(input)
       )),
       ctx.desktopGateway.register('query.agent.image', async ({ conversationId, attachmentId }) => {
         return runtime.readImage(ctx.messages.findInputImage(conversationId, attachmentId))

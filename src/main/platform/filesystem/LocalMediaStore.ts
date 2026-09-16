@@ -9,8 +9,8 @@ import {
   writeFileSync
 } from 'node:fs'
 import { join, resolve } from 'node:path'
+import { LOCAL_MEDIA_SCHEME } from '@shared/foundation/mediaReference'
 
-export const LOCAL_MEDIA_SCHEME = 'eleckoi-media'
 const REFERENCE_PREFIX = `${LOCAL_MEDIA_SCHEME}://asset/v1/`
 const MAX_IMAGE_BYTES = 64 * 1024 * 1024
 const HASH_PATTERN = /^[a-f0-9]{64}$/

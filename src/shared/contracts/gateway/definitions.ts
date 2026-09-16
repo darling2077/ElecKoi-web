@@ -8,6 +8,7 @@ import {
   chatImageMediaTypeSchema,
   encodedChatImageAttachmentSchema,
   messageSchema,
+  modelApiFormatSchema,
   modelConfigSchema,
   modelOptionSchema,
   modelProviderIdSchema,
@@ -22,6 +23,8 @@ import { settingLibraryConversationSchema, settingLibrarySchema } from '../setti
 import { variableConfigSchema } from '../variables/schemas'
 import { variableViewerTimelineSchema } from '../variables/viewer'
 import {
+  characterExportFormatSchema,
+  characterExportResultSchema,
   characterImportFileSchema,
   characterImportPreviewSchema,
   characterImportResultSchema,
@@ -46,6 +49,7 @@ import {
 } from '../agent/webSearch'
 import {
   agentPresetCatalogSchema,
+  agentPresetExportFormatSchema,
   agentPresetExportResultSchema,
   agentPresetImportDocumentSchema,
   agentPresetImportResultSchema,
@@ -103,6 +107,14 @@ export const requestContracts = {
     z.object({ conversationId: z.string().min(1) }),
     z.object({ ok: z.literal(true) })
   ),
+  'command.conversations.messages.delete_from': defineRoute(
+    z.object({ conversationId: z.string().min(1), messageId: z.string().min(1) }),
+    z.object({
+      ok: z.literal(true),
+      deletedMessageCount: z.number().int().positive(),
+      remainingMessageCount: z.number().int().nonnegative()
+    })
+  ),
   'command.conversations.opening.select': defineRoute(
     z.object({ conversationId: z.string().min(1), openingId: z.string().min(1) }),
     conversationDetails
@@ -123,6 +135,10 @@ export const requestContracts = {
   'command.characters.delete': defineRoute(
     z.object({ characterIds: z.array(z.string()) }),
     characterCollectionSchema
+  ),
+  'command.characters.export': defineRoute(
+    z.object({ characterId: z.string().min(1), format: characterExportFormatSchema }),
+    characterExportResultSchema
   ),
   'command.characters.import.prepare': defineRoute(
     z.object({
@@ -234,7 +250,7 @@ export const requestContracts = {
     agentPresetImportResultSchema
   ),
   'command.agent_presets.export': defineRoute(
-    z.object({ presetId: z.string().min(1) }),
+    z.object({ presetId: z.string().min(1), format: agentPresetExportFormatSchema }),
     agentPresetExportResultSchema
   ),
   'command.agent_presets.set_active': defineRoute(
@@ -275,6 +291,14 @@ export const requestContracts = {
     config: modelConfigSchema
   })),
   'command.models.test_connection': defineRoute(modelConfigSchema, z.object({ ok: z.literal(true) })),
+  'query.agent.model_capabilities': defineRoute(
+    z.object({ baseUrl: z.string(), model: z.string(), apiFormat: modelApiFormatSchema }),
+    z.object({
+      provider: z.string().nullable(),
+      source: z.enum(['dsh_catalog', 'provider_default']),
+      reasoningEfforts: z.array(z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']))
+    })
+  ),
   'query.agent_tools.web_search.settings': defineRoute(empty, webSearchSettingsSchema),
   'command.agent_tools.web_search.update': defineRoute(webSearchSettingsUpdateSchema, webSearchSettingsSchema),
   'command.agent_tools.web_search.tavily.save_and_test': defineRoute(
@@ -299,7 +323,7 @@ export const requestContracts = {
     z.object({
       conversationId: z.string().min(1),
       messageId: z.string().min(1),
-      request: z.string().min(1).max(512 * 1024)
+      request: z.string().min(1).max(32 * 1024 * 1024)
     }),
     z.object({ response: z.string() })
   ),
@@ -369,6 +393,11 @@ export const requestContracts = {
 export const eventContracts = {
   'records.changed': z.object({ module: z.enum(['conversations', 'personas', 'models', 'settingLibraries', 'variables', 'regexRules', 'agentPresets', 'agentTools']) }),
   'settings.changed': z.object({ key: z.string(), value: z.unknown() }),
+  'messages.changed': z.object({
+    conversationId: z.string().min(1),
+    reason: z.enum(['sent', 'edited', 'deleted', 'regenerated']),
+    messageIds: z.array(z.string().min(1)).min(1)
+  }),
   'agent.output.delta': z.object({
     conversationId: z.string(),
     runId: z.string(),

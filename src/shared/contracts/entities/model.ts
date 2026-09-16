@@ -32,6 +32,7 @@ export interface ModelConfig {
 }
 
 export interface RuntimeModelSettings {
+  configId: string
   apiKey: string
   baseUrl: string
   model: string
@@ -39,11 +40,12 @@ export interface RuntimeModelSettings {
   apiFormat: 'openai-completions' | 'openai-responses' | 'anthropic-messages' | 'google-generative-ai'
   customHeaders: Record<string, string>
   contextWindow: number
+  contextWindowOverride?: number | undefined
   autoCompactTokenLimit?: number | undefined
   maxTokens?: number | undefined
   temperature?: number | undefined
   topP?: number | undefined
-  reasoningEffort?: string | undefined
+  reasoningEffort?: ModelReasoningEffort | undefined
   supportsImageInput: boolean
   proxyUrl?: string | undefined
 }

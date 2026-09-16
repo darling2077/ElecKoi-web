@@ -1,5 +1,6 @@
-import { DshRuntime } from '@eleckoi/dsh-runtime'
+import { DshRuntime, describeDshModelCapabilities } from '@eleckoi/dsh-runtime'
 import type { AppPaths } from '@main/platform/filesystem/AppPaths'
+import type { ModelRepository } from '@main/modules/models'
 import type {
   AgentRunCallbacks,
   AgentRunInput,
@@ -11,13 +12,14 @@ import type { ChatImageMediaType, ChatUserImageAttachment, EncodedChatImageAttac
 export class DshAgentRuntime implements AgentRuntimePort {
   private readonly runtime: DshRuntime
 
-  constructor(paths: AppPaths) {
+  constructor(paths: AppPaths, models: Pick<ModelRepository, 'runtimeCatalog'>) {
     this.runtime = new DshRuntime({
       configPath: paths.resolveResource('dsh', 'cordis.yml'),
       workspaceRoot: paths.workspace,
       runtimeDataRoot: paths.dshRuntime,
       executablePath: process.execPath,
-      presetTemplatePath: paths.resolveResource('dsh', 'agent-preset-template', 'agent.cordis.yml')
+      presetTemplatePath: paths.resolveResource('dsh', 'agent-preset-template', 'agent.cordis.yml'),
+      modelCatalog: () => models.runtimeCatalog()
     })
   }
 
@@ -37,6 +39,18 @@ export class DshAgentRuntime implements AgentRuntimePort {
       input.webSearch,
       input.subagentSettings
     )
+  }
+
+  describeModelCapabilities(input: {
+    baseUrl: string
+    model: string
+    apiFormat: 'chat_completions' | 'responses' | 'anthropic_messages' | 'google_gemini'
+  }) {
+    return describeDshModelCapabilities({
+      baseUrl: input.baseUrl,
+      model: input.model,
+      apiFormat: runtimeApiFormat(input.apiFormat)
+    })
   }
 
   prepareImages(images: EncodedChatImageAttachment[]): Promise<ChatUserImageAttachment[]> {
@@ -67,11 +81,20 @@ export class DshAgentRuntime implements AgentRuntimePort {
     return this.runtime.stop(conversationId)
   }
 
-  disposeConversation(conversationId: string): Promise<void> {
-    return this.runtime.disposeConversation(conversationId)
+  disposeConversation(conversationId: string, runtimeThreadIds?: readonly string[]): Promise<void> {
+    return this.runtime.disposeConversation(conversationId, runtimeThreadIds)
   }
 
   close(): Promise<void> {
     return this.runtime.close()
+  }
+}
+
+function runtimeApiFormat(value: 'chat_completions' | 'responses' | 'anthropic_messages' | 'google_gemini') {
+  switch (value) {
+    case 'chat_completions': return 'openai-completions' as const
+    case 'responses': return 'openai-responses' as const
+    case 'anthropic_messages': return 'anthropic-messages' as const
+    case 'google_gemini': return 'google-generative-ai' as const
   }
 }

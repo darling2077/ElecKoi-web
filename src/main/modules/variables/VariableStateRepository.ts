@@ -29,9 +29,9 @@ export class VariableStateRepository {
 
   runtimeContext(
     conversationId: string,
-    context: { characterId: string; characterMode: string }
+    context: { characterId: string }
   ): AgentVariableRuntimeContext | undefined {
-    if (context.characterMode !== 'story' || !context.characterId) return undefined
+    if (!context.characterId) return undefined
 
     const config = this.configs.get(context.characterId)
     const hasVariables = config.schemaCode.trim().length > 0

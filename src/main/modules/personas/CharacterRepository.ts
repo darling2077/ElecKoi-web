@@ -196,13 +196,11 @@ export class CharacterRepository {
     input = prepared
     const previous = db.select().from(characters).where(eq(characters.id, input.id)).get()
     const persona = isRecord(input.persona) ? input.persona : {}
-    const mode = string(input.characterMode, previous?.characterMode ?? 'story')
-    if (mode !== 'story' && mode !== 'agent') throw new Error('角色模式只允许 story 或 agent。')
     const row: typeof characters.$inferInsert = {
       id: input.id, name: string(input.name, '未命名角色'), avatar: string(input.avatar),
       squareImage: string(persona.assistant_square), coverImage: string(persona.assistant_cover),
       groupName: normalizedGroup(string(input.group, string(input.groupName, previous?.groupName))), orderIndex: index,
-      groupViewOrder: number(input.groupViewOrder, previous?.groupViewOrder), folder: string(input.folder), characterMode: mode,
+      groupViewOrder: number(input.groupViewOrder, previous?.groupViewOrder), folder: string(input.folder),
       frontendBeautyEnabled: flag(input.frontendBeautyEnabled ?? previous?.frontendBeautyEnabled),
       assistantName: string(persona.assistant_name, string(input.name)), assistantAvatar: string(persona.assistant_avatar, string(input.avatar)),
       profileAge: string(input.profileAge, previous?.profileAge), profileSex: string(input.profileSex, previous?.profileSex),

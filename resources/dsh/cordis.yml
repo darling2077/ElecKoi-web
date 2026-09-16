@@ -23,51 +23,7 @@
 - id: llm-pi-ai
   name: '@deepseek-ai/dsh-llm-pi-ai'
   config:
-    providers:
-      eleckoi-upstream:
-        displayName: ElecKoi configured provider
-        apiKeyEnv: ELECKOI_API_KEY
-        api: !!js process.env.ELECKOI_API_FORMAT ?? 'openai-responses'
-        baseURL: !!js process.env.ELECKOI_BASE_URL ?? 'https://api.deepseek.com'
-        headers: !!js JSON.parse(process.env.ELECKOI_CUSTOM_HEADERS ?? '{}')
-        reasoning: !!js process.env.ELECKOI_REASONING_EFFORT || undefined
-        defaultInput:
-          - text
-        models:
-          - id: !!js process.env.DSH_MODEL ?? 'deepseek-chat'
-            input: !!js JSON.parse(process.env.ELECKOI_MODEL_INPUT_MODALITIES ?? '["text"]')
-            contextWindow: !!js Number(process.env.ELECKOI_CONTEXT_WINDOW ?? 272000)
-            maxTokens: !!js Number(process.env.ELECKOI_MAX_TOKENS ?? 32768)
-            reasoningEfforts:
-              off:
-              minimal: minimal
-              low: low
-              medium: medium
-              high: high
-              xhigh: xhigh
-              max: max
-      eleckoi-subagent:
-        displayName: ElecKoi configured subagent provider
-        apiKeyEnv: ELECKOI_SUBAGENT_API_KEY
-        api: !!js process.env.ELECKOI_SUBAGENT_API_FORMAT ?? 'openai-responses'
-        baseURL: !!js process.env.ELECKOI_SUBAGENT_BASE_URL ?? 'https://api.deepseek.com'
-        headers: !!js JSON.parse(process.env.ELECKOI_SUBAGENT_CUSTOM_HEADERS ?? '{}')
-        reasoning: !!js process.env.ELECKOI_SUBAGENT_REASONING_EFFORT || undefined
-        defaultInput:
-          - text
-        models:
-          - id: !!js process.env.ELECKOI_SUBAGENT_MODEL ?? 'deepseek-chat'
-            input: !!js JSON.parse(process.env.ELECKOI_SUBAGENT_MODEL_INPUT_MODALITIES ?? '["text"]')
-            contextWindow: !!js Number(process.env.ELECKOI_SUBAGENT_CONTEXT_WINDOW ?? 272000)
-            maxTokens: !!js Number(process.env.ELECKOI_SUBAGENT_MAX_TOKENS ?? 32768)
-            reasoningEfforts:
-              off:
-              minimal: minimal
-              low: low
-              medium: medium
-              high: high
-              xhigh: xhigh
-              max: max
+    providers: !!js JSON.parse(process.env.ELECKOI_DSH_PROVIDERS ?? '{}')
 
 # Web search is one DSH capability seam with an explicit provider per runtime.
 - id: web
@@ -133,15 +89,6 @@
     toolBash: false
     toolJobs: {}
     goals: {}
-
-- id: request-config
-  name: './request-config.mjs'
-
-- id: conversation-context
-  name: './conversation-context.mjs'
-
-- id: tool-policy
-  name: './tool-policy.mjs'
 
 # DSH keeps its event-sourced runtime state; ElecKoi SQLite remains the
 # authoritative product database shown to the Renderer.

@@ -16,7 +16,7 @@ import {
 } from '@main/platform/sqlite/schema/common'
 import { conversationSettingChanges } from '@main/platform/sqlite/schema/common'
 import { readEntry, readGroup, readPromptPositions, writeEntry, writeGroup, writePromptPositions } from './settingLibraryCodec'
-import { OPENING_ENTRY_ID, isLegacyRoleplayPlanEntry, normalizeSettingLibrary } from './settingLibraryNormalization'
+import { OPENING_ENTRY_ID, normalizeSettingLibrary } from './settingLibraryNormalization'
 
 type EntryRevision = { entry: SettingLibraryEntry; revisionId: string }
 type RuntimeBaseline = {
@@ -28,6 +28,56 @@ const AGENT_PRESET_RUNTIME_PREFIX = 'agent-preset:'
 
 export class SettingLibraryRepository {
   constructor(private readonly store: SqliteDatabase) {}
+
+  snapshotConversationRuntimeState(
+    conversationId: string,
+    db: ElecKoiDatabase = this.store.db
+  ): string {
+    const rows = db.select().from(conversationSettingChanges)
+      .where(eq(conversationSettingChanges.sessionId, conversationId)).all()
+      .sort((left, right) => (
+        left.targetType.localeCompare(right.targetType) || left.targetId.localeCompare(right.targetId)
+      ))
+    return JSON.stringify(rows.map(({ targetType, targetId, operation, payloadJson, updatedAt }) => ({
+      targetType,
+      targetId,
+      operation,
+      payloadJson,
+      updatedAt
+    })))
+  }
+
+  restoreConversationRuntimeState(
+    conversationId: string,
+    raw: string,
+    db?: ElecKoiDatabase
+  ): void {
+    let value: unknown
+    try { value = JSON.parse(raw) } catch (error) {
+      throw new Error('设定状态快照不是合法 JSON。', { cause: error })
+    }
+    if (!Array.isArray(value)) throw new Error('设定状态快照格式不正确。')
+    const rows = value.map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('设定状态快照格式不正确。')
+      const row = item as Record<string, unknown>
+      const targetType = row.targetType === 'entry' || row.targetType === 'group' ? row.targetType : ''
+      const operation = row.operation === 'upsert' || row.operation === 'delete' ? row.operation : ''
+      const targetId = typeof row.targetId === 'string' ? row.targetId : ''
+      const payloadJson = typeof row.payloadJson === 'string' ? row.payloadJson : ''
+      const updatedAt = typeof row.updatedAt === 'string' ? row.updatedAt : ''
+      if (!targetType || !operation || !targetId || !payloadJson || !updatedAt) {
+        throw new Error('设定状态快照格式不正确。')
+      }
+      JSON.parse(payloadJson)
+      return { sessionId: conversationId, targetType, targetId, operation, payloadJson, updatedAt }
+    })
+    const restore = (database: ElecKoiDatabase) => {
+      database.delete(conversationSettingChanges).where(eq(conversationSettingChanges.sessionId, conversationId)).run()
+      for (const row of rows) database.insert(conversationSettingChanges).values(row).run()
+    }
+    if (db) restore(db)
+    else this.store.withWriteTx(restore)
+  }
 
   primaryOpening(characterId: string, db: ElecKoiDatabase = this.store.db): string {
     const link = db.select({ revisionId: settingLibraryEntryLinks.revisionId })
@@ -63,7 +113,6 @@ export class SettingLibraryRepository {
       .where(eq(settingLibraryEntryLinks.characterId, characterId))
       .orderBy(asc(settingLibraryEntryLinks.sortIndex)).all()
       .map((row) => resolveEntry(row.entryId, row.revisionId))
-      .filter((entry) => !isLegacyRoleplayPlanEntry(entry))
     const groups = db.select().from(settingLibraryGroups)
       .where(eq(settingLibraryGroups.characterId, characterId))
       .orderBy(asc(settingLibraryGroups.sortIndex)).all().map((row) => readGroup(row.payloadJson))
@@ -77,8 +126,7 @@ export class SettingLibraryRepository {
         id: version.versionId,
         name: version.name,
         entries: versionLinks.filter((row) => row.versionId === version.versionId)
-          .sort((a, b) => a.sortIndex - b.sortIndex).map((row) => resolveEntry(row.entryId, row.revisionId))
-          .filter((entry) => !isLegacyRoleplayPlanEntry(entry)),
+          .sort((a, b) => a.sortIndex - b.sortIndex).map((row) => resolveEntry(row.entryId, row.revisionId)),
         groups: versionGroups.filter((row) => row.versionId === version.versionId)
           .sort((a, b) => a.sortIndex - b.sortIndex).map((row) => readGroup(row.payloadJson)),
         promptPositions: readPromptPositions(version.promptPositionsJson),
@@ -99,10 +147,10 @@ export class SettingLibraryRepository {
   /** Resolves the effective story library for one conversation without changing the author library. */
   runtimeContext(
     conversationId: string,
-    context: { characterId: string; characterMode: string },
+    context: { characterId: string },
     db: ElecKoiDatabase = this.store.db
   ): AgentSettingLibraryRuntimeContext | undefined {
-    if (context.characterMode !== 'story' || !context.characterId) return undefined
+    if (!context.characterId) return undefined
     const base = this.get(context.characterId, db)
     const rows = db.select().from(conversationSettingChanges)
       .where(eq(conversationSettingChanges.sessionId, conversationId)).all()
@@ -117,7 +165,7 @@ export class SettingLibraryRepository {
       try {
         if (row.targetType === 'entry') {
           const entry = settingLibraryEntrySchema.parse(JSON.parse(row.payloadJson))
-          if (entry.kind !== 'opening' && !isLegacyRoleplayPlanEntry(entry)) entries.set(row.targetId, { ...entry, id: row.targetId })
+          if (entry.kind !== 'opening') entries.set(row.targetId, { ...entry, id: row.targetId })
         } else if (row.targetType === 'group') {
           const group = settingLibraryGroupSchema.parse(JSON.parse(row.payloadJson))
           groups.set(row.targetId, { ...group, id: row.targetId })
@@ -263,7 +311,7 @@ export class SettingLibraryRepository {
     db: ElecKoiDatabase
   ): SettingLibrary {
     const base = this.get(characterId, db)
-    const effective = this.runtimeContext(conversationId, { characterId, characterMode: 'story' }, db)
+    const effective = this.runtimeContext(conversationId, { characterId }, db)
     if (!effective) throw new Error('无法读取这段对话的动态设定。')
     return settingLibrarySchema.parse({
       ...base,
@@ -277,7 +325,7 @@ export class SettingLibraryRepository {
   replaceConversationRuntimeState(
     conversationId: string,
     raw: string,
-    context: { characterId: string; characterMode: string },
+    context: { characterId: string },
     baseline: RuntimeBaseline,
     db: ElecKoiDatabase = this.store.db
   ): string {

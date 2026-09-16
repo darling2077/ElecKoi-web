@@ -2,9 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { getListCollapseState, saveListCollapseState } from '../api/settingsApi.js';
 import { normalizeCollapsedGroups } from '../model/listCollapseState.js';
 
+const collapseStateCache = new Map();
+
 export function usePersistentCollapseState(area, defaults = {}, validKeys) {
-  const [collapsedGroups, setCollapsedGroupsState] = useState(() => normalizeCollapsedGroups({}, defaults));
-  const [hydrated, setHydrated] = useState(false);
+  const cachedState = collapseStateCache.get(area);
+  const [collapsedGroups, setCollapsedGroupsState] = useState(() => normalizeCollapsedGroups(cachedState, defaults, validKeys));
+  const [hydrated, setHydrated] = useState(() => collapseStateCache.has(area));
   const changedBeforeHydrationRef = useRef(false);
   const defaultsRef = useRef(defaults);
   const validKeysRef = useRef(validKeys);
@@ -17,7 +20,9 @@ export function usePersistentCollapseState(area, defaults = {}, validKeys) {
     getListCollapseState(area).then((saved) => {
       if (!active) return;
       if (!changedBeforeHydrationRef.current) {
-        setCollapsedGroupsState(normalizeCollapsedGroups(saved, defaultsRef.current, validKeysRef.current));
+        const normalized = normalizeCollapsedGroups(saved, defaultsRef.current, validKeysRef.current);
+        collapseStateCache.set(area, normalized);
+        setCollapsedGroupsState(normalized);
       }
       setHydrated(true);
     }).catch(() => {
@@ -29,8 +34,12 @@ export function usePersistentCollapseState(area, defaults = {}, validKeys) {
   useEffect(() => {
     if (validKeysSignature === null) return;
     const currentValidKeys = JSON.parse(validKeysSignature);
-    setCollapsedGroupsState((current) => normalizeCollapsedGroups(current, defaults, currentValidKeys));
-  }, [validKeysSignature]);
+    setCollapsedGroupsState((current) => {
+      const normalized = normalizeCollapsedGroups(current, defaultsRef.current, currentValidKeys);
+      if (hydrated) collapseStateCache.set(area, normalized);
+      return normalized;
+    });
+  }, [area, hydrated, validKeysSignature]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -39,8 +48,13 @@ export function usePersistentCollapseState(area, defaults = {}, validKeys) {
 
   function setCollapsedGroups(value) {
     changedBeforeHydrationRef.current = true;
-    setCollapsedGroupsState(value);
+    setCollapsedGroupsState((current) => {
+      const next = typeof value === 'function' ? value(current) : value;
+      const normalized = normalizeCollapsedGroups(next, defaultsRef.current, validKeysRef.current);
+      collapseStateCache.set(area, normalized);
+      return normalized;
+    });
   }
 
-  return [collapsedGroups, setCollapsedGroups];
+  return [collapsedGroups, setCollapsedGroups, hydrated];
 }

@@ -1,5 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import type { CharacterImportFile, CharacterImportPreview, CharacterImportResult, CharacterImportSource } from '@shared/contracts/characters/transfer'
+import { readFileSync } from 'node:fs'
+import { extname } from 'node:path'
+import type {
+  CharacterExportFormat,
+  CharacterExportResult,
+  CharacterImportFile,
+  CharacterImportPreview,
+  CharacterImportResult,
+  CharacterImportSource
+} from '@shared/contracts/characters/transfer'
 import type { CharacterRecord } from '@shared/contracts/entities/persona'
 import type { SettingLibrary } from '@shared/contracts/settingLibrary/schemas'
 import type { VariableConfig } from '@shared/contracts/variables/schemas'
@@ -9,10 +18,20 @@ import type { SettingLibraryRepository } from '@main/modules/settingLibraries'
 import type { VariableConfigRepository } from '@main/modules/variables'
 import type { SqliteDatabase } from '@main/platform/sqlite/SqliteDatabase'
 import type { CharacterRepository } from '@main/modules/personas'
-import { decodeCharacterCard } from './characterCardFormats'
+import type { LocalMediaStore } from '@main/platform/filesystem/LocalMediaStore'
+import {
+  decodeCharacterCard,
+  encodeCharacterCardJson,
+  encodePortableCharacterPayload
+} from './characterCardFormats'
 import type { DecodedCharacterCard, PortableAsset } from './characterTransferTypes'
-import { decodeSettingLibrarySnapshot, decodeVariableConfigSnapshot } from './portableSnapshots'
-import { isPng } from '@main/platform/filesystem/PngTextChunkCodec'
+import {
+  decodeSettingLibrarySnapshot,
+  decodeVariableConfigSnapshot,
+  encodeSettingLibrarySnapshot,
+  encodeVariableConfigSnapshot
+} from './portableSnapshots'
+import { isPng, writePngText } from '@main/platform/filesystem/PngTextChunkCodec'
 
 interface PreparedItem {
   id: string
@@ -30,8 +49,63 @@ export class CharacterTransferService {
     private readonly characters: CharacterRepository,
     private readonly settingLibraries: SettingLibraryRepository,
     private readonly variables: VariableConfigRepository,
-    private readonly regexRules: RegexRuleRepository
+    private readonly regexRules: RegexRuleRepository,
+    private readonly mediaAssets?: LocalMediaStore
   ) {}
+
+  export(characterId: string, format: CharacterExportFormat): CharacterExportResult {
+    const character = this.characters.get().items.find((item) => item.id === characterId)
+    if (!character) throw new Error('找不到对应的角色卡。')
+    const persona = record(character.persona)
+    const assets = [
+      this.portableAsset('avatar.circle', string(persona.assistant_avatar, string(character.avatar))),
+      this.portableAsset('avatar.square', string(persona.assistant_square)),
+      this.portableAsset('avatar.portrait', string(persona.assistant_cover))
+    ].filter((asset): asset is PortableAsset => !!asset)
+    if (assets.reduce((total, asset) => total + asset.bytes.length, 0) > 48 * 1024 * 1024) {
+      throw new Error('角色图片总大小不能超过 48 MB')
+    }
+    const packageData = {
+      character: {
+        name: string(character.name, string(persona.assistant_name, '未命名角色')),
+        group: string(character.group, string(character.groupName)),
+        frontendBeautyEnabled: boolean(character.frontendBeautyEnabled),
+        profileAge: string(character.profileAge),
+        profileSex: string(character.profileSex),
+        profileHeight: string(character.profileHeight),
+        profileBirthday: string(character.profileBirthday),
+        profileLike: string(character.profileLike),
+        imagePrompt: string(persona.image_prompt),
+        opening: string(persona.opening),
+        showOpening: boolean(persona.show_opening)
+      },
+      assets,
+      settingLibraryJson: encodeSettingLibrarySnapshot(this.settingLibraries.get(characterId)),
+      variableConfigJson: encodeVariableConfigSnapshot(this.variables.get(characterId)),
+      regexRules: this.regexRules.get(characterId).characterRules
+        .slice().sort((left, right) => left.order - right.order)
+    }
+    const json = encodeCharacterCardJson(packageData)
+    const safeName = packageData.character.name.replace(/[\\/:*?"<>|]/g, '-').trim() || 'ElecKoi角色'
+    if (format === 'json') {
+      return {
+        fileName: `${safeName}.json`,
+        mimeType: 'application/json',
+        base64: Buffer.from(json, 'utf8').toString('base64')
+      }
+    }
+    const baseImage = assets.find((asset) => asset.key === 'avatar.portrait' && asset.mediaType === 'image/png')
+      ?? assets.find((asset) => asset.key === 'avatar.square' && asset.mediaType === 'image/png')
+      ?? assets.find((asset) => asset.key === 'avatar.circle' && asset.mediaType === 'image/png')
+    const png = writePngText(baseImage?.bytes ?? fallbackPng(), new Map([
+      ['eleckoi-card', encodePortableCharacterPayload(packageData)]
+    ]))
+    return {
+      fileName: `${safeName}.png`,
+      mimeType: 'image/png',
+      base64: Buffer.from(png).toString('base64')
+    }
+  }
 
   prepare(files: CharacterImportFile[], source: CharacterImportSource): CharacterImportPreview {
     if (!files.length) throw new Error('请至少选择一张角色卡')
@@ -133,7 +207,6 @@ export class CharacterTransferService {
       avatar: circle,
       group: source.group.trim(),
       folder: '',
-      characterMode: source.characterMode,
       frontendBeautyEnabled: source.frontendBeautyEnabled,
       profileAge: source.profileAge,
       profileSex: source.profileSex,
@@ -167,18 +240,20 @@ export class CharacterTransferService {
     if (!decoded.variableConfig) return undefined
     return retargetVariables(decoded.variableConfig, characterId)
   }
+
+  private portableAsset(key: string, reference: string): PortableAsset | undefined {
+    if (!reference) return undefined
+    const data = decodeImageDataUrl(reference)
+    if (data) return { key, mediaType: data.mediaType, bytes: data.bytes }
+    const path = this.mediaAssets?.pathForReference(reference)
+    if (!path) return undefined
+    const mediaType = mediaTypeFromExtension(extname(path))
+    return mediaType ? { key, mediaType, bytes: readFileSync(path) } : undefined
+  }
 }
 
 function retargetLibrary(library: SettingLibrary, characterId: string): SettingLibrary {
-  const withoutRoleplayPlan = (entries: SettingLibrary['entries']) => entries.filter((entry) => (
-    entry.id !== 'fixed-roleplay-plan' && entry.kind !== 'roleplay_plan'
-  ))
-  return {
-    ...library,
-    characterId,
-    entries: withoutRoleplayPlan(library.entries),
-    versions: library.versions.map((version) => ({ ...version, entries: withoutRoleplayPlan(version.entries) }))
-  }
+  return { ...library, characterId }
 }
 
 function retargetVariables(config: VariableConfig, characterId: string): VariableConfig {
@@ -190,7 +265,7 @@ function decodeInput(base64: string): Uint8Array {
   if (!normalized) throw new Error('角色卡文件为空')
   const bytes = Buffer.from(normalized, 'base64')
   if (!bytes.length) throw new Error('角色卡文件为空')
-  if (bytes.length > 64 * 1024 * 1024) throw new Error('角色卡不能超过 64 MB')
+  if (bytes.length > 96 * 1024 * 1024) throw new Error('角色卡不能超过 96 MB')
   return bytes
 }
 
@@ -206,4 +281,31 @@ function dataUrl(mediaType: string, bytes: Uint8Array): string {
 function fileStem(name: string): string {
   const leaf = name.replace(/\\/g, '/').split('/').at(-1) ?? ''
   return leaf.replace(/\.[^.]+$/, '').trim()
+}
+
+function decodeImageDataUrl(value: string): { mediaType: string; bytes: Uint8Array } | undefined {
+  const match = /^data:(image\/(?:png|jpeg|webp|gif));base64,([a-z0-9+/=\r\n]+)$/i.exec(value)
+  if (!match) return undefined
+  const bytes = Buffer.from(match[2]!.replace(/\s+/g, ''), 'base64')
+  return bytes.length ? { mediaType: match[1]!.toLowerCase(), bytes } : undefined
+}
+
+function mediaTypeFromExtension(extension: string): string {
+  return ({ '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif' } as Record<string, string>)[extension.toLowerCase()] ?? ''
+}
+
+function fallbackPng(): Uint8Array {
+  return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function string(value: unknown, fallback = ''): string {
+  return typeof value === 'string' ? value : fallback
+}
+
+function boolean(value: unknown): boolean {
+  return value === true || value === 1
 }

@@ -24,6 +24,32 @@ const POSITIONS = new Set([
   'before_latest_user_input', 'after_latest_user_input', 'before_tool_flow', 'after_tool_flow'
 ])
 
+export function encodeSettingLibrarySnapshot(library: SettingLibrary): string {
+  return JSON.stringify({
+    format: 'eleckoi.setting-library-snapshot',
+    version: 1,
+    active_version_id: library.activeVersionId,
+    versions: library.versions.map(settingVersionJson)
+  })
+}
+
+export function encodeVariableConfigSnapshot(config: VariableConfig): string {
+  return JSON.stringify({
+    format: 'eleckoi.variable-config',
+    version: 1,
+    character_id: config.characterId,
+    name: config.name,
+    active_version_id: config.activeVersionId,
+    updated_at: config.versions.find((version) => version.id === config.activeVersionId)?.updatedAt ?? '',
+    initial_state: parsedInitialState(config.initialStateJson),
+    schema_code: config.schemaCode,
+    objects: config.objects.map(variableObjectJson),
+    variables: config.variables.map(variableItemJson),
+    expanded_object_ids: config.expandedObjectIds,
+    versions: config.versions.map(variableVersionJson)
+  })
+}
+
 export function decodeSettingLibrarySnapshot(json: string, characterId: string): SettingLibrary {
   const root = parseObject(json, '设定库快照格式不正确')
   if (root.format !== 'eleckoi.setting-library-snapshot') throw new Error('这不是 ElecKoi 设定库快照')
@@ -79,7 +105,7 @@ function settingVersion(value: JsonObject, index: number): SettingLibraryVersion
 }
 
 function settingEntry(value: JsonObject, index: number): SettingLibraryEntry {
-  const kind = enumValue(value.kind, ['normal', 'opening', 'roleplay_plan', 'history_compaction', 'hidden_tool_timeline'], 'normal')
+  const kind = requiredEnumValue(value.kind, ['normal', 'opening', 'history_compaction', 'hidden_tool_timeline'], '角色卡设定类型')
   const triggerMode = enumValue(value.trigger_mode, ['always', 'agent_tool'], null)
   return {
     id: string(value.id) || `setting-${randomUUID()}`,
@@ -108,7 +134,7 @@ function settingEntry(value: JsonObject, index: number): SettingLibraryEntry {
     keywordWholeWord: boolean(value.keyword_whole_word),
     keywordRecursionDepth: Math.max(0, integer(value.keyword_recursion_depth)),
     triggerMode,
-    enabled: kind === 'roleplay_plan' ? false : boolean(value.enabled, true),
+    enabled: boolean(value.enabled, true),
     position: POSITIONS.has(string(value.position)) ? string(value.position) as SettingLibraryEntry['position'] : null,
     promptPositionId: string(value.prompt_position_id),
     insertRole: enumValue(value.insert_role, ['system', 'user', 'assistant'], 'user'),
@@ -197,6 +223,140 @@ function variableItem(value: JsonObject, index: number): VariableItemConfig {
   }
 }
 
+function settingVersionJson(version: SettingLibraryVersion): JsonObject {
+  return {
+    id: version.id,
+    name: version.name,
+    entries: version.entries.map(settingEntryJson),
+    groups: version.groups.map(settingGroupJson),
+    prompt_positions: version.promptPositions.map(promptPositionJson),
+    list_all_expanded: version.listAllExpanded,
+    expanded_group_ids: version.expandedGroupIds,
+    created_at: version.createdAt,
+    updated_at: version.updatedAt
+  }
+}
+
+function settingEntryJson(entry: SettingLibraryEntry): JsonObject {
+  return {
+    id: entry.id,
+    title: entry.title,
+    icon_id: entry.iconId,
+    kind: entry.kind,
+    group_id: entry.groupId,
+    content: entry.content,
+    opening_messages: entry.openingMessages.map((message) => ({
+      id: message.id,
+      title: message.title,
+      content: message.content,
+      initial_variable_state: message.initialVariableStateJson
+    })),
+    default_opening_message_id: entry.defaultOpeningMessageId,
+    agent_selection_hint: entry.agentSelectionHint,
+    agent_read_strategy: entry.agentReadStrategy,
+    agent_read_condition: entry.agentReadCondition,
+    dynamic_mode: entry.dynamicMode,
+    keywords: entry.keywords,
+    keyword_scan_depth: entry.keywordScanDepth,
+    condition_keywords: entry.conditionKeywords,
+    keyword_condition: entry.keywordCondition,
+    keyword_use_regex: entry.keywordUseRegex,
+    keyword_ignore_case: entry.keywordIgnoreCase,
+    keyword_whole_word: entry.keywordWholeWord,
+    keyword_recursion_depth: entry.keywordRecursionDepth,
+    trigger_mode: entry.triggerMode ?? '',
+    enabled: entry.enabled,
+    position: entry.position ?? '',
+    prompt_position_id: entry.promptPositionId,
+    insert_role: entry.insertRole,
+    order: entry.order,
+    view_order: entry.viewOrder,
+    group_view_order: entry.groupViewOrder,
+    tree_view_order: entry.treeViewOrder,
+    created_at: entry.createdAt,
+    updated_at: entry.updatedAt
+  }
+}
+
+function settingGroupJson(group: SettingLibraryGroup): JsonObject {
+  return {
+    id: group.id,
+    name: group.name,
+    parent_id: group.parentId,
+    order: group.order,
+    tree_view_order: group.treeViewOrder,
+    created_at: group.createdAt,
+    updated_at: group.updatedAt
+  }
+}
+
+function promptPositionJson(position: SettingLibraryPromptPosition): JsonObject {
+  return {
+    id: position.id,
+    name: position.name,
+    anchor: position.anchor,
+    order: position.order,
+    created_at: position.createdAt,
+    updated_at: position.updatedAt
+  }
+}
+
+function variableVersionJson(version: VariableConfigVersion): JsonObject {
+  return {
+    id: version.id,
+    name: version.name,
+    initial_state: parsedInitialState(version.initialStateJson),
+    schema_code: version.schemaCode,
+    objects: version.objects.map(variableObjectJson),
+    variables: version.variables.map(variableItemJson),
+    expanded_object_ids: version.expandedObjectIds,
+    created_at: version.createdAt,
+    updated_at: version.updatedAt
+  }
+}
+
+function variableObjectJson(value: VariableObjectConfig): JsonObject {
+  return {
+    id: value.id,
+    name: value.name,
+    parent_id: value.parentId,
+    enabled: value.enabled,
+    description: value.description,
+    update_rule: value.updateRule,
+    dynamic_key: value.dynamicKey,
+    order: value.order,
+    tree_view_order: value.treeViewOrder,
+    created_at: value.createdAt,
+    updated_at: value.updatedAt
+  }
+}
+
+function variableItemJson(value: VariableItemConfig): JsonObject {
+  return {
+    id: value.id,
+    title: value.title,
+    object_id: value.objectId,
+    enabled: value.enabled,
+    type: value.type,
+    default_value: value.defaultValue,
+    description: value.description,
+    update_rule: value.updateRule,
+    read_mode: value.readMode,
+    order: value.order,
+    tree_view_order: value.treeViewOrder,
+    created_at: value.createdAt,
+    updated_at: value.updatedAt
+  }
+}
+
+function parsedInitialState(json: string): JsonObject {
+  try {
+    return record(JSON.parse(json)) ?? {}
+  } catch {
+    return {}
+  }
+}
+
 function parseObject(json: string, message: string): JsonObject {
   try {
     const value: unknown = JSON.parse(json)
@@ -208,6 +368,11 @@ function parseObject(json: string, message: string): JsonObject {
 
 function enumValue<const T extends string, F extends T | null>(value: unknown, choices: readonly T[], fallback: F): T | F {
   return typeof value === 'string' && choices.includes(value as T) ? value as T : fallback
+}
+
+function requiredEnumValue<const T extends string>(value: unknown, choices: readonly T[], label: string): T {
+  if (typeof value !== 'string' || !choices.includes(value as T)) throw new Error(`${label}不受支持`)
+  return value as T
 }
 function record(value: unknown): JsonObject | undefined { return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : undefined }
 function objectList(value: unknown): JsonObject[] { return Array.isArray(value) ? value.map(record).filter((item): item is JsonObject => !!item) : [] }

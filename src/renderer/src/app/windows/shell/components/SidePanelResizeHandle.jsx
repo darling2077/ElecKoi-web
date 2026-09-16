@@ -1,5 +1,3 @@
-// Interaction ported from DeepSeek Harness `ui-layout/AppFrame.tsx`.
-// Upstream license: MIT, Copyright (c) 2026 DeepSeek.
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export function SidePanelResizeHandle({ onStart, onDrag, onEnd }) {

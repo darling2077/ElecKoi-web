@@ -54,6 +54,26 @@ export function resolveCharacterCardMacros(text: string, values: CharacterCardMa
   return resolved + text.slice(sourceIndex)
 }
 
+export function resolveCharacterCardMacrosInJson(
+  source: string,
+  values: CharacterCardMacroValues
+): string {
+  if (!source.includes('{{')) return source
+  try {
+    const parsed: unknown = JSON.parse(source)
+    let changed = false
+    const resolved = JSON.stringify(parsed, (_key, value: unknown) => {
+      if (typeof value !== 'string') return value
+      const next = resolveCharacterCardMacros(value, values)
+      if (next !== value) changed = true
+      return next
+    })
+    return changed && resolved !== undefined ? resolved : source
+  } catch {
+    return source
+  }
+}
+
 function trimCjkBoundarySpacing(text: string): string {
   let boundary = text.length
   while (boundary > 0 && isHorizontalMacroSpacing(text[boundary - 1])) boundary -= 1

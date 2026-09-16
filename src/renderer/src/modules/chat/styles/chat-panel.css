@@ -252,6 +252,73 @@
   margin-bottom: 0;
 }
 
+.message-delete-selection-row {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding-left: 30px;
+  border-radius: 10px;
+  background: transparent;
+  transition: background-color 0.12s ease;
+}
+
+.message-delete-selection-row.layout-agent {
+  width: min(950px, 100%);
+  margin: 0 auto;
+}
+
+.message-delete-selection-row.layout-roleplay {
+  width: min(
+    calc(
+      var(--chat-reading-width)
+      + var(--chat-roleplay-side-rail)
+      + var(--chat-roleplay-side-rail)
+      + 30px
+    ),
+    100%
+  );
+  margin: 0 auto;
+}
+
+.message-delete-selection-row.layout-agent > .message,
+.message-delete-selection-row.layout-roleplay > .message {
+  width: 100%;
+  margin-right: 0;
+  margin-left: 0;
+}
+
+.message-delete-selection-row.is-selected {
+  background: color-mix(in srgb, var(--blue) 7%, transparent);
+}
+
+.message-delete-selection-row > .message {
+  margin-bottom: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.message-delete-selection-row .message-tools,
+.message-delete-selection-row .opening-pager {
+  visibility: hidden;
+}
+
+.message-delete-checkbox {
+  position: absolute;
+  top: 10px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--blue);
+  cursor: pointer;
+}
+
+.message-delete-checkbox:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 58%, transparent);
+  outline-offset: 3px;
+}
+
 .message-heading {
   display: flex;
   align-items: flex-start;
@@ -1440,6 +1507,42 @@
 .chat-composer-region {
   display: grid;
   min-width: 0;
+}
+
+.chat-message-delete-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 42px;
+  box-sizing: border-box;
+  min-height: 82px;
+  padding: 14px 24px 22px;
+}
+
+.chat-message-delete-bar button {
+  min-width: 76px;
+  height: 40px;
+  padding: 0 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 620;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-color) 48%, transparent);
+}
+
+.chat-message-delete-bar button:hover:not(:disabled) {
+  background: var(--control-bg-hover);
+}
+
+.chat-message-delete-bar .delete-confirm {
+  border-color: color-mix(in srgb, #bd2f2f 34%, var(--line-strong));
+  color: #a92323;
+}
+
+.chat-message-delete-bar button:disabled {
+  opacity: 0.42;
 }
 
 .chat-waiting-slot {

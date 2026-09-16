@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { desktopClient } from '../../../bridge/desktopClient.ts';
 import { buildRichMessageHtml } from '../model/buildRichMessageHtml.js';
+import { subscribeAuthorConversationEvents } from '../model/authorConversationEvents.js';
+import { routeAuthorHostInputRequest } from '../model/authorHostInput.js';
+import { routeAuthorAudioRequest, subscribeAuthorAudioEvents } from '../model/authorAudioHost.js';
+import { prepareAuthorRuntimeLibraries } from '../model/authorRuntimeLibraries.js';
 import {
   normalizeRichMessageViewportWidth,
 } from '../model/richMessageHeightCache.js';
@@ -24,9 +28,10 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
   }), [document.contentKey, message.conversationId, message.id, rootIndex]);
   const [height, setHeight] = useState(minimumHeight);
   const channel = useMemo(createChannel, [document.contentKey, message.id]);
+  const runtimeLibraries = useMemo(prepareAuthorRuntimeLibraries, []);
   const source = useMemo(
-    () => buildRichMessageHtml(document, channel),
-    [channel, document.kind, document.source],
+    () => buildRichMessageHtml(document, channel, runtimeLibraries),
+    [channel, document.kind, document.source, runtimeLibraries],
   );
 
   useLayoutEffect(() => {
@@ -47,6 +52,20 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
     observer.observe(frame);
     return () => observer.disconnect();
   }, [identity]);
+
+  useEffect(() => {
+    const publish = ({ name, payload }) => {
+      const response = JSON.stringify({ type: 'event', event: name, payload });
+      frameRef.current?.contentWindow?.postMessage({
+        type: 'eleckoi:author-response',
+        channel,
+        response,
+      }, '*');
+    };
+    const disposeConversation = subscribeAuthorConversationEvents(message.conversationId, publish);
+    const disposeAudio = subscribeAuthorAudioEvents(message.conversationId, publish);
+    return () => { disposeConversation(); disposeAudio(); };
+  }, [channel, message.conversationId]);
 
   useEffect(() => {
     const receive = async (event) => {
@@ -74,12 +93,16 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
       if (data.type !== 'eleckoi:author-request' || typeof data.request !== 'string') return;
       let response;
       try {
-        const result = await desktopClient.request('command.author_sdk.invoke', {
-          conversationId: message.conversationId,
-          messageId: message.id,
-          request: data.request,
-        });
-        response = result.response;
+        response = await routeAuthorAudioRequest(data.request, message.conversationId);
+        if (response === null) response = await routeAuthorHostInputRequest(data.request, message.conversationId);
+        if (response === null) {
+          const result = await desktopClient.request('command.author_sdk.invoke', {
+            conversationId: message.conversationId,
+            messageId: message.id,
+            request: data.request,
+          });
+          response = result.response;
+        }
       } catch (error) {
         let id = '';
         try { id = String(JSON.parse(data.request)?.id || ''); } catch { /* invalid requests keep an empty id */ }
@@ -92,7 +115,22 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
       try {
         const authorRequest = JSON.parse(data.request);
         const authorResponse = JSON.parse(response);
-        if (authorResponse?.ok && (authorRequest?.method === 'chat.send' || authorRequest?.method === 'openings.select')) {
+        if (authorResponse?.ok && [
+          'variables.setState',
+          'variables.merge',
+          'variables.applyPatch',
+          'variables.reset',
+          'openings.select',
+          'messages.deleteFrom',
+          'messages.regenerate',
+          'messages.editAndRegenerate',
+          'chat.send',
+          'chat.stopGeneration',
+          'chat.create',
+          'chat.open',
+          'chat.delete',
+          'chat.selectModel',
+        ].includes(authorRequest?.method)) {
           window.dispatchEvent(new CustomEvent('eleckoi:author-action', { detail: {
             conversationId: message.conversationId,
             method: authorRequest.method,

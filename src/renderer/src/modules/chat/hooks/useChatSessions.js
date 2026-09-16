@@ -3,12 +3,12 @@ import {
   cancelChatStream,
   createChat as createChatSession,
   deleteChat,
+  deleteChatMessagesFrom,
   getChat,
   listenAgentProcess,
   listenChatStreamDelta,
   listChats,
   regenerateChatMessage,
-  regenerateChatMessageStream,
   selectChatOpening,
   updateChatOpening,
 } from "../api/chatApi.js";
@@ -321,14 +321,29 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
     setStatus("已停止");
   }
 
-  function sendMessage(event) {
+  function sendMessage(event, inputOverride) {
     return runChatMessageSend({
-      event, input, inputImagesRef, isSending, modelConfig, modelSupportsImages, setStatus,
+      event, input: inputOverride ?? input, inputImagesRef, isSending, modelConfig, modelSupportsImages, setStatus,
       requestRef, setIsSending, sessionId, chatCharacter, setSessionId, replaceChatMessages,
       setChatCharacter, normalizeLatestChatCharacter, refreshSessionsOnly, setInput, clearInputImages,
-      modelSelection, language, setMessages, updatePendingReply, requestScrollToEnd,
+      setMessages, updatePendingReply, requestScrollToEnd,
       reconcileChatMessages, commitPendingError,
     });
+  }
+
+  async function deleteMessagesFrom(messageId) {
+    if (!sessionId || !messageId || isSending) return false;
+    try {
+      const result = await deleteChatMessagesFrom(sessionId, messageId);
+      replaceChatMessages(result.chat, "auto");
+      setChatCharacter(normalizeLatestChatCharacter(result.chat));
+      await refreshSessionsOnly({ keepSection: true });
+      setStatus(`已删除 ${result.deletedMessageCount} 条消息`);
+      return true;
+    } catch (error) {
+      setStatus(getErrorMessage(error, "删除消息失败"));
+      return false;
+    }
   }
 
   async function regenerateReply(options = {}) {
@@ -365,11 +380,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
     try {
       const createdAt = new Date().toISOString();
       assistantId = `regen-${Date.now()}`;
-      const parameters = modelSelection.parameters || {};
-      const streamEnabled = Boolean(parameters.stream);
       const payload = {
-        model_config: modelConfig,
-        language,
         target_message_id: targetMessageId,
         replacement_message: hasReplacementMessage ? replacementMessage : null,
       };
@@ -395,20 +406,15 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
       });
       activeRequest.unlisten = unlistenProcess;
       throwIfAborted(controller.signal);
-      let unlistenDelta = () => {};
-      if (streamEnabled) {
-        unlistenDelta = await listenChatStreamDelta((event) => {
-          if (event?.request_id !== requestId || event?.session_id !== sessionId || !event?.delta) return;
-          updatePendingReply((current) => current?.id === assistantId
-            ? { ...current, pending: true, content: `${current.content || ""}${event.delta}` }
-            : current);
-        });
-      }
+      const unlistenDelta = await listenChatStreamDelta((event) => {
+        if (event?.request_id !== requestId || event?.session_id !== sessionId || !event?.delta) return;
+        updatePendingReply((current) => current?.id === assistantId
+          ? { ...current, pending: true, content: `${current.content || ""}${event.delta}` }
+          : current);
+      });
       activeRequest.unlisten = () => { unlistenDelta(); unlistenProcess(); };
       throwIfAborted(controller.signal);
-      result = streamEnabled
-        ? await regenerateChatMessageStream(sessionId, payload, requestId)
-        : await regenerateChatMessage(sessionId, payload, requestId);
+      result = await regenerateChatMessage(sessionId, payload, requestId);
       if (requestRef.current !== activeRequest) return;
       if (result.cancelled) {
         reconcileChatMessages(result.chat);
@@ -461,7 +467,8 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
   }, [chatCharacter.character_id, characterLookup]);
 
   useAuthorFrontendActions({ sessionId, setIsSending, setStatus, setMessages, reconcileChatMessages,
-    setChatCharacter, normalizeLatestChatCharacter, refreshSessionsOnly, requestScrollToEnd });
+    setChatCharacter, normalizeLatestChatCharacter, refreshSessionsOnly, requestScrollToEnd, loadChat,
+    input, inputImages, setInput, sendMessage });
 
   return {
     sessions: displaySessions,
@@ -500,6 +507,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
     sendMessage,
     stopSend,
     regenerateReply,
+    deleteMessagesFrom,
     togglePinChat,
     removeChat,
     removeHistoryChat,

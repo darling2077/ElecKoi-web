@@ -1,13 +1,4 @@
-const REASONING_EFFORTS = [
-  { id: "", label: "跟随模型默认" },
-  { id: "off", label: "关闭" },
-  { id: "minimal", label: "极低" },
-  { id: "low", label: "低" },
-  { id: "medium", label: "中" },
-  { id: "high", label: "高" },
-  { id: "xhigh", label: "极高" },
-  { id: "max", label: "最高" },
-];
+import { reasoningOptions } from "../model/modelReasoningOptions.js";
 
 function optionalNumber(value) {
   const text = String(value).trim();
@@ -16,7 +7,11 @@ function optionalNumber(value) {
   return Number.isFinite(number) ? number : null;
 }
 
-export function ModelParametersSection({ form, activeModelOption, automaticContextWindow, effectiveContextWindow, parameterError, onChange }) {
+export function ModelParametersSection({ form, activeModelOption, automaticContextWindow, effectiveContextWindow, parameterError, reasoningEfforts, onChange }) {
+  const options = reasoningOptions(reasoningEfforts);
+  const selectedEffort = options.some((item) => item.id === activeModelOption?.reasoningEffort)
+    ? activeModelOption.reasoningEffort
+    : "";
   return (
     <section className="model-form-section">
       <div className="model-section-heading">
@@ -38,23 +33,17 @@ export function ModelParametersSection({ form, activeModelOption, automaticConte
         </label>
         <label>
           <span>推理强度 <small>DSH / pi-ai</small></span>
-          <select disabled={!form.model} value={activeModelOption?.reasoningEffort || ""} onChange={(event) => onChange({ reasoningEffort: event.target.value || null })}>
-            {REASONING_EFFORTS.map((effort) => <option key={effort.id} value={effort.id}>{effort.label}</option>)}
+          <select disabled={!form.model} value={selectedEffort} onChange={(event) => onChange({ reasoningEffort: event.target.value || null })}>
+            {options.map((effort) => <option key={effort.id} value={effort.id}>{effort.label}</option>)}
           </select>
         </label>
         <label>
           <span>温度 <small>0–2</small></span>
-          <div className="model-parameter-with-toggle">
-            <input type="number" min="0" max="2" step="0.01" disabled={!form.model || activeModelOption?.temperature === null} value={activeModelOption?.temperature ?? ""} onChange={(event) => onChange({ temperature: optionalNumber(event.target.value) })} placeholder="1" />
-            <input type="checkbox" aria-label="发送温度参数" disabled={!form.model} checked={Boolean(form.model && activeModelOption?.temperature !== null)} onChange={(event) => onChange({ temperature: event.target.checked ? 1 : null })} />
-          </div>
+          <input type="number" min="0" max="2" step="0.01" disabled={!form.model} value={activeModelOption?.temperature ?? ""} onChange={(event) => onChange({ temperature: optionalNumber(event.target.value) })} placeholder="上游默认" />
         </label>
         <label>
           <span>Top P <small>0–1</small></span>
-          <div className="model-parameter-with-toggle">
-            <input type="number" min="0" max="1" step="0.01" disabled={!form.model || activeModelOption?.topP === null} value={activeModelOption?.topP ?? ""} onChange={(event) => onChange({ topP: optionalNumber(event.target.value) })} placeholder="1" />
-            <input type="checkbox" aria-label="发送 Top P 参数" disabled={!form.model} checked={Boolean(form.model && activeModelOption?.topP !== null)} onChange={(event) => onChange({ topP: event.target.checked ? 1 : null })} />
-          </div>
+          <input type="number" min="0" max="1" step="0.01" disabled={!form.model} value={activeModelOption?.topP ?? ""} onChange={(event) => onChange({ topP: optionalNumber(event.target.value) })} placeholder="上游默认" />
         </label>
         <label className="model-capability-toggle">
           <span>图片输入 <small>声明当前模型接受图片</small></span>

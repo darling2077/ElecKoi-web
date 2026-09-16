@@ -4,11 +4,12 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AgentPresetRepository } from '../src/main/modules/agentPresets'
 import { LocalMediaStore } from '../src/main/platform/filesystem/LocalMediaStore'
+import { readPngText } from '../src/main/platform/filesystem/PngTextChunkCodec'
 import { SqliteDatabase } from '../src/main/platform/sqlite/SqliteDatabase'
 
 const databases: SqliteDatabase[] = []
 const directories: string[] = []
-const encoder = new TextEncoder()
+const avatarPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
 
 afterEach(() => {
   databases.splice(0).forEach((database) => database.close())
@@ -33,32 +34,6 @@ function importDocument(value: unknown, displayName = 'preset.json') {
     mimeType: 'application/json',
     base64: Buffer.from(JSON.stringify(value)).toString('base64')
   }
-}
-
-function pngPresetDocument(json: string, avatar?: Uint8Array) {
-  const signature = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
-  const encoded = Buffer.from(json).toString('base64')
-  const chunk = (type: string, data: Uint8Array) => {
-    const result = new Uint8Array(data.length + 12)
-    new DataView(result.buffer).setUint32(0, data.length, false)
-    result.set(encoder.encode(type), 4)
-    result.set(data, 8)
-    return result
-  }
-  const textChunk = (key: string, value: string) => chunk(
-    'tEXt',
-    Uint8Array.from(Buffer.from(`${key}\0${value}`, 'latin1'))
-  )
-  const parts = [
-    signature,
-    textChunk('eleckoi_agent_preset', encoded),
-    ...(avatar ? [textChunk('eleckoi_agent_preset_avatar', Buffer.from(avatar).toString('base64'))] : []),
-    chunk('IEND', new Uint8Array())
-  ]
-  const bytes = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
-  let offset = 0
-  for (const part of parts) { bytes.set(part, offset); offset += part.length }
-  return { displayName: 'preset.png', mimeType: 'image/png', base64: Buffer.from(bytes).toString('base64') }
 }
 
 describe('agent preset repository', () => {
@@ -187,7 +162,7 @@ describe('agent preset repository', () => {
     repository.ensureInitialized()
     const activeBeforeImport = repository.catalog().activePresetId
     const result = repository.import(importDocument({
-      name: '酒馆长篇预设',
+      name: '合成长篇预设',
       prompts: [
         { identifier: 'main', name: '正文', content: '保持叙事。', role: 'system' },
         { identifier: 'reply', name: '正文', content: '回复用户。', role: 'assistant' },
@@ -212,7 +187,7 @@ describe('agent preset repository', () => {
     expect(result.source).toBe('sillytavern')
     expect(result.skippedUnsupportedEntries).toBe(1)
     expect(result.skippedDepthRegexCount).toBe(1)
-    expect(result.preset.name).toBe('酒馆长篇预设')
+    expect(result.preset.name).toBe('合成长篇预设')
     expect(result.preset.entries.map((entry) => entry.id).slice(0, 2)).toEqual([
       'built-in-hidden-tool-timeline',
       'built-in-roleplay-history-compaction'
@@ -229,33 +204,94 @@ describe('agent preset repository', () => {
     expect(repository.catalog().activePresetId).toBe(activeBeforeImport)
   })
 
-  it('exports the Android-aligned JSON format and imports it from JSON or PNG', () => {
+  it('exports one complete ElecKoi payload as JSON or PNG and restores portable state', () => {
     const repository = harness(true)
     repository.ensureInitialized()
-    const exported = repository.export(repository.active().id)
-    const root = JSON.parse(exported.json)
+    const active = repository.active()
+    repository.save({
+      ...active,
+      activeVersionId: `${active.id}:v2`,
+      activeVersionNumber: 2,
+      profile: {
+        ...active.profile,
+        authorName: '作者',
+        authorAvatarPath: `data:image/png;base64,${avatarPng.toString('base64')}`,
+        usageInstructions: '选择角色后开始对话。',
+        timeline: [{ id: 'release-2', title: '第二版', dateLabel: '2026-09-15', note: '工具配置更新' }]
+      },
+      toolGroups: active.toolGroups.map((group) => ({
+        ...group,
+        included: group.id === 'builtin:variables' || group.id === 'builtin:web',
+        enabled: group.id === 'builtin:web'
+      })),
+      subagentModelSelection: { configId: 'local-config-must-not-export', model: 'local-model' },
+      roleplayPlan: { steps: ['读取设定', '输出正文'] }
+    })
+    const jsonExport = repository.export(repository.active().id, 'json')
+    const json = Buffer.from(jsonExport.base64, 'base64').toString('utf8')
+    const root = JSON.parse(json)
     expect(root).toMatchObject({ format: 'eleckoi.agent-preset', version: 1 })
-    expect(root.preset.profile).not.toHaveProperty('author_avatar_base64')
+    expect(root.preset.profile.usage_instructions).toBe('选择角色后开始对话。')
+    expect(root.preset.profile.author_avatar).toEqual({
+      media_type: 'image/png',
+      data: avatarPng.toString('base64')
+    })
+    expect(root.preset.tool_configuration).toEqual({
+      included_group_ids: ['builtin:variables', 'builtin:web'],
+      enabled_group_ids: ['builtin:web']
+    })
+    expect(root.preset.roleplay_plan).toEqual({ steps: ['读取设定', '输出正文'] })
+    expect(root.preset.active_version_number).toBe(2)
+    expect(root.preset.versions).toHaveLength(2)
+    expect(json).not.toContain('local-config-must-not-export')
+    expect(json).not.toContain('local-model')
+    expect(root.preset).not.toHaveProperty('chat_background')
+
+    const pngExport = repository.export(repository.active().id, 'png')
+    const pngBytes = Buffer.from(pngExport.base64, 'base64')
+    const pngText = readPngText(pngBytes)
+    expect([...pngText.keys()]).toEqual(['eleckoi_agent_preset'])
+    expect(Buffer.from(pngText.get('eleckoi_agent_preset')!, 'base64').toString('utf8')).toBe(json)
 
     const fromJson = repository.import({
-      displayName: exported.fileName,
+      displayName: jsonExport.fileName,
       mimeType: 'application/json',
-      base64: Buffer.from(exported.json).toString('base64')
+      base64: jsonExport.base64
     }, 'eleckoi')
-    const fromPng = repository.import(
-      pngPresetDocument(exported.json, Uint8Array.from([0x89, 0x50, 0x4e, 0x47])),
-      'eleckoi'
-    )
+    const fromPng = repository.import({
+      displayName: pngExport.fileName,
+      mimeType: pngExport.mimeType,
+      base64: pngExport.base64
+    }, 'eleckoi')
 
     expect(fromJson.preset.entries.map((entry) => entry.id).slice(0, 2)).toEqual([
       'built-in-hidden-tool-timeline',
       'built-in-roleplay-history-compaction'
     ])
+    expect(fromJson.preset.profile.usageInstructions).toBe('选择角色后开始对话。')
+    expect(fromJson.preset.roleplayPlan).toEqual({ steps: ['读取设定', '输出正文'] })
+    expect(fromJson.preset.activeVersionNumber).toBe(2)
+    expect(fromJson.preset.toolGroups.filter((group) => group.included).map((group) => group.id)).toEqual([
+      'builtin:variables',
+      'builtin:web'
+    ])
+    expect(fromJson.preset.toolGroups.filter((group) => group.enabled).map((group) => group.id)).toEqual(['builtin:web'])
+    expect(fromJson.preset.subagentModelSelection).toEqual({ configId: '', model: '' })
+    expect(fromJson.preset.profile.authorAvatarPath).toMatch(/^eleckoi-media:\/\/asset\/v1\//)
     expect(fromPng.preset.name).toBe('默认 Agent 预设 3')
     expect(fromPng.preset.profile.authorAvatarPath).toMatch(/^eleckoi-media:\/\/asset\/v1\//)
-    expect(fromPng.preset.toolGroups.filter((group) => group.enabled).map((group) => group.id)).toEqual([
-      'builtin:variables',
-      'builtin:setting-library'
-    ])
+    const roundTrip = JSON.parse(Buffer.from(repository.export(fromPng.preset.id, 'json').base64, 'base64').toString('utf8'))
+    expect(roundTrip.preset.active_version_number).toBe(2)
+    expect(roundTrip.preset.versions).toHaveLength(2)
+  })
+
+  it('rejects retired setting kinds in current ElecKoi preset files', () => {
+    const repository = harness()
+    repository.ensureInitialized()
+    const root = JSON.parse(Buffer.from(repository.export(repository.active().id, 'json').base64, 'base64').toString('utf8'))
+    root.preset.entries[0].kind = 'roleplay_plan'
+
+    expect(() => repository.import(importDocument(root), 'eleckoi'))
+      .toThrow('不支持的设定类型')
   })
 })

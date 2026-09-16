@@ -11,3 +11,6 @@
 # Do not perform line-ending conversion on binary assets.
 *.ico binary
 *.png binary
+
+# Unified diff context prefixes may precede tab indentation in target files.
+patches/*.patch whitespace=-space-before-tab

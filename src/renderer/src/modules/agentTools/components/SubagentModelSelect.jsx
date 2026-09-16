@@ -20,11 +20,9 @@ export function SubagentModelSelect({
       configs={configs}
       selectedConfigId={selectedConfig?.id || ''}
       selectedModel={selectedModel}
-      modelParameters={{}}
       modelOptionsByKey={modelOptionsByKey}
       title="选择子 Agent 模型"
       allowFollowMain
-      showStream={false}
       elevated
       onLoadModels={onLoadModels}
       onSelect={({ configId, model }) => onChange({ configId, model })}

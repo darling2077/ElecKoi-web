@@ -8,6 +8,7 @@ import { registerLocalMediaScheme } from '@main/platform/electron/mediaProtocol'
 
 const logger = getBootstrapLogger()
 registerLocalMediaScheme()
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 const startupProfiles = new StartupProfileStore()
 const startupProfile = startupProfiles.load(join(app.getPath('userData'), 'startup-profile.json'))
 configureElectron(startupProfile)

@@ -1,4 +1,4 @@
-import type { ConversationMetadata, OpeningMessageOption } from '@shared/contracts/entities/chat'
+import type { OpeningMessageOption } from '@shared/contracts/entities/chat'
 import type { ElecKoiDatabase } from '@main/platform/sqlite/SqliteDatabase'
 import type { SettingLibraryEntry } from '@shared/contracts/settingLibrary/schemas'
 
@@ -17,26 +17,13 @@ export interface ConversationSeed {
   selectedOpeningId: string
 }
 
-function personaOpening(metadata: ConversationMetadata): string {
-  const persona = metadata.characterPersona
-  return persona.show_opening === true && typeof persona.opening === 'string'
-    ? persona.opening.trim()
-    : ''
-}
-
 export function resolveConversationSeed(
   characterId: string,
-  characterMode: string,
-  metadata: ConversationMetadata,
   database: ElecKoiDatabase,
   settingLibraries: ConversationSettingLibraryReader,
   variables: ConversationVariableConfigReader
 ): ConversationSeed {
   const fallbackState = variables.initialState(characterId, database)
-  if (characterMode !== 'story') {
-    return { initialVariableStateJson: fallbackState, openingText: personaOpening(metadata), openingOptions: [], selectedOpeningId: '' }
-  }
-
   const entry = settingLibraries.get(characterId, database).entries.find((candidate) => (
     candidate.enabled && (candidate.id === 'fixed-opening-assistant' || candidate.kind === 'opening')
   ))

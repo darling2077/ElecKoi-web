@@ -3,16 +3,20 @@ import { CharacterTransferService } from './CharacterTransferService'
 
 export const characterTransferPlugin = {
   name: 'eleckoi-character-transfer',
-  inject: ['database', 'desktopGateway', 'characters', 'settingLibraries', 'variables', 'regexRules'],
+  inject: ['database', 'desktopGateway', 'characters', 'settingLibraries', 'variables', 'regexRules', 'mediaAssets'],
   apply(ctx: Context) {
     const transfers = new CharacterTransferService(
       ctx.database,
       ctx.characters,
       ctx.settingLibraries,
       ctx.variables,
-      ctx.regexRules
+      ctx.regexRules,
+      ctx.mediaAssets
     )
     return [
+      ctx.desktopGateway.register('command.characters.export', ({ characterId, format }) => (
+        transfers.export(characterId, format)
+      )),
       ctx.desktopGateway.register('command.characters.import.prepare', ({ source, files }) => (
         transfers.prepare(files, source)
       )),

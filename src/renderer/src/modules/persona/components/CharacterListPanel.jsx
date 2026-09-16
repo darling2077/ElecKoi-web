@@ -10,6 +10,7 @@ import { ALL_CHARACTERS, characterGroup, characterName } from "./characterUtils.
 import { DshSearchField } from "../../../ui/ui/DshSearchField.jsx";
 import { SidebarCreateButton } from "../../../ui/ui/SidebarCreateButton.jsx";
 import { LIST_COLLAPSE_AREAS, usePersistentCollapseState } from "../../settings/index.js";
+import { exportCharacter } from "../api/personaApi.js";
 
 export function CharacterListPanel({ characters, activeCharacterId, artworkMode, onSelectCharacter, onOpenCharacterChat, onSaveCharacterGroups, onImportPreparedCharacters, onCreateCharacter, onDeleteCharacters }) {
   const [keyword, setKeyword] = useState("");
@@ -39,7 +40,7 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
     }
     return names;
   }, [characters]);
-  const [collapsedGroups, setCollapsedGroups] = usePersistentCollapseState(
+  const [collapsedGroups, setCollapsedGroups, collapseStateReady] = usePersistentCollapseState(
     LIST_COLLAPSE_AREAS.characters,
     {},
     characters.active_character_id || characters.groups?.length || characters.items?.length
@@ -189,32 +190,16 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
     if (selectedGroup === group) setSelectedGroup(ALL_CHARACTERS);
   }
 
-  function exportCharacters() {
+  async function exportCharacters(format) {
     const character = (characters.items || []).find((item) => item.id === activeCharacterId) || characters.items?.[0];
     if (!character) return;
-    const card = {
-      spec: "chara_card_v2",
-      spec_version: "2.0",
-      data: {
-        name: characterName(character),
-        personality: "",
-        scenario: "",
-        first_mes: character.persona?.opening || "",
-        mes_example: "",
-        creator_notes: "",
-        post_history_instructions: "",
-        alternate_greetings: [],
-        tags: [],
-        creator: "ElecKoi",
-        character_version: "1",
-        extensions: { eleckoi_compatible: true },
-      },
-    };
-    const blob = new Blob([JSON.stringify(card, null, 2)], { type: "application/json;charset=utf-8" });
+    const exported = await exportCharacter(character.id, format);
+    const bytes = base64Bytes(exported.base64);
+    const blob = new Blob([bytes], { type: exported.mimeType });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `${characterName(character).replace(/[\\/:*?"<>|]/g, "-") || "ElecKoi角色"}.json`;
+    link.download = exported.fileName;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -266,7 +251,7 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
       </div>
 
       <div className="character-list-scroll">
-        {listTab === "characters" ? (
+        {listTab === "characters" && collapseStateReady ? (
           <CharacterGroupList
             groups={groups}
             characters={characters}
@@ -291,12 +276,12 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
             }}
             onGroupContextMenu={openGroupMenu}
           />
-        ) : (
+        ) : listTab === "groups" ? (
           <div className="character-empty-groups">
             <strong>暂无群聊</strong>
             <span>群聊角色和多人对话以后放在这里。</span>
           </div>
-        )}
+        ) : null}
       </div>
 
       {managerOpen ? (
@@ -389,4 +374,11 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
       ) : null}
     </aside>
   );
+}
+
+function base64Bytes(value) {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
 }

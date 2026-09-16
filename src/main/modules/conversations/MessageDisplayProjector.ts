@@ -5,6 +5,7 @@ import { rulesForSurface, transformWithRegexRules } from '@shared/foundation/reg
 import type { MessageDisplayCompatibility } from './MessageDisplayCompatibility'
 import {
   resolveCharacterCardMacros,
+  resolveCharacterCardMacrosInJson,
   type CharacterCardMacroValues
 } from '@shared/foundation/characterCardMacros'
 
@@ -14,6 +15,7 @@ interface CachedProjection {
   completedAssistant: boolean
   macroScope: string
   displayContent: string
+  displayVariableStateJson: string
 }
 
 export class MessageDisplayProjector {
@@ -46,7 +48,7 @@ export class MessageDisplayProjector {
       && cached.completedAssistant === completedAssistant
       && cached.macroScope === macroScope
     ) {
-      return cached.displayContent === message.content ? message : { ...message, displayContent: cached.displayContent }
+      return projectedMessage(message, cached.displayContent, cached.displayVariableStateJson)
     }
 
     const rules = rulesForSurface(collection, target, 'Display')
@@ -61,7 +63,10 @@ export class MessageDisplayProjector {
       replacementDecorator: decorateRichDisplayReplacement,
       protectDecoratedReplacements: true
     })
-    const variableDisplayContent = this.compatibility.resolveVariableMacros(transformed, message.variableStateJson)
+    const displayVariableStateJson = macroValues
+      ? resolveCharacterCardMacrosInJson(message.variableStateJson, macroValues)
+      : message.variableStateJson
+    const variableDisplayContent = this.compatibility.resolveVariableMacros(transformed, displayVariableStateJson)
     const displayContent = macroValues
       ? resolveCharacterCardMacros(variableDisplayContent, macroValues)
       : variableDisplayContent
@@ -70,8 +75,22 @@ export class MessageDisplayProjector {
       variableStateJson: message.variableStateJson,
       completedAssistant,
       macroScope,
-      displayContent
+      displayContent,
+      displayVariableStateJson
     })
-    return displayContent === message.content ? message : { ...message, displayContent }
+    return projectedMessage(message, displayContent, displayVariableStateJson)
+  }
+}
+
+function projectedMessage(
+  message: ChatMessage,
+  displayContent: string,
+  variableStateJson: string
+): ChatMessage {
+  if (displayContent === message.content && variableStateJson === message.variableStateJson) return message
+  return {
+    ...message,
+    ...(displayContent === message.content ? {} : { displayContent }),
+    variableStateJson
   }
 }

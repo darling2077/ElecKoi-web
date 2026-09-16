@@ -45,7 +45,7 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
       onChange({ ...preset, groups: [...preset.groups, group], expandedGroupIds: [...new Set([...preset.expandedGroupIds, parentId].filter(Boolean))] });
       setSelected({ kind: 'group', id: group.id });
     } else {
-      const entry = { ...createEntryDraft(parentId, order, preset.entries, kind === 'reference' ? 'reference' : 'standard'), title: kind === 'reference' ? '新建引用条目' : '新建提示词' };
+      const entry = { ...createEntryDraft(parentId, order, preset.entries, kind === 'reference' ? 'reference' : 'prompt'), title: kind === 'reference' ? '新建引用条目' : '新建提示词' };
       onChange({ ...preset, entries: [...preset.entries, entry] });
       setSelected({ kind: 'entry', id: entry.id });
     }

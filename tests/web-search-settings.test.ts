@@ -38,25 +38,19 @@ describe('web search settings', () => {
     expect(settings.saveTavilyApiKey('tvly-secret')).toEqual({
       mode: 'tavily', apiKeyConfigured: true, maxResults: 8
     })
-    expect(database.native.prepare('SELECT payloadJson FROM global_tool_config WHERE singletonId = 1').get())
-      .not.toMatchObject({ payloadJson: expect.stringContaining('tvly-secret') })
+    expect(database.native.prepare('SELECT tavilyApiKey FROM web_search_settings WHERE singletonId = 1').get())
+      .not.toMatchObject({ tavilyApiKey: expect.stringContaining('tvly-secret') })
     expect(settings.runtimeSettings()).toEqual({ mode: 'tavily', maxResults: 8, tavilyApiKey: 'tvly-secret' })
     expect(settings.removeTavilyApiKey().apiKeyConfigured).toBe(false)
   })
 
-  it('updates only the web-search slice of the shared global tool configuration', () => {
+  it('persists only the current web-search fields', () => {
     const { database, settings } = repository()
     settings.update({ mode: 'provider_native', maxResults: 5 })
-    database.native.prepare('UPDATE global_tool_config SET payloadJson = ? WHERE singletonId = 1')
-      .run(JSON.stringify({ version: 1, futureTool: { enabled: true }, webSearch: { mode: 'provider_native', maxResults: 5, tavilyApiKey: '' } }))
-
     settings.update({ mode: 'tavily', maxResults: 3 })
 
-    const row = database.native.prepare('SELECT payloadJson FROM global_tool_config WHERE singletonId = 1').get() as { payloadJson: string }
-    expect(JSON.parse(row.payloadJson)).toMatchObject({
-      futureTool: { enabled: true },
-      webSearch: { mode: 'tavily', maxResults: 3 }
-    })
+    expect(database.native.prepare('SELECT mode,maxResults,tavilyApiKey FROM web_search_settings WHERE singletonId = 1').get())
+      .toEqual({ mode: 'tavily', maxResults: 3, tavilyApiKey: '' })
   })
 
   it('tests Tavily through the usage endpoint without exposing the key in results', async () => {

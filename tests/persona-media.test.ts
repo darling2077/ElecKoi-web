@@ -46,6 +46,35 @@ function harness() {
 }
 
 describe('persona media persistence and cleanup', () => {
+  it('uses the current user profile when an existing conversation snapshot has no user fields', () => {
+    const { database, conversations, personas, characters } = harness()
+    personas.save({
+      assistant_name: '', assistant_avatar: '', assistant_square: '', assistant_cover: '', opening: '', show_opening: false,
+      user_name: '测试用户', user_avatar: '', user_square: '', user_portrait: '', user_cover: ''
+    })
+    characters.create({
+      id: 'character-a', name: '角色 A', avatar: '', group: '',
+      persona: {
+        assistant_name: '角色 A', assistant_avatar: '', assistant_square: '', assistant_cover: '',
+        image_prompt: '', opening: '', show_opening: false,
+        user_name: '', user_avatar: '', user_square: '', user_portrait: ''
+      }
+    })
+    const conversation = conversations.create({
+      metadata: {
+        characterId: 'character-a',
+        characterName: '角色 A',
+        characterAvatar: '',
+        characterPersona: { assistant_name: '角色 A' }
+      }
+    }).conversation
+
+    const metadata = conversations.getMetadata(conversation.id)
+    expect(metadata.characterPersona.user_name).toBe('测试用户')
+    expect(database.native.prepare('SELECT personaJson FROM chat_session_character_snapshots WHERE sessionId = ?')
+      .get(conversation.id)).toEqual({ personaJson: '{"assistant_name":"角色 A"}' })
+  })
+
   it('externalizes user and character images and replaces every live snapshot reference', () => {
     const { database, media, conversations, messages, characters, personas } = harness()
     const oldUser = image('old-user')

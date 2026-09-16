@@ -5,6 +5,7 @@ import { TrajectoryDialog } from "./TrajectoryDialog.jsx";
 import { VariableViewerDialog } from "./VariableViewerDialog.jsx";
 import { AgentToolsDialog } from "./AgentToolsDialog.jsx";
 import { MessageBubble } from "../../../ui/messages/MessageBubble.jsx";
+import { ConfirmationDialog } from "../../../ui/ui/ConfirmationDialog.jsx";
 import logoIcon from "../../../assets/eleckoi-app-icon.png";
 import { DshNewChatIcon } from "../../../ui/icons/dshComposerIcons.jsx";
 import { ImageSquare, Path, SlidersHorizontal } from "@phosphor-icons/react";
@@ -35,7 +36,6 @@ export function ChatPanel({
   modelConfigs,
   selectedModelConfigId,
   selectedModel,
-  modelParameters,
   modelOptionsByKey,
   onLoadModelOptions,
   onSelectModel,
@@ -48,6 +48,7 @@ export function ChatPanel({
   onOpenChatBackground,
   onOpenPresetTools,
   onRegenerate,
+  onDeleteMessages,
   onEditMessage,
   onEditOpening,
   onSelectOpening,
@@ -69,6 +70,10 @@ export function ChatPanel({
   const [imageDragActive, setImageDragActive] = useState(false);
   const [messageScrollElement, setMessageScrollElement] = useState(null);
   const [generationStats, setGenerationStats] = useState(null);
+  const [deleteMode, setDeleteMode] = useState(false);
+  const [deleteFromMessageId, setDeleteFromMessageId] = useState("");
+  const [deletingMessages, setDeletingMessages] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const headerMenuRef = useRef(null);
   const imageDragDepthRef = useRef(0);
   const previousMessageScrollTopRef = useRef(null);
@@ -81,6 +86,24 @@ export function ChatPanel({
   useEffect(() => {
     previousMessageScrollTopRef.current = null;
   }, [scrollRequest.revision]);
+
+  useEffect(() => {
+    setDeleteMode(false);
+    setDeleteFromMessageId("");
+    setDeletingMessages(false);
+    setDeleteConfirmationOpen(false);
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!deleteMode || deleteConfirmationOpen) return undefined;
+    const cancelDelete = (event) => {
+      if (event.key !== "Escape" || deletingMessages) return;
+      setDeleteMode(false);
+      setDeleteFromMessageId("");
+    };
+    window.addEventListener("keydown", cancelDelete);
+    return () => window.removeEventListener("keydown", cancelDelete);
+  }, [deleteConfirmationOpen, deleteMode, deletingMessages]);
 
   useEffect(() => {
     if (!headerMenuOpen) return undefined;
@@ -111,7 +134,7 @@ export function ChatPanel({
 
   const openingMessage = messages.find((item) => item.id === "opening" && item.openingOptions?.length > 1);
   useEffect(() => {
-    if (!openingMessage || isSending || String(input || "").length || processMessage || headerMenuOpen) return undefined;
+    if (!openingMessage || isSending || deleteMode || String(input || "").length || processMessage || headerMenuOpen) return undefined;
     const options = openingMessage.openingOptions || [];
     const selectedIndex = options.findIndex((item) => item.id === openingMessage.selectedOpeningId);
     const switchOpening = (event) => {
@@ -133,7 +156,7 @@ export function ChatPanel({
     };
     window.addEventListener("keydown", switchOpening);
     return () => window.removeEventListener("keydown", switchOpening);
-  }, [headerMenuOpen, input, isSending, onSelectOpening, openingMessage, processMessage]);
+  }, [deleteMode, headerMenuOpen, input, isSending, onSelectOpening, openingMessage, processMessage]);
 
   if (!hasActiveChat) {
     return (
@@ -179,6 +202,38 @@ export function ChatPanel({
     onOpenChatBackground?.();
   }
 
+  function enterDeleteMode(event) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    if (isSending || displayedMessages.length === 0) return;
+    setHeaderMenuOpen(false);
+    setProcessMessage(null);
+    setDeleteFromMessageId("");
+    setDeleteMode(true);
+  }
+
+  function cancelDeleteMode() {
+    if (deletingMessages) return;
+    setDeleteMode(false);
+    setDeleteFromMessageId("");
+    setDeleteConfirmationOpen(false);
+  }
+
+  async function confirmDeleteMessages() {
+    if (!deleteFromMessageId || deletingMessages) return;
+    setDeletingMessages(true);
+    const deleted = await onDeleteMessages?.(deleteFromMessageId);
+    if (deleted !== false) {
+      setDeleteMode(false);
+      setDeleteFromMessageId("");
+      setDeleteConfirmationOpen(false);
+    }
+    setDeletingMessages(false);
+  }
+
+  const deleteFromIndex = displayedMessages.findIndex((message) => message.id === deleteFromMessageId);
+  const selectedDeleteCount = deleteFromIndex < 0 ? 0 : displayedMessages.length - deleteFromIndex;
+
   function receiveImages(files) {
     try {
       Promise.resolve(onAddImages?.(files)).catch((error) => onNotify?.("error", error?.message || "图片添加失败"));
@@ -193,7 +248,7 @@ export function ChatPanel({
 
   return (
     <section
-      className={`chat-panel layout-${layoutMode}${profile?.assistant_bubble_enabled ? " assistant-bubble-enabled" : ""}`}
+      className={`chat-panel layout-${layoutMode}${profile?.assistant_bubble_enabled ? " assistant-bubble-enabled" : ""}${deleteMode ? " message-delete-mode" : ""}`}
       style={displayStyle}
       onDragEnter={(event) => {
         if (!hasFileDrag(event)) return;
@@ -285,12 +340,29 @@ export function ChatPanel({
           onEditOpening={onEditOpening}
           onSelectOpening={onSelectOpening}
           onRegenerate={onRegenerate}
+          deleteMode={deleteMode}
+          deleteFromMessageId={deleteFromMessageId}
+          onSelectDeleteFrom={setDeleteFromMessageId}
         />
       </div>
 
       <div className="chat-composer-region">
-        {isSending ? <div className="chat-waiting-slot"><ChatWaitingReply /></div> : null}
-        <ChatComposer
+        {deleteMode ? (
+          <div className="chat-message-delete-bar" aria-label="删除消息">
+            <button
+              className="delete-confirm"
+              type="button"
+              disabled={!deleteFromMessageId || deletingMessages}
+              onClick={() => setDeleteConfirmationOpen(true)}
+            >
+              {deletingMessages ? "删除中" : "删除"}
+            </button>
+            <button type="button" disabled={deletingMessages} onClick={cancelDeleteMode}>取消</button>
+          </div>
+        ) : (
+          <>
+            {isSending ? <div className="chat-waiting-slot"><ChatWaitingReply /></div> : null}
+            <ChatComposer
           input={input}
           setInput={setInput}
           inputImages={inputImages}
@@ -300,7 +372,6 @@ export function ChatPanel({
           modelConfigs={modelConfigs}
           selectedModelConfigId={selectedModelConfigId}
           selectedModel={selectedModel}
-          modelParameters={modelParameters}
           modelOptionsByKey={modelOptionsByKey}
           onLoadModelOptions={onLoadModelOptions}
           onSelectModel={onSelectModel}
@@ -312,12 +383,16 @@ export function ChatPanel({
           onOpenHistory={onOpenHistory}
           onOpenTools={() => setToolsOpen(true)}
           onOpenVariables={() => setVariablesOpen(true)}
+          onEnterDeleteMode={enterDeleteMode}
+          canDeleteMessages={displayedMessages.length > 0}
           onRegenerate={onRegenerate}
           regenerateTargetMessageId={regenerateTargetMessageId}
           composerStyle={composerStyle}
           generationStats={generationStats}
           showGenerationStats={chatDisplay?.generation_stats_enabled !== false}
-        />
+            />
+          </>
+        )}
       </div>
       {imageDragActive ? (
         <div className="chat-image-drop-overlay" role="status" aria-live="polite">
@@ -348,6 +423,16 @@ export function ChatPanel({
         onManage={onOpenPresetTools}
         onNotify={onNotify}
       /> : null}
+      <ConfirmationDialog
+        open={deleteConfirmationOpen}
+        title="删除这些消息？"
+        description={`将删除选中消息及其后的全部内容，共 ${selectedDeleteCount} 条。相关变量、设定状态、工具调用和媒体记录也会一起回退或清理。`}
+        confirmLabel="删除消息"
+        destructive
+        busy={deletingMessages}
+        onCancel={() => setDeleteConfirmationOpen(false)}
+        onConfirm={confirmDeleteMessages}
+      />
     </section>
   );
 }
@@ -368,6 +453,9 @@ function VirtualizedMessageList({
   onEditOpening,
   onSelectOpening,
   onRegenerate,
+  deleteMode,
+  deleteFromMessageId,
+  onSelectDeleteFrom,
 }) {
   const activeMessageIndex = messages.findIndex((message) => message.pending);
   const getItemKey = useCallback(
@@ -391,13 +479,16 @@ function VirtualizedMessageList({
     scrollEndThreshold: 96,
     rangeExtractor,
   });
+  const deleteFromIndex = deleteMode
+    ? messages.findIndex((message) => message.id === deleteFromMessageId)
+    : -1;
 
   useLayoutEffect(() => {
     if (!scrollElement) return undefined;
     virtualizer.measure();
     const frame = window.requestAnimationFrame(() => virtualizer.measure());
     return () => window.cancelAnimationFrame(frame);
-  }, [scrollElement, virtualizer]);
+  }, [deleteMode, scrollElement, virtualizer]);
 
   useLayoutEffect(() => {
     if (!scrollRequest.revision) return undefined;
@@ -411,6 +502,7 @@ function VirtualizedMessageList({
     <div className="message-virtualizer" style={{ height: `${virtualizer.getTotalSize()}px` }}>
       {virtualizer.getVirtualItems().map((virtualItem) => {
         const item = messages[virtualItem.index];
+        const selectedForDelete = deleteFromIndex >= 0 && virtualItem.index >= deleteFromIndex;
         const nextRole = messages[virtualItem.index + 1]?.role;
         const spacingAfter = nextRole
           ? layoutMode === "agent" && item.role === "user" && nextRole === "assistant"
@@ -428,7 +520,27 @@ function VirtualizedMessageList({
               transform: `translateY(${virtualItem.start}px)`,
             }}
           >
-            <MessageBubble
+            {deleteMode ? (
+              <div className={`message-delete-selection-row layout-${layoutMode}${selectedForDelete ? " is-selected" : ""}`}>
+                <input
+                  className="message-delete-checkbox"
+                  type="checkbox"
+                  checked={selectedForDelete}
+                  aria-label={`从这条消息开始删除${selectedForDelete ? "，已选中" : ""}`}
+                  onChange={() => onSelectDeleteFrom(item.id)}
+                />
+                <MessageBubble
+                  message={item}
+                  avatar={item.role === "user" ? userAvatar : assistantAvatar}
+                  name={item.role === "user" ? userName : assistantName}
+                  layoutMode={layoutMode}
+                  avatarShape={avatarShape}
+                  onOpenProcess={onOpenProcess}
+                  onSelectOpening={onSelectOpening}
+                />
+              </div>
+            ) : (
+              <MessageBubble
               message={item}
               avatar={item.role === "user" ? userAvatar : assistantAvatar}
               name={item.role === "user" ? userName : assistantName}
@@ -438,7 +550,8 @@ function VirtualizedMessageList({
               onEdit={item.id === "opening" ? onEditOpening : onEditMessage}
               onSelectOpening={onSelectOpening}
               onRegenerate={(message) => onRegenerate?.({ targetMessageId: message.id })}
-            />
+              />
+            )}
           </div>
         );
       })}

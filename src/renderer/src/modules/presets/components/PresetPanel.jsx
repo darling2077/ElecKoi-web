@@ -26,7 +26,7 @@ import { PresetPromptEditor } from './PresetPromptEditor.jsx';
 import { PresetRegexEditor } from './PresetRegexEditor.jsx';
 import { PresetToolsEditor } from './PresetToolsEditor.jsx';
 import { PresetManager } from './PresetManager.jsx';
-import { downloadPresetJson, fileBase64, PresetImportDialog } from './PresetTransfer.jsx';
+import { downloadPresetFile, fileBase64, PresetImportDialog } from './PresetTransfer.jsx';
 
 const PresetContext = createContext(null);
 const ALL_PRESETS = '全部预设';
@@ -121,7 +121,7 @@ export function PresetListPanel() {
     return presets.filter((preset) => !key || `${preset.name} ${preset.profile.authorName} ${preset.profile.usageInstructions}`.toLocaleLowerCase().includes(key));
   }, [keyword, presets]);
   const sections = useMemo(() => buildPresetListSections(groups, filtered), [filtered, groups]);
-  const [collapsed, setCollapsed] = usePersistentCollapseState(
+  const [collapsed, setCollapsed, collapseStateReady] = usePersistentCollapseState(
     LIST_COLLAPSE_AREAS.presets,
     {},
     catalog ? sections.map((section) => section.id) : undefined,
@@ -201,15 +201,11 @@ export function PresetListPanel() {
     });
   }
 
-  async function exportSelectedPreset() {
+  async function exportSelectedPreset(format) {
     if (!selectedPresetId) return;
-    try {
-      setImportError('');
-      const result = await exportPreset(selectedPresetId);
-      downloadPresetJson(result.fileName, result.json);
-    } catch (cause) {
-      setImportError(cause?.message || '导出预设失败');
-    }
+    setImportError('');
+    const result = await exportPreset(selectedPresetId, format);
+    downloadPresetFile(result);
   }
 
   function activateFromList(preset) {
@@ -273,7 +269,7 @@ export function PresetListPanel() {
     <input ref={importInputRef} type="file" accept="image/png,application/json,.png,.json" hidden onChange={handleImport} />
     <button type="button" className="character-manager-entry preset-manager-entry" onClick={() => { if (navigationGuard.current) navigationGuard.current(() => setManagerOpen(true)); else setManagerOpen(true); }}><CharacterManagerIcon /><span>预设管理器</span></button>
     <div className="character-list-scroll preset-list-scroll">
-      {sections.map(renderGroup)}
+      {collapseStateReady ? sections.map(renderGroup) : null}
       {shouldShowPresetCatalogLoading(catalog, error) ? <p className="preset-list-state">正在读取…</p> : null}
       {error || importError ? <p className="preset-list-state is-error">{error || importError}</p> : null}
     </div>
@@ -292,7 +288,7 @@ export function PresetListPanel() {
       onClose={() => setManagerOpen(false)}
       onRefresh={refresh}
       onImport={beginImport}
-      onExport={() => void exportSelectedPreset()}
+      onExport={exportSelectedPreset}
       importing={importing}
       importError={importError}
     /> : null}
@@ -303,7 +299,7 @@ export function PresetListPanel() {
 export function PresetListRow({ preset, selected, active, onClick, onContextMenu }) {
   return <button type="button" className={`character-contact-row preset-list-row${selected ? ' active' : ''}`} onClick={onClick} onContextMenu={onContextMenu}>
     <Avatar src={preset.profile.authorAvatarPath || defaultPresetAvatar} name={preset.name} className="preset-list-avatar" />
-    <span className="character-contact-copy"><strong>{preset.name}</strong><span>{preset.profile.authorName || `${preset.entryCount} 条提示词`}</span></span>
+    <span className="character-contact-copy"><strong>{preset.name}</strong></span>
     {active ? <span className="preset-list-status">使用中</span> : null}
   </button>;
 }

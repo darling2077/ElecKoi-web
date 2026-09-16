@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar } from '../../../ui/ui/Avatar.jsx';
 import { DshSearchField } from '../../../ui/ui/DshSearchField.jsx';
 import { ExportIcon, ImportIcon, PencilIcon, PlusIcon, TrashIcon, XIcon } from '../../../ui/icons/index.jsx';
@@ -16,6 +16,11 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
   const [deleteMode, setDeleteMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
   const [error, setError] = useState('');
+  const [exportOpen, setExportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState('');
+  const exportControlRef = useRef(null);
+  const exportMenuRef = useRef(null);
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const visible = useMemo(() => {
     const key = keyword.trim().toLocaleLowerCase();
@@ -39,6 +44,26 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
       window.removeEventListener('keydown', closeGroupMenu);
     };
   }, []);
+
+  useEffect(() => {
+    function closeExportMenu(event) {
+      if (event.type === 'keydown') {
+        if (event.key !== 'Escape') return;
+      } else if (exportControlRef.current?.contains(event.target)) return;
+      setExportOpen(false);
+      setExportError('');
+    }
+    window.addEventListener('pointerdown', closeExportMenu);
+    window.addEventListener('keydown', closeExportMenu);
+    return () => {
+      window.removeEventListener('pointerdown', closeExportMenu);
+      window.removeEventListener('keydown', closeExportMenu);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (exportOpen) exportMenuRef.current?.querySelector('button')?.focus();
+  }, [exportOpen]);
 
   function openGroupMenu(event, group) {
     event.preventDefault();
@@ -107,6 +132,20 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
     } catch (cause) { setError(cause?.message || '删除预设失败'); }
   }
 
+  async function exportPreset(format) {
+    if (exporting || !selectedPresetId) return;
+    setExporting(true);
+    setExportError('');
+    try {
+      await onExport(format);
+      setExportOpen(false);
+    } catch (cause) {
+      setExportError(cause?.message || '导出预设失败');
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return <div className="preset-manager-overlay" role="presentation" onMouseDown={onClose}>
     <section className="preset-manager-window" role="dialog" aria-modal="true" aria-label="预设管理器" onMouseDown={(event) => event.stopPropagation()}>
       <aside className="preset-manager-groups">
@@ -121,7 +160,14 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
           <DshSearchField className="preset-manager-search" value={keyword} onValueChange={setKeyword} placeholder="搜索预设…" ariaLabel="搜索预设" />
           {!deleteMode ? <>
             <button type="button" disabled={importing} onClick={onImport}><ImportIcon /><span>导入预设</span></button>
-            <button type="button" disabled={!selectedPresetId} onClick={onExport}><ExportIcon /><span>导出预设</span></button>
+            <div className="preset-manager-export" ref={exportControlRef}>
+              <button type="button" disabled={!selectedPresetId} aria-haspopup="menu" aria-expanded={exportOpen} onClick={() => { setExportError(''); setExportOpen((current) => !current); }}><ExportIcon /><span>导出预设</span></button>
+              {exportOpen ? <div className="preset-manager-export-menu" ref={exportMenuRef} role="menu" aria-label="选择预设格式">
+                <button type="button" role="menuitem" disabled={exporting} onClick={() => void exportPreset('png')}>PNG 预设卡</button>
+                <button type="button" role="menuitem" disabled={exporting} onClick={() => void exportPreset('json')}>JSON 预设</button>
+                {exportError ? <span role="alert">{exportError}</span> : null}
+              </div> : null}
+            </div>
             <button type="button" onClick={() => setDeleteMode(true)}><TrashIcon /><span>删除</span></button>
           </> : <>
             <button className="preset-manager-confirm-delete" type="button" disabled={!selectedIds.length} onClick={() => void removeSelectedPresets()}>确认{selectedIds.length ? ` ${selectedIds.length}` : ''}</button>

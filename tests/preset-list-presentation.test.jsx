@@ -6,7 +6,7 @@ import { PresetPromptEditor, shouldConfirmHiddenTimelineDisable } from '../src/r
 import { PresetRegexEditor } from '../src/renderer/src/modules/presets/components/PresetRegexEditor.jsx';
 import { PresetToolsEditor } from '../src/renderer/src/modules/presets/components/PresetToolsEditor.jsx';
 import { PresetProfileHeader } from '../src/renderer/src/modules/presets/components/PresetProfileHeader.jsx';
-import { buildPresetListSections, presetListContextActions, shouldShowPresetCatalogLoading } from '../src/renderer/src/modules/presets/components/PresetPanel.jsx';
+import { buildPresetListSections, PresetListRow, presetListContextActions, shouldShowPresetCatalogLoading } from '../src/renderer/src/modules/presets/components/PresetPanel.jsx';
 import { createEntryDraft } from '../src/renderer/src/modules/settingLibraries/model/settingLibraryEditing.js';
 import { SettingLibraryInspector } from '../src/renderer/src/modules/settingLibraries/components/SettingLibraryInspector.jsx';
 import { TrashIcon } from '../src/renderer/src/ui/icons/index.jsx';
@@ -27,6 +27,20 @@ describe('preset list consistency', () => {
     const source = readFileSync(new URL('../src/renderer/src/modules/presets/components/PresetPanel.jsx', import.meta.url), 'utf8');
     expect(source).toContain('<h2>Agent预设</h2>');
     expect(source).not.toContain('<h2>预设</h2>');
+  });
+
+  it('keeps preset rows to the preset name without an author or prompt-count summary', () => {
+    const html = renderToStaticMarkup(<PresetListRow
+      preset={{ ...preset, entryCount: 2, profile: { authorName: '作者简介', authorAvatarPath: '' } }}
+      selected={false}
+      active
+      onClick={() => {}}
+      onContextMenu={() => {}}
+    />);
+    expect(html).toContain('<strong>测试</strong>');
+    expect(html).toContain('使用中');
+    expect(html).not.toContain('作者简介');
+    expect(html).not.toContain('2 条提示词');
   });
 
   it('stops showing the loading row after an empty-group catalog is loaded', () => {
@@ -60,6 +74,15 @@ describe('preset list consistency', () => {
     expect(css).toMatch(/\.preset-manager-card-open\s*>\s*\.preset-manager-avatar\s*\{/);
     expect(css).not.toMatch(/\.preset-manager-card-open\s*>\s*span\s*\{/);
     expect(css).toMatch(/\.preset-manager-card-open\s*\{[^}]*width:\s*100%;/s);
+  });
+
+  it('offers PNG and JSON from the existing preset manager export control', () => {
+    const source = readFileSync(new URL('../src/renderer/src/modules/presets/components/PresetManager.jsx', import.meta.url), 'utf8');
+    expect(source).toContain('aria-haspopup="menu"');
+    expect(source).toContain('PNG 预设卡');
+    expect(source).toContain("exportPreset('png')");
+    expect(source).toContain('JSON 预设');
+    expect(source).toContain("exportPreset('json')");
   });
 
   it('uses the shared delete icon throughout preset surfaces', () => {

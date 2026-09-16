@@ -3,14 +3,12 @@
 export const name = 'eleckoi-tool-policy'
 export const inject = ['tools']
 
-const disabled = new Set(parseStringArray(process.env.ELECKOI_DISABLED_TOOL_GROUPS))
-
 export function apply(ctx) {
-  if (disabled.size === 0) return
-  return ctx.on('agent/created', ({ agent }) => applyDisabledPolicy(agent.ctx))
+  return undefined
 }
 
-export function applyDisabledPolicy(agentCtx) {
+export function applyDisabledPolicy(agentCtx, disabledGroupIds = []) {
+  const disabled = new Set(disabledGroupIds)
   if (disabled.size === 0) return
   const deniedNames = agentCtx.tools.schemas()
     .filter((declaration) => !isEssential(declaration) && disabled.has(classify(declaration)))
@@ -55,15 +53,6 @@ function isEssential(declaration) {
 
 function declarationName(declaration) {
   return string(declaration?.name) || string(declaration?.function?.name)
-}
-
-function parseStringArray(raw) {
-  try {
-    const value = JSON.parse(raw || '[]')
-    return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : []
-  } catch {
-    return []
-  }
 }
 
 function string(value) {

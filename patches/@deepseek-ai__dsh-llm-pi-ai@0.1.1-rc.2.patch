@@ -1,0 +1,25 @@
+diff --git a/lib/index.js b/lib/index.js
+index b819f847403e2bd76a7c04518da4652562a7a791..57dfe557758bb57fb575140089a9a99ebba0636b 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1738,6 +1738,7 @@ var PiAiAdapter = class extends LlmAdapter {
+ 				const iterator = toStreamChunks(snapshot.models.streamSimple(model, context, {
+ 					...profileOptions(profile, reasoning, apiKey),
+ 					...options.temperature === void 0 ? {} : { temperature: options.temperature },
++					...options.topP === void 0 ? {} : { topP: options.topP },
+ 					...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens },
+ 					...options.sessionId === void 0 ? {} : { sessionId: String(options.sessionId) },
+ 					signal: watchdog.signal,
+diff --git a/package.json b/package.json
+index 439f34c10ccf6821530e708fd6d5cee8c41171cb..b465c6aa865b4b1061b4bcc9c2451725a48fda05 100644
+--- a/package.json
++++ b/package.json
+@@ -43,7 +43,7 @@
+     "@deepseek-ai/dsh-attachment": "^0.1.1-rc.2"
+   },
+   "dependencies": {
+-    "@earendil-works/pi-ai": "^0.82.1",
++    "@earendil-works/pi-ai": "0.85.1",
+     "@deepseek-ai/schemastery": "^3.18.1"
+   },
+   "devDependencies": {

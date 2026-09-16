@@ -9,11 +9,6 @@ export function selectionFromActiveSetting(stored = {}) {
     capability: stored.capability || "chat",
     configId: stored.config_id || "",
     model: stored.model || "",
-    parameters: {
-      stream: stored.parameters?.stream ?? true,
-      temperature: stored.parameters?.temperature ?? 1,
-      topP: stored.parameters?.top_p ?? 1,
-    },
   });
 }
 
@@ -29,37 +24,21 @@ export function reconcileModelSelection(selection, modelConfigs = []) {
     model: current.configId === fallback.id && (selectedModelExists || availableModels.length === 0) && current.model
       ? current.model
       : fallback.model || availableModels[0]?.id || "",
-    parameters: current.parameters,
   };
 }
 
-export function normalizeModelSelection(nextSelection, fallbackParameters = {}) {
+export function normalizeModelSelection(nextSelection) {
   return {
     capability: nextSelection.capability || "chat",
     configId: nextSelection.configId || "",
     model: nextSelection.model || "",
-    parameters: normalizeParameters(nextSelection.parameters || fallbackParameters),
   };
 }
 
 export function toActiveModelSelection(selection) {
-  const parameters = normalizeParameters(selection.parameters);
   return {
     capability: "chat",
     config_id: selection.configId || "",
     model: selection.model || "",
-    parameters: {
-      stream: parameters.stream,
-      temperature: parameters.temperature,
-      top_p: parameters.topP,
-    },
-  };
-}
-
-function normalizeParameters(parameters = {}) {
-  return {
-    stream: parameters.stream ?? true,
-    temperature: parameters.temperature ?? 1,
-    topP: parameters.topP ?? 1,
   };
 }

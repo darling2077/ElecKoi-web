@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   AUTHOR_API_VERSION,
   AuthorBridgeRequestGate,
-  inlineMessageInteractivePermissions,
+  characterConversationPermissions,
   routeAuthorApiRequest
 } from '@eleckoi/author-sdk'
 import {
@@ -25,27 +25,33 @@ function request(method: string, params: Record<string, unknown> = {}) {
 }
 
 describe('author SDK routing', () => {
-  it('allows the inline read surface but rejects an unauthorized write before invoking native code', async () => {
+  it('allows current-story writes but rejects methods outside the current character conversation API', async () => {
     const invoked: string[] = []
     const allowed = JSON.parse(await routeAuthorApiRequest(
       request('variables.getState'),
-      inlineMessageInteractivePermissions,
+      characterConversationPermissions,
       (method) => { invoked.push(method); return { value: 1 } }
     )) as { ok: boolean; result: unknown }
+    const writable = JSON.parse(await routeAuthorApiRequest(
+      request('variables.setState', { state: { hp: 9 } }),
+      characterConversationPermissions,
+      (method) => { invoked.push(method); return { hp: 9 } }
+    )) as { ok: boolean; result: unknown }
     const denied = JSON.parse(await routeAuthorApiRequest(
-      request('variables.setState', { state: {} }),
-      inlineMessageInteractivePermissions,
+      request('characters.delete', { id: 'other-character' }),
+      characterConversationPermissions,
       (method) => { invoked.push(method) }
     )) as { ok: boolean; error: { code: string } }
     expect(allowed).toMatchObject({ ok: true, result: { value: 1 } })
-    expect(denied).toMatchObject({ ok: false, error: { code: 'PERMISSION_DENIED' } })
-    expect(invoked).toEqual(['variables.getState'])
+    expect(writable).toMatchObject({ ok: true, result: { hp: 9 } })
+    expect(denied).toMatchObject({ ok: false, error: { code: 'METHOD_NOT_FOUND' } })
+    expect(invoked).toEqual(['variables.getState', 'variables.setState'])
   })
 
   it('bounds request size, concurrency and rate without leaking acquired slots', () => {
     let time = 0
     const gate = new AuthorBridgeRequestGate(8, 1, 2, 100, () => time)
-    expect(gate.tryAcquire('123456789')).toBe('BRIDGE_REQUEST_TOO_LARGE')
+    expect(gate.tryAcquire('x'.repeat(9))).toBe('BRIDGE_REQUEST_TOO_LARGE')
     expect(gate.tryAcquire('one')).toBeNull()
     expect(gate.tryAcquire('two')).toBe('BRIDGE_BUSY')
     gate.release()

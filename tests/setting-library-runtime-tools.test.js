@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,8 +7,7 @@ import { apply as applySettingLibraryTools } from "../resources/dsh/setting-libr
 const directories = [];
 
 afterEach(() => {
-  delete process.env.ELECKOI_SETTING_LIBRARY_ENABLED;
-  delete process.env.ELECKOI_SETTING_LIBRARY_STATE_FILE;
+  delete process.env.ELECKOI_SESSION_SNAPSHOT_ROOT;
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
@@ -34,11 +33,24 @@ async function tools({ extraEntries = [], history = [], variableState = {} } = {
     history,
     variableState,
   }, null, 2));
-  process.env.ELECKOI_SETTING_LIBRARY_ENABLED = "1";
-  process.env.ELECKOI_SETTING_LIBRARY_STATE_FILE = file;
+  const sessionId = "setting-tool-test-session";
+  const snapshotRoot = join(directory, "session-snapshots");
+  mkdirSync(snapshotRoot);
+  writeFileSync(join(snapshotRoot, `${sessionId}.json`), JSON.stringify({
+    settingStateFile: file,
+    settingLibraryEnabled: true,
+  }));
+  process.env.ELECKOI_SESSION_SNAPSHOT_ROOT = snapshotRoot;
   const registered = [];
   applySettingLibraryTools({ tools: { register: (definition) => { registered.push(definition); return () => undefined; } } });
-  return { file, byName: new Map(registered.map((definition) => [definition.name, definition])) };
+  const execution = { agent: { session: { id: sessionId } } };
+  return {
+    file,
+    byName: new Map(registered.map((definition) => [definition.name, {
+      ...definition,
+      execute: (args) => definition.execute(args, execution),
+    }])),
+  };
 }
 
 function entry(overrides) {

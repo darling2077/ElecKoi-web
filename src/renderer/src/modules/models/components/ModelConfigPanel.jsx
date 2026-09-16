@@ -19,6 +19,7 @@ import {
 } from "../model/modelConfigDraft.js";
 import { useModelConnectionTest } from "../hooks/useModelConnectionTest.js";
 import { useModelProviderDeletion } from "../hooks/useModelProviderDeletion.js";
+import { useModelCapabilities } from "../hooks/useModelCapabilities.js";
 import { ModelConfigDetail } from "./ModelConfigDetail.jsx";
 import { ModelConnectionTestDialog } from "./ModelConnectionTestDialog.jsx";
 import { ModelProviderDeleteDialog } from "./ModelProviderDeleteDialog.jsx";
@@ -42,7 +43,7 @@ export const ModelConfigPanel = forwardRef(function ModelConfigPanel({
   renderLayout,
 }, ref) {
   const [form, setForm] = useState(config);
-  const [collapsedGroups, setCollapsedGroups] = usePersistentCollapseState(
+  const [collapsedGroups, setCollapsedGroups, collapseStateReady] = usePersistentCollapseState(
     LIST_COLLAPSE_AREAS.models,
     { general: false },
     modelProviderSections.map((section) => section.id),
@@ -164,6 +165,7 @@ export const ModelConfigPanel = forwardRef(function ModelConfigPanel({
     [activeProviderId, form],
   );
   const imageParameterError = useMemo(() => isImageProvider ? imageSettingsError(form) : "", [form, isImageProvider]);
+  const modelCapabilities = useModelCapabilities(form, form.model);
   const saveBlockedByParameters = isImageProvider ? Boolean(imageParameterError) : Boolean(parameterError);
   const providerDeletion = useModelProviderDeletion({
     activeProviderId,
@@ -233,7 +235,7 @@ export const ModelConfigPanel = forwardRef(function ModelConfigPanel({
       const index = items.findIndex((item) => item.id === modelId);
       const base = index >= 0
         ? items[index]
-        : { id: modelId, name: modelId, isUserAdded: true, temperature: 1, topP: 1, supportsImageInput: false };
+        : { id: modelId, name: modelId, isUserAdded: true, temperature: null, topP: null, supportsImageInput: false };
       const nextOption = { ...base, ...patch, id: modelId, name: base.name || modelId };
       if (index >= 0) items[index] = nextOption;
       else items.push(nextOption);
@@ -260,8 +262,8 @@ export const ModelConfigPanel = forwardRef(function ModelConfigPanel({
             id,
             name: id,
             isUserAdded: true,
-            temperature: 1,
-            topP: 1,
+            temperature: null,
+            topP: null,
             supportsImageInput: false,
           }],
     };
@@ -534,6 +536,7 @@ export const ModelConfigPanel = forwardRef(function ModelConfigPanel({
       createProviderItems={createProviderItems}
       activeProviderId={activeProviderId}
       collapsedGroups={collapsedGroups}
+      collapseStateReady={collapseStateReady}
       onToggle={toggleGroup}
       onSelect={selectProvider}
       onCreate={createConfigPlaceholder}
@@ -558,7 +561,7 @@ export const ModelConfigPanel = forwardRef(function ModelConfigPanel({
       manualModelName, setManualModelName, addManualModel, connectionTest, testingConnection, testConnection, updateField,
     }}
     parameterEditor={{
-      form, imageParameterError, activeModelOption, automaticContextWindow, effectiveContextWindow, parameterError,
+      form, imageParameterError, activeModelOption, automaticContextWindow, effectiveContextWindow, parameterError, modelCapabilities,
       onUpdateImageSettings: (settings) => updateField("image_settings", settings),
       onUpdateModelOption: updateActiveModelOption,
     }}

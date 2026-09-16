@@ -14,8 +14,7 @@ export const conversationMetadataSchema = z.object({
   characterId: z.string(),
   characterName: z.string(),
   characterAvatar: z.string(),
-  characterPersona: recordSchema,
-  modelSettings: recordSchema
+  characterPersona: recordSchema
 })
 
 export const agentProcessItemSchema = z.object({

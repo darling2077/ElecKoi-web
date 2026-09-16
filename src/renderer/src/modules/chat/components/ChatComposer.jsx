@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { DshNewChatIcon, DshRefreshIcon, DshSendIcon, DshStopIcon } from "../../../ui/icons/dshComposerIcons.jsx";
 import { ChatHistoryIcon, MenuIcon, PictureFrameIcon, PlugIcon } from "../../../ui/icons/openSourceIcons.jsx";
+import { TrashIcon } from "../../../ui/icons/index.jsx";
 import { Database } from "@phosphor-icons/react";
 import { ChatModelPicker } from "./ChatModelPicker.jsx";
 import { ChatImageGallery } from "./ChatImageGallery.jsx";
@@ -16,7 +17,6 @@ export function ChatComposer({
   modelConfigs,
   selectedModelConfigId,
   selectedModel,
-  modelParameters,
   modelOptionsByKey,
   onLoadModelOptions,
   onSelectModel,
@@ -28,6 +28,8 @@ export function ChatComposer({
   onOpenHistory,
   onOpenTools,
   onOpenVariables,
+  onEnterDeleteMode,
+  canDeleteMessages = false,
   onRegenerate,
   regenerateTargetMessageId,
   composerStyle = "glass",
@@ -146,6 +148,15 @@ export function ChatComposer({
                     <DshNewChatIcon size={18} />
                     <span>新建对话</span>
                   </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={isSending || !canDeleteMessages}
+                    onClick={() => runMenuAction(onEnterDeleteMode)}
+                  >
+                    <TrashIcon size={18} />
+                    <span>删除消息</span>
+                  </button>
                   <i aria-hidden="true" />
                   <button
                     type="button"
@@ -166,7 +177,6 @@ export function ChatComposer({
               configs={modelConfigs}
               selectedConfigId={selectedModelConfigId}
               selectedModel={selectedModel}
-              modelParameters={modelParameters}
               modelOptionsByKey={modelOptionsByKey}
               onLoadModels={onLoadModelOptions}
               onSelect={onSelectModel}

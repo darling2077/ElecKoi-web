@@ -1,0 +1,50 @@
+diff --git a/lib/index.js b/lib/index.js
+index 61e6d90e7da02099362ba0b74e8c4c80d095a4e5..9d616864c3384702a9bdf21dfe1e5efd2ce0bf86 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -66,7 +66,7 @@ const AGENT_LOOP_REQUESTS = /* @__PURE__ */ new WeakSet();
+ * @returns whether every field (including the `stop` list, element-wise) matches.
+ */
+ function callConfigEquals(a, b) {
+-	if (a.provider !== b.provider || a.model !== b.model || a.reasoningEffort !== b.reasoningEffort || a.temperature !== b.temperature || a.maxTokens !== b.maxTokens) return false;
++	if (a.provider !== b.provider || a.model !== b.model || a.reasoningEffort !== b.reasoningEffort || a.temperature !== b.temperature || a.topP !== b.topP || a.maxTokens !== b.maxTokens) return false;
+ 	if (a.stop === void 0 || b.stop === void 0) return a.stop === b.stop;
+ 	return a.stop.length === b.stop.length && a.stop.every((s, i) => s === b.stop?.[i]);
+ }
+diff --git a/lib/types/call-config.d.ts b/lib/types/call-config.d.ts
+index b157e27d6f4e64190c5d0a3ab9c27c9ad4e4b6b3..2ad3d1250830b79d7e6aeb7ea0a82fbce80634bd 100644
+--- a/lib/types/call-config.d.ts
++++ b/lib/types/call-config.d.ts
+@@ -18,6 +18,7 @@ export interface LlmCallConfig {
+     model: string;
+     reasoningEffort?: ReasoningEffortId;
+     temperature?: number;
++    topP?: number;
+     maxTokens?: number;
+     stop?: string[];
+ }
+diff --git a/lib/types/call-config.js b/lib/types/call-config.js
+index 75b0874d14f31e02f4bb3bf8d76208d883657be9..6f1a323d1634d219987ec8599a6300e6d085494f 100644
+--- a/lib/types/call-config.js
++++ b/lib/types/call-config.js
+@@ -20,6 +20,7 @@ export function callConfigEquals(a, b) {
+         || a.model !== b.model
+         || a.reasoningEffort !== b.reasoningEffort
+         || a.temperature !== b.temperature
++        || a.topP !== b.topP
+         || a.maxTokens !== b.maxTokens)
+         return false;
+     if (a.stop === undefined || b.stop === undefined)
+diff --git a/lib/types/types.d.ts b/lib/types/types.d.ts
+index 66c50682a7b3aa9af0131a6ec0e6359892c1d848..8d5d54f45ffc408417b22981f635fab2423a84d0 100644
+--- a/lib/types/types.d.ts
++++ b/lib/types/types.d.ts
+@@ -346,6 +346,8 @@ export interface GenerateOptions {
+     /** Tool schemas (adapters map to the provider's `tools` field). */
+     tools?: ToolSchema[];
+     temperature?: number;
++    /** Nucleus sampling probability. Omitted values are left to the provider. */
++    topP?: number;
+     maxTokens?: number;
+     /**
+      * Stop sequences: generation halts as soon as the model produces any one of

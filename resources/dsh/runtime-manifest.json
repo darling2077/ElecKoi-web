@@ -10,10 +10,13 @@
   "composition": "cordis.yml",
   "localPlugins": [
     "./agent-preset-bridge.mjs",
+    "./tavily-web-search.mjs"
+  ],
+  "localModules": [
     "./conversation-context.mjs",
     "./request-config.mjs",
-    "./tool-policy.mjs",
-    "./tavily-web-search.mjs"
+    "./session-snapshot.mjs",
+    "./tool-policy.mjs"
   ],
   "plugins": [
     "@deepseek-ai/dsh-agent-presets",

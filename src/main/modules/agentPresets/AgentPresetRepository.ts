@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { and, asc, eq } from 'drizzle-orm'
+import { z } from 'zod'
 import {
   AGENT_TOOL_GROUPS,
   DEFAULT_AGENT_TOOL_GROUP_IDS,
@@ -38,6 +40,8 @@ import {
 import type {
   AgentPreset,
   AgentPresetCatalog,
+  AgentPresetExportFormat,
+  AgentPresetExportResult,
   AgentPresetImportDocument,
   AgentPresetImportResult,
   AgentPresetImportSource
@@ -49,13 +53,23 @@ import {
   agentPresetModelTagSchema,
   agentPresetProfileSchema,
   agentPresetSchema,
+  subagentModelSelectionSchema,
   agentPresetTimelineItemSchema
 } from '@shared/contracts/presets/schemas'
 import {
   defaultRoleplayPlanSettings,
   roleplayPlanSettingsSchema
 } from '@shared/contracts/presets/roleplayPlan'
-import { decodeAgentPresetImport, encodeElecKoiAgentPreset } from './AgentPresetImportCodec'
+import {
+  decodeAgentPresetImport,
+  encodeElecKoiAgentPreset,
+  encodeElecKoiAgentPresetPng
+} from './AgentPresetImportCodec'
+import type {
+  AgentPresetTransferAvatar,
+  AgentPresetTransferContent,
+  AgentPresetTransferVersion
+} from './AgentPresetImportCodec'
 import {
   disabledAgentPresetToolGroupIds,
   projectAgentPresetRuntimeContext,
@@ -65,9 +79,18 @@ import {
 export const DEFAULT_AGENT_PRESET_ID = 'agent-preset-standard'
 const DEFAULT_AGENT_PRESET_VERSION_ID = 'agent-preset-standard-v1'
 const CONTENT_TIMELINE = 'timeline'
+const CONTENT_USAGE_INSTRUCTIONS = 'usage_instructions'
 const CONTENT_PROMPT_POSITIONS = 'prompt_positions'
 const CONTENT_REGEX_RULES = 'regex_rules'
-const CONTENT_TOOL_POLICY = 'tool_policy'
+const CONTENT_TOOL_CONFIGURATION = 'tool_configuration'
+const TOOL_CONFIGURATION_VERSION = 4
+const toolConfigurationSchema = z.object({
+  version: z.literal(TOOL_CONFIGURATION_VERSION),
+  includedGroupIds: z.array(z.string()),
+  enabledGroupIds: z.array(z.string()),
+  subagentModelSelection: subagentModelSelectionSchema,
+  roleplayPlan: roleplayPlanSettingsSchema
+}).strict()
 
 export class AgentPresetRepository {
   private initialized = false
@@ -91,7 +114,6 @@ export class AgentPresetRepository {
           activeVersionId: DEFAULT_AGENT_PRESET_VERSION_ID,
           authorName: '',
           authorAvatarPath: '',
-          usageInstructions: '',
           sortIndex: 0,
           expandedGroupIdsJson: '[]'
         }).onConflictDoNothing().run()
@@ -147,7 +169,7 @@ export class AgentPresetRepository {
         profile: agentPresetProfileSchema.parse({
           authorName: row.authorName,
           authorAvatarPath: row.authorAvatarPath,
-          usageInstructions: row.usageInstructions,
+          usageInstructions: contents.get(CONTENT_USAGE_INSTRUCTIONS) ?? '',
           timeline: parseList(contents.get(CONTENT_TIMELINE) ?? '[]', agentPresetTimelineItemSchema, '预设更新时间线')
         })
       }
@@ -169,13 +191,13 @@ export class AgentPresetRepository {
         eq(agentPresetVersions.versionId, row.activeVersionId)
       )).get()
       : undefined
-    const entries = withoutLegacyRoleplayPlanEntries(this.store.db.select().from(agentPresetEntries).where(eq(agentPresetEntries.presetId, row.id))
+    const entries = this.store.db.select().from(agentPresetEntries).where(eq(agentPresetEntries.presetId, row.id))
       .orderBy(asc(agentPresetEntries.sortIndex)).all()
-      .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设提示词'))))
+      .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设提示词')))
     const groups = this.store.db.select().from(agentPresetGroups).where(eq(agentPresetGroups.presetId, row.id))
       .orderBy(asc(agentPresetGroups.sortIndex)).all()
       .map((item) => settingLibraryGroupSchema.parse(parseObject(item.payloadJson, '预设提示词分组')))
-    const toolConfiguration = this.readToolConfiguration(contents.get(CONTENT_TOOL_POLICY))
+    const toolConfiguration = this.readToolConfiguration(contents.get(CONTENT_TOOL_CONFIGURATION))
     return agentPresetSchema.parse({
       id: row.id,
       name: row.name,
@@ -187,7 +209,7 @@ export class AgentPresetRepository {
       profile: {
         authorName: row.authorName,
         authorAvatarPath: row.authorAvatarPath,
-        usageInstructions: row.usageInstructions,
+        usageInstructions: contents.get(CONTENT_USAGE_INSTRUCTIONS) ?? '',
         timeline: parseList(contents.get(CONTENT_TIMELINE) ?? '[]', agentPresetTimelineItemSchema, '预设更新时间线')
       },
       entries,
@@ -213,7 +235,6 @@ export class AgentPresetRepository {
         activeVersionId: normalized.activeVersionId,
         authorName: normalized.profile.authorName,
         authorAvatarPath: normalized.profile.authorAvatarPath,
-        usageInstructions: normalized.profile.usageInstructions,
         expandedGroupIdsJson: JSON.stringify(normalized.expandedGroupIds)
       }).where(eq(agentPresets.id, normalized.id)).run()
       const contents = contentRows(normalized)
@@ -271,7 +292,6 @@ export class AgentPresetRepository {
       activeVersionId: versionId,
       authorName: '',
       authorAvatarPath: '',
-      usageInstructions: '',
       sortIndex: catalog.presets.length,
       expandedGroupIdsJson: '[]'
     }).run()
@@ -282,59 +302,90 @@ export class AgentPresetRepository {
     const decoded = decodeAgentPresetImport(document, source)
     const created = this.create(decoded.preset.name)
     const preparedAvatar = decoded.authorAvatarBase64 && this.mediaAssets
-      ? this.mediaAssets.prepareImage(presetMediaOwner(created.id), 'author-avatar', `data:image/png;base64,${decoded.authorAvatarBase64}`)
+      ? this.mediaAssets.prepareImage(
+        presetMediaOwner(created.id),
+        'author-avatar',
+        `data:${decoded.authorAvatarMediaType ?? 'image/png'};base64,${decoded.authorAvatarBase64}`
+      )
       : undefined
     try {
-      const sourceGroups = distinctById(decoded.preset.groups)
-      const groupIds = new Map(sourceGroups.map((group, index) => [group.id, `${created.id}-group-${index + 1}`]))
-      const sourcePositions = distinctById(decoded.preset.promptPositions)
-      const promptPositionIds = new Map(sourcePositions.map((position, index) => [position.id, `${created.id}-position-${index + 1}`]))
       const timestamp = new Date().toISOString()
+      const currentContent = transferContentFromPreset(decoded.preset)
+      const sourceVersions = decoded.versions.length ? [...decoded.versions] : [{
+        id: decoded.preset.activeVersionId,
+        number: decoded.preset.activeVersionNumber,
+        name: decoded.preset.name,
+        createdAtEpochMs: Date.now(),
+        ...currentContent
+      }]
+      let activeSourceIndex = sourceVersions.findIndex((version) => version.id === decoded.preset.activeVersionId)
+      if (activeSourceIndex < 0) {
+        activeSourceIndex = sourceVersions.findIndex((version) => version.number === decoded.preset.activeVersionNumber)
+      }
+      if (activeSourceIndex < 0) {
+        sourceVersions.push({
+          id: decoded.preset.activeVersionId,
+          number: decoded.preset.activeVersionNumber,
+          name: decoded.preset.name,
+          createdAtEpochMs: Date.now(),
+          ...currentContent
+        })
+        activeSourceIndex = sourceVersions.length - 1
+      }
+      const importedVersions = sourceVersions.map((version, index) => ({
+        ...version,
+        id: `${created.id}:v${index + 1}`,
+        ...rebaseTransferContent(version, created.id, `v${index + 1}`, timestamp)
+      }))
+      const activeVersion = importedVersions[activeSourceIndex]!
       const imported = this.save({
         ...decoded.preset,
         id: created.id,
         name: created.name,
         libraryGroupId: '',
-        activeVersionId: created.activeVersionId,
-        activeVersionNumber: 1,
+        activeVersionId: activeVersion.id,
+        activeVersionNumber: activeVersion.number,
         profile: {
           ...decoded.preset.profile,
-          authorAvatarPath: preparedAvatar?.reference ?? ''
+          authorAvatarPath: preparedAvatar?.reference ?? '',
+          usageInstructions: activeVersion.usageInstructions,
+          timeline: activeVersion.timeline
         },
-        groups: sourceGroups.map((group, index) => ({
-          ...group,
-          id: groupIds.get(group.id)!,
-          parentId: groupIds.get(group.parentId) ?? '',
-          order: index + 1,
-          createdAt: timestamp,
-          updatedAt: timestamp
-        })),
-        entries: withRequiredAgentPresetEntries(decoded.preset.entries).map((entry, index) => ({
-          ...entry,
-          id: isHistoryCompactionEntry(entry)
-            ? entry.id
-            : isHiddenToolTimelineEntry(entry) ? entry.id : `${created.id}-entry-${index + 1}`,
-          groupId: groupIds.get(entry.groupId) ?? '',
-          promptPositionId: promptPositionIds.get(entry.promptPositionId) ?? '',
-          createdAt: timestamp,
-          updatedAt: timestamp
-        })),
-        promptPositions: sourcePositions.map((position, index) => ({
-          ...position,
-          id: promptPositionIds.get(position.id)!,
-          order: index + 1,
-          createdAt: timestamp,
-          updatedAt: timestamp
-        })),
-        regexRules: decoded.preset.regexRules.map((rule, index) => ({
-          ...rule,
-          id: `${created.id}-regex-${index + 1}`,
-          order: index
-        })),
-        toolGroups: agentToolGroups(),
-        expandedGroupIds: decoded.preset.expandedGroupIds
-          .map((id) => groupIds.get(id))
-          .filter((id): id is string => Boolean(id))
+        entries: activeVersion.entries,
+        groups: activeVersion.groups,
+        promptPositions: activeVersion.promptPositions,
+        toolGroups: activeVersion.toolGroups,
+        subagentModelSelection: { configId: '', model: '' },
+        roleplayPlan: activeVersion.roleplayPlan,
+        regexRules: activeVersion.regexRules,
+        expandedGroupIds: activeVersion.expandedGroupIds
+      })
+      this.store.withWriteTx((db) => {
+        db.delete(agentPresetVersionEntries).where(eq(agentPresetVersionEntries.presetId, created.id)).run()
+        db.delete(agentPresetVersionGroups).where(eq(agentPresetVersionGroups.presetId, created.id)).run()
+        db.delete(agentPresetVersionContents).where(eq(agentPresetVersionContents.presetId, created.id)).run()
+        db.delete(agentPresetVersions).where(eq(agentPresetVersions.presetId, created.id)).run()
+        for (const version of importedVersions) {
+          const versionPreset = normalizePreset(presetWithTransferContent(imported, version))
+          db.insert(agentPresetVersions).values({
+            presetId: created.id,
+            versionId: version.id,
+            versionNumber: version.number,
+            name: version.name,
+            createdAtEpochMs: version.createdAtEpochMs,
+            expandedGroupIdsJson: JSON.stringify(versionPreset.expandedGroupIds)
+          }).run()
+          for (const [kind, content] of contentRows(versionPreset)) {
+            db.insert(agentPresetVersionContents).values({
+              presetId: created.id,
+              versionId: version.id,
+              kind,
+              content
+            }).run()
+          }
+          replaceVersionEntries(db, created.id, version.id, versionPreset.entries)
+          replaceVersionGroups(db, created.id, version.id, versionPreset.groups)
+        }
       })
       preparedAvatar?.commit()
       return agentPresetImportResultSchema.parse({
@@ -350,10 +401,23 @@ export class AgentPresetRepository {
     }
   }
 
-  export(presetId: string): { fileName: string; json: string } {
+  export(presetId: string, format: AgentPresetExportFormat): AgentPresetExportResult {
     const preset = this.get(presetId)
     const safeName = preset.name.replace(/[\\/:*?"<>|]/g, '-').trim() || 'ElecKoi预设'
-    return { fileName: `${safeName}.json`, json: encodeElecKoiAgentPreset(preset) }
+    const avatar = portableAvatar(preset.profile.authorAvatarPath, this.mediaAssets)
+    const json = encodeElecKoiAgentPreset(preset, {
+      ...(avatar ? { authorAvatar: avatar.transfer } : {}),
+      versions: this.transferVersions(presetId)
+    })
+    if (format === 'json') {
+      return {
+        fileName: `${safeName}.json`,
+        mimeType: 'application/json',
+        base64: Buffer.from(json, 'utf8').toString('base64')
+      }
+    }
+    const png = encodeElecKoiAgentPresetPng(json, avatar?.transfer.mediaType === 'image/png' ? avatar.bytes : undefined)
+    return { fileName: `${safeName}.png`, mimeType: 'image/png', base64: Buffer.from(png).toString('base64') }
   }
 
   setActive(presetId: string): AgentPresetCatalog {
@@ -481,7 +545,7 @@ export class AgentPresetRepository {
         const entries = db.select().from(agentPresetEntries).where(eq(agentPresetEntries.presetId, preset.id))
           .orderBy(asc(agentPresetEntries.sortIndex)).all()
           .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设提示词')))
-        const required = withRequiredAgentPresetEntries(withoutLegacyRoleplayPlanEntries(entries))
+        const required = withRequiredAgentPresetEntries(entries)
         if (JSON.stringify(required) !== JSON.stringify(entries)) replaceEntries(db, preset.id, required)
 
         if (!preset.versionId) continue
@@ -490,7 +554,7 @@ export class AgentPresetRepository {
           eq(agentPresetVersionEntries.versionId, preset.versionId)
         )).orderBy(asc(agentPresetVersionEntries.sortIndex)).all()
           .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设版本提示词')))
-        const requiredVersionEntries = withRequiredAgentPresetEntries(withoutLegacyRoleplayPlanEntries(versionEntries))
+        const requiredVersionEntries = withRequiredAgentPresetEntries(versionEntries)
         if (JSON.stringify(requiredVersionEntries) !== JSON.stringify(versionEntries)) {
           replaceVersionEntries(db, preset.id, preset.versionId, requiredVersionEntries)
         }
@@ -513,41 +577,181 @@ export class AgentPresetRepository {
       .map((row) => [row.kind, row.content]))
   }
 
+  private transferVersions(presetId: string): AgentPresetTransferVersion[] {
+    return this.store.db.select().from(agentPresetVersions).where(eq(agentPresetVersions.presetId, presetId))
+      .orderBy(asc(agentPresetVersions.versionNumber), asc(agentPresetVersions.createdAtEpochMs)).all()
+      .map((version) => {
+        const contents = new Map(this.store.db.select().from(agentPresetVersionContents).where(and(
+          eq(agentPresetVersionContents.presetId, presetId),
+          eq(agentPresetVersionContents.versionId, version.versionId)
+        )).all().map((row) => [row.kind, row.content]))
+        const toolConfiguration = this.readToolConfiguration(contents.get(CONTENT_TOOL_CONFIGURATION))
+        return {
+          id: version.versionId,
+          number: version.versionNumber,
+          name: version.name,
+          createdAtEpochMs: version.createdAtEpochMs,
+          usageInstructions: contents.get(CONTENT_USAGE_INSTRUCTIONS) ?? '',
+          timeline: parseList(contents.get(CONTENT_TIMELINE) ?? '[]', agentPresetTimelineItemSchema, '预设版本更新时间线'),
+          entries: this.store.db.select().from(agentPresetVersionEntries).where(and(
+            eq(agentPresetVersionEntries.presetId, presetId),
+            eq(agentPresetVersionEntries.versionId, version.versionId)
+          )).orderBy(asc(agentPresetVersionEntries.sortIndex)).all()
+            .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设版本提示词'))),
+          groups: this.store.db.select().from(agentPresetVersionGroups).where(and(
+            eq(agentPresetVersionGroups.presetId, presetId),
+            eq(agentPresetVersionGroups.versionId, version.versionId)
+          )).orderBy(asc(agentPresetVersionGroups.sortIndex)).all()
+            .map((item) => settingLibraryGroupSchema.parse(parseObject(item.payloadJson, '预设版本提示词分组'))),
+          promptPositions: parseList(contents.get(CONTENT_PROMPT_POSITIONS) ?? '[]', settingLibraryPromptPositionSchema, '预设版本提示词位置'),
+          toolGroups: toolConfiguration.toolGroups,
+          roleplayPlan: toolConfiguration.roleplayPlan,
+          regexRules: parseList(contents.get(CONTENT_REGEX_RULES) ?? '[]', regexRuleSchema, '预设版本正则'),
+          expandedGroupIds: parseStrings(version.expandedGroupIdsJson, '预设版本展开状态')
+        }
+      })
+  }
+
   private readToolConfiguration(raw: string | undefined): {
     toolGroups: AgentToolGroup[]
     subagentModelSelection: AgentPreset['subagentModelSelection']
     roleplayPlan: AgentPreset['roleplayPlan']
   } {
-    const fallback = {
-      toolGroups: presetToolGroups(DEFAULT_AGENT_TOOL_GROUP_IDS, DEFAULT_AGENT_TOOL_GROUP_IDS),
-      subagentModelSelection: { configId: '', model: '' },
-      roleplayPlan: defaultRoleplayPlanSettings()
-    }
-    if (!raw) return fallback
+    if (!raw) throw new Error('预设缺少工具配置。')
     try {
-      const value = parseObject(raw, '预设工具配置')
-      const enabled = new Set(parseUnknownStrings(value.enabledGroupIds))
-      const includedValues = parseUnknownStrings(value.includedGroupIds)
-      const included = new Set(includedValues.length ? includedValues : enabled)
-      const rawSelection = value.subagentModelSelection
-      const selection = rawSelection && typeof rawSelection === 'object' && !Array.isArray(rawSelection)
-        ? rawSelection as Record<string, unknown>
-        : undefined
-      const roleplayPlan = roleplayPlanSettingsSchema.safeParse(value.roleplayPlan)
+      const value = toolConfigurationSchema.parse(JSON.parse(raw))
       return {
-        toolGroups: presetToolGroups(included, enabled),
-        subagentModelSelection: selection
-          ? {
-              configId: typeof selection.configId === 'string' ? selection.configId : '',
-              model: typeof selection.model === 'string' ? selection.model : ''
-            }
-          : fallback.subagentModelSelection,
-        roleplayPlan: roleplayPlan.success ? roleplayPlan.data : fallback.roleplayPlan
+        toolGroups: presetToolGroups(new Set(value.includedGroupIds), new Set(value.enabledGroupIds)),
+        subagentModelSelection: value.subagentModelSelection,
+        roleplayPlan: value.roleplayPlan
       }
     } catch (error) {
       throw new Error('预设工具配置已损坏。', { cause: error })
     }
   }
+}
+
+function transferContentFromPreset(preset: AgentPreset): AgentPresetTransferContent {
+  return {
+    usageInstructions: preset.profile.usageInstructions,
+    timeline: preset.profile.timeline,
+    entries: preset.entries,
+    groups: preset.groups,
+    promptPositions: preset.promptPositions,
+    toolGroups: preset.toolGroups,
+    roleplayPlan: preset.roleplayPlan,
+    regexRules: preset.regexRules,
+    expandedGroupIds: preset.expandedGroupIds
+  }
+}
+
+function rebaseTransferContent(
+  content: AgentPresetTransferContent,
+  presetId: string,
+  scope: string,
+  timestamp: string
+): AgentPresetTransferContent {
+  const sourceGroups = distinctById(content.groups)
+  const groupIds = new Map(sourceGroups.map((group, index) => [group.id, `${presetId}-${scope}-group-${index + 1}`]))
+  const sourcePositions = distinctById(content.promptPositions)
+  const promptPositionIds = new Map(sourcePositions.map((position, index) => [position.id, `${presetId}-${scope}-position-${index + 1}`]))
+  const includedIds = new Set(content.toolGroups.filter((group) => group.included).map((group) => group.id))
+  const enabledIds = new Set(content.toolGroups.filter((group) => group.included && group.enabled).map((group) => group.id))
+  return {
+    usageInstructions: content.usageInstructions,
+    timeline: content.timeline,
+    groups: sourceGroups.map((group, index) => ({
+      ...group,
+      id: groupIds.get(group.id)!,
+      parentId: groupIds.get(group.parentId) ?? '',
+      order: index + 1,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    })),
+    entries: withRequiredAgentPresetEntries(content.entries).map((entry, index) => ({
+      ...entry,
+      id: isHistoryCompactionEntry(entry)
+        ? entry.id
+        : isHiddenToolTimelineEntry(entry) ? entry.id : `${presetId}-${scope}-entry-${index + 1}`,
+      groupId: groupIds.get(entry.groupId) ?? '',
+      promptPositionId: promptPositionIds.get(entry.promptPositionId) ?? '',
+      createdAt: timestamp,
+      updatedAt: timestamp
+    })),
+    promptPositions: sourcePositions.map((position, index) => ({
+      ...position,
+      id: promptPositionIds.get(position.id)!,
+      order: index + 1,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    })),
+    toolGroups: agentToolGroups(enabledIds).map((group) => ({
+      ...group,
+      included: includedIds.has(group.id),
+      enabled: includedIds.has(group.id) && enabledIds.has(group.id)
+    })),
+    roleplayPlan: content.roleplayPlan,
+    regexRules: content.regexRules.map((rule, index) => ({
+      ...rule,
+      id: `${presetId}-${scope}-regex-${index + 1}`,
+      order: index
+    })),
+    expandedGroupIds: content.expandedGroupIds
+      .map((id) => groupIds.get(id))
+      .filter((id): id is string => Boolean(id))
+  }
+}
+
+function presetWithTransferContent(base: AgentPreset, content: AgentPresetTransferVersion): AgentPreset {
+  return {
+    ...base,
+    activeVersionId: content.id,
+    activeVersionNumber: content.number,
+    profile: {
+      ...base.profile,
+      usageInstructions: content.usageInstructions,
+      timeline: content.timeline
+    },
+    entries: content.entries,
+    groups: content.groups,
+    promptPositions: content.promptPositions,
+    toolGroups: content.toolGroups,
+    subagentModelSelection: { configId: '', model: '' },
+    roleplayPlan: content.roleplayPlan,
+    regexRules: content.regexRules,
+    expandedGroupIds: content.expandedGroupIds
+  }
+}
+
+function portableAvatar(reference: string, mediaAssets?: LocalMediaStore): {
+  transfer: AgentPresetTransferAvatar
+  bytes: Uint8Array
+} | undefined {
+  const normalized = reference.trim()
+  if (!normalized) return undefined
+  const dataUrl = /^data:(image\/(?:png|jpeg|webp|gif));base64,([a-z0-9+/=\r\n]+)$/i.exec(normalized)
+  let mediaType: string
+  let encoded: string
+  let bytes: Buffer
+  if (dataUrl) {
+    mediaType = dataUrl[1]!.toLocaleLowerCase()
+    encoded = dataUrl[2]!.replace(/\s+/g, '')
+    bytes = Buffer.from(encoded, 'base64')
+  } else {
+    const path = mediaAssets?.pathForReference(normalized)
+    if (!path) return undefined
+    const extension = path.split('.').at(-1)?.toLocaleLowerCase()
+    mediaType = extension === 'png'
+      ? 'image/png'
+      : extension === 'jpg' ? 'image/jpeg' : extension === 'webp' ? 'image/webp' : extension === 'gif' ? 'image/gif' : ''
+    if (!mediaType) return undefined
+    bytes = readFileSync(path)
+    encoded = bytes.toString('base64')
+  }
+  if (!bytes.length || bytes.length > 8 * 1024 * 1024 || bytes.toString('base64').replace(/=+$/, '') !== encoded.replace(/=+$/, '')) {
+    throw new Error('预设作者头像已损坏或超过 8 MB。')
+  }
+  return { transfer: { mediaType, base64: encoded }, bytes }
 }
 
 function normalizePreset(input: AgentPreset): AgentPreset {
@@ -573,7 +777,7 @@ function normalizePreset(input: AgentPreset): AgentPreset {
         note: item.note.trim().slice(0, 800)
       })).filter((item) => item.title).slice(0, 100)
     },
-    entries: withRequiredAgentPresetEntries(withoutLegacyRoleplayPlanEntries(input.entries)).map((entry, index) => settingLibraryEntrySchema.parse({
+    entries: withRequiredAgentPresetEntries(input.entries).map((entry, index) => settingLibraryEntrySchema.parse({
       ...entry,
       groupId: validGroupIds.has(entry.groupId) ? entry.groupId : '',
       viewOrder: index + 1
@@ -582,7 +786,7 @@ function normalizePreset(input: AgentPreset): AgentPreset {
     promptPositions: input.promptPositions.map((position, index) => settingLibraryPromptPositionSchema.parse({ ...position, order: index + 1 })),
     toolGroups: input.toolGroups.filter((group) => validToolIds.has(group.id)).map((group) => ({
       ...group,
-      included: group.included ?? group.enabled
+      included: group.included
     })),
     subagentModelSelection: {
       configId: input.subagentModelSelection.configId.trim(),
@@ -594,10 +798,6 @@ function normalizePreset(input: AgentPreset): AgentPreset {
     regexRules: input.regexRules.map((rule, index) => regexRuleSchema.parse({ ...rule, order: index })),
     expandedGroupIds: [...new Set(input.expandedGroupIds)].filter((id) => validGroupIds.has(id))
   })
-}
-
-function withoutLegacyRoleplayPlanEntries(entries: SettingLibraryEntry[]): SettingLibraryEntry[] {
-  return entries.filter((entry) => entry.id !== 'fixed-roleplay-plan' && entry.kind !== 'roleplay_plan')
 }
 
 function emptyPreset(id: string, name: string, versionId: string, libraryGroupId: string): AgentPreset {
@@ -623,11 +823,12 @@ function emptyPreset(id: string, name: string, versionId: string, libraryGroupId
 
 function defaultContents(): Array<[string, string]> {
   return [
+    [CONTENT_USAGE_INSTRUCTIONS, ''],
     [CONTENT_TIMELINE, '[]'],
     [CONTENT_PROMPT_POSITIONS, '[]'],
     [CONTENT_REGEX_RULES, '[]'],
-    [CONTENT_TOOL_POLICY, JSON.stringify({
-      version: 4,
+    [CONTENT_TOOL_CONFIGURATION, JSON.stringify({
+      version: TOOL_CONFIGURATION_VERSION,
       includedGroupIds: [...DEFAULT_AGENT_TOOL_GROUP_IDS],
       enabledGroupIds: [...DEFAULT_AGENT_TOOL_GROUP_IDS],
       subagentModelSelection: { configId: '', model: '' },
@@ -638,12 +839,13 @@ function defaultContents(): Array<[string, string]> {
 
 function contentRows(preset: AgentPreset): Array<[string, string]> {
   return [
+    [CONTENT_USAGE_INSTRUCTIONS, preset.profile.usageInstructions],
     [CONTENT_TIMELINE, JSON.stringify(preset.profile.timeline)],
     [CONTENT_PROMPT_POSITIONS, JSON.stringify(preset.promptPositions)],
     [CONTENT_REGEX_RULES, JSON.stringify(preset.regexRules)],
-    [CONTENT_TOOL_POLICY, JSON.stringify({
-      version: 4,
-      includedGroupIds: preset.toolGroups.filter((group) => group.included ?? group.enabled).map((group) => group.id),
+    [CONTENT_TOOL_CONFIGURATION, JSON.stringify({
+      version: TOOL_CONFIGURATION_VERSION,
+      includedGroupIds: preset.toolGroups.filter((group) => group.included).map((group) => group.id),
       enabledGroupIds: preset.toolGroups.filter((group) => group.enabled).map((group) => group.id),
       subagentModelSelection: preset.subagentModelSelection,
       roleplayPlan: preset.roleplayPlan

@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
+import { authorVendorPlugin } from './scripts/vite-author-vendor-plugin'
 
 export default defineConfig({
   resolve: {
@@ -9,6 +10,7 @@ export default defineConfig({
       '@eleckoi/dsh-runtime': resolve('packages/dsh-runtime/src/index.ts')
     }
   },
+  plugins: [authorVendorPlugin(resolve('.'))],
   test: {
     environment: 'node'
   }

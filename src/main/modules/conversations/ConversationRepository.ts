@@ -11,14 +11,14 @@ import {
   agentTurns,
   chatSessions,
   chatSessionCharacterSnapshots,
-  chatSessionModelSettings,
-  conversationSpeakers
+  conversationSpeakers,
+  userProfile
 } from '@main/platform/sqlite/schema/common'
 import type { ConversationCleanupRepository } from './ConversationCleanupRepository'
 import type { ConversationSeed } from './conversationSeed'
 import { seedConversationVariableStates } from './ConversationVariableStateStore'
 
-const emptyMetadata = (): ConversationMetadata => ({ characterId: '', characterName: '', characterAvatar: '', characterPersona: {}, modelSettings: {} })
+const emptyMetadata = (): ConversationMetadata => ({ characterId: '', characterName: '', characterAvatar: '', characterPersona: {} })
 const toConversation = (row: typeof chatSessions.$inferSelect, preview = row.historySummary): Conversation => ({ id: row.id, title: row.title, preview, createdAt: row.createdAt, updatedAt: row.updatedAt })
 
 export interface ConversationDeleteCleanup {
@@ -46,8 +46,7 @@ export class ConversationRepository {
     private readonly cleanup?: ConversationCleanupRepository,
     private readonly resolveSeed?: (
       characterId: string,
-      db: ElecKoiDatabase,
-      context: { characterMode: string; metadata: ConversationMetadata }
+      db: ElecKoiDatabase
     ) => string | ConversationSeed
   ) {}
 
@@ -75,26 +74,25 @@ export class ConversationRepository {
       const branchId = randomUUID()
       const metadata: ConversationMetadata = {
         characterId: input.metadata?.characterId ?? '', characterName: input.metadata?.characterName ?? '',
-        characterAvatar: input.metadata?.characterAvatar ?? '', characterPersona: input.metadata?.characterPersona ?? {}, modelSettings: input.metadata?.modelSettings ?? {}
+        characterAvatar: input.metadata?.characterAvatar ?? '', characterPersona: input.metadata?.characterPersona ?? {}
       }
       const card = metadata.characterId ? requireCharacter(database, metadata.characterId) : undefined
       const resolvedSeed = card && this.resolveSeed
-        ? this.resolveSeed(card.id, database, { characterMode: card.characterMode, metadata })
+        ? this.resolveSeed(card.id, database)
         : '{}'
       const seed: ConversationSeed = typeof resolvedSeed === 'string'
         ? { initialVariableStateJson: resolvedSeed, openingText: '', openingOptions: [], selectedOpeningId: '' }
         : resolvedSeed
       const variableStateJson = seed.initialVariableStateJson || '{}'
       database.insert(chatSessions).values({
-        id, workspaceId: '', title: input.title?.trim() || '新对话', characterId: metadata.characterId,
+        id, title: input.title?.trim() || '新对话', characterId: metadata.characterId,
         characterName: card?.name ?? metadata.characterName, characterAvatar: card?.avatar ?? metadata.characterAvatar,
-        characterMode: card?.characterMode ?? 'story', permissionMode: 'default', historySummary: '',
+        historySummary: '',
         historyMessageCount: 0, historyUserMessageCount: 0, createdAt: now, updatedAt: now
       }).run()
-      database.insert(agentConversations).values({ id, surface: card ? 'role' : 'assistant', activeBranchId: branchId, createdAt: now, updatedAt: now, revision: 0 }).run()
-      database.insert(agentBranches).values({ id: branchId, conversationId: id, parentBranchId: null, forkedFromTurnId: null, headSequence: -1, name: '主线', reason: 'initial', createdAt: now }).run()
+      database.insert(agentConversations).values({ id, activeBranchId: branchId }).run()
+      database.insert(agentBranches).values({ id: branchId, conversationId: id }).run()
       database.insert(chatSessionCharacterSnapshots).values({ sessionId: id, personaJson: JSON.stringify(metadata.characterPersona) }).run()
-      database.insert(chatSessionModelSettings).values({ sessionId: id, settingsJson: JSON.stringify(metadata.modelSettings) }).run()
       seedConversationVariableStates(id, variableStateJson, database)
       if (seed.openingText) this.insertOpening(database, {
         conversationId: id,
@@ -126,11 +124,9 @@ export class ConversationRepository {
 
   getCharacterBinding(id: string, db: ElecKoiDatabase = this.store.db): {
     characterId: string
-    characterMode: string
   } {
     const row = db.select({
-      characterId: chatSessions.characterId,
-      characterMode: chatSessions.characterMode
+      characterId: chatSessions.characterId
     }).from(chatSessions).where(eq(chatSessions.id, id)).get()
     if (!row) throw new Error('找不到对应的聊天存档。')
     return row
@@ -140,7 +136,7 @@ export class ConversationRepository {
     if (row.historySummary.trim()) return row.historySummary
     const parts = this.store.native.prepare(`SELECT p.text FROM agent_content_parts p
       JOIN agent_turns t ON t.id=p.ownerId AND p.ownerType='turn'
-      WHERE p.conversationId=? AND t.sourceMessageId='opening' AND p.kind='opening_text'
+      WHERE p.conversationId=? AND t.kind='opening' AND p.kind='opening_text'
       ORDER BY p.partIndex,p.chunkIndex`).all(row.id) as { text: string }[]
     return parts.map((part) => part.text).join('').trim()
   }
@@ -153,9 +149,17 @@ export class ConversationRepository {
     const session = db.select().from(chatSessions).where(eq(chatSessions.id, id)).get()
     if (!session) throw new Error('找不到对应的聊天存档。')
     const snapshot = db.select().from(chatSessionCharacterSnapshots).where(eq(chatSessionCharacterSnapshots.sessionId, id)).get()
-    const settings = db.select().from(chatSessionModelSettings).where(eq(chatSessionModelSettings.sessionId, id)).get()
+    const profile = db.select().from(userProfile).where(eq(userProfile.id, 'default')).get()
+    const characterPersona = parseJsonObject(snapshot?.personaJson ?? '{}')
     return { characterId: session.characterId, characterName: session.characterName, characterAvatar: session.characterAvatar,
-      characterPersona: parseJsonObject(snapshot?.personaJson ?? '{}'), modelSettings: parseJsonObject(settings?.settingsJson ?? '{}') }
+      characterPersona: {
+        ...characterPersona,
+        user_name: profile?.userName ?? '你',
+        user_avatar: profile?.userAvatar ?? '',
+        user_square: profile?.userSquare ?? '',
+        user_portrait: profile?.userPortrait ?? '',
+        user_cover: profile?.userCover ?? ''
+      } }
   }
 
   delete(id: string): Promise<void> {
@@ -210,14 +214,10 @@ export class ConversationRepository {
     const operation = (database: ElecKoiDatabase) => {
       const previous = this.getMetadata(id, database)
       if (metadata.characterId !== previous.characterId) throw new Error('不能更改已有存档所属角色。')
-      for (const [table, value, before] of [
-        [chatSessionCharacterSnapshots, JSON.stringify(metadata.characterPersona), JSON.stringify(previous.characterPersona)],
-        [chatSessionModelSettings, JSON.stringify(metadata.modelSettings), JSON.stringify(previous.modelSettings)]
-      ] as const) {
-        if (value === before) continue
-        if (table === chatSessionCharacterSnapshots) database.insert(chatSessionCharacterSnapshots).values({ sessionId: id, personaJson: value }).onConflictDoUpdate({ target: chatSessionCharacterSnapshots.sessionId, set: { personaJson: value } }).run()
-        else database.insert(chatSessionModelSettings).values({ sessionId: id, settingsJson: value }).onConflictDoUpdate({ target: chatSessionModelSettings.sessionId, set: { settingsJson: value } }).run()
-      }
+      const value = JSON.stringify(metadata.characterPersona)
+      if (value === JSON.stringify(previous.characterPersona)) return
+      database.insert(chatSessionCharacterSnapshots).values({ sessionId: id, personaJson: value })
+        .onConflictDoUpdate({ target: chatSessionCharacterSnapshots.sessionId, set: { personaJson: value } }).run()
     }
     if (db) operation(db)
     else this.store.withWriteTx(operation)
@@ -297,7 +297,7 @@ export class ConversationRepository {
       if (session.userMessages > 0) throw new Error('对话开始后不能再切换开场白。')
       const row = this.store.native.prepare(`SELECT p.ownerId,p.payloadJson FROM agent_content_parts p
         JOIN agent_turns t ON t.id=p.ownerId AND p.ownerType='turn'
-        WHERE p.conversationId=? AND t.sourceMessageId='opening' AND p.kind='opening_text' AND p.partIndex=0 AND p.chunkIndex=0`)
+        WHERE p.conversationId=? AND t.kind='opening' AND p.kind='opening_text' AND p.partIndex=0 AND p.chunkIndex=0`)
         .get(conversationId) as { ownerId: string; payloadJson: string } | undefined
       if (!row) throw new Error('当前对话没有开场白。')
       const payload = JSON.parse(row.payloadJson || '{}') as { options?: OpeningMessageOption[]; selectedId?: string }
@@ -308,7 +308,6 @@ export class ConversationRepository {
       seedConversationVariableStates(conversationId, stateJson, database)
       const now = new Date().toISOString()
       database.update(agentTurns).set({ variableStateJson: stateJson }).where(eq(agentTurns.id, row.ownerId)).run()
-      database.update(agentConversations).set({ revision: this.getAgentRevision(conversationId) + 1, updatedAt: now }).where(eq(agentConversations.id, conversationId)).run()
       database.update(chatSessions).set({ updatedAt: now }).where(eq(chatSessions.id, conversationId)).run()
     })
   }
@@ -323,7 +322,7 @@ export class ConversationRepository {
       if (session.userMessages > 0) throw new Error('对话开始后不能修改开场白。')
       const row = this.store.native.prepare(`SELECT p.ownerId,p.payloadJson FROM agent_content_parts p
         JOIN agent_turns t ON t.id=p.ownerId AND p.ownerType='turn'
-        WHERE p.conversationId=? AND t.sourceMessageId='opening' AND p.kind='opening_text' AND p.partIndex=0 AND p.chunkIndex=0`)
+        WHERE p.conversationId=? AND t.kind='opening' AND p.kind='opening_text' AND p.partIndex=0 AND p.chunkIndex=0`)
         .get(conversationId) as { ownerId: string; payloadJson: string } | undefined
       if (!row) throw new Error('当前对话没有开场白。')
       let payload: { options?: OpeningMessageOption[]; selectedId?: string } = {}
@@ -335,7 +334,6 @@ export class ConversationRepository {
       this.writeOpeningText(conversationId, row.ownerId, nextContent, JSON.stringify({ options, selectedId }))
       const now = new Date().toISOString()
       database.update(agentTurns).set({ variableStateJson: selected?.initialVariableStateJson || '{}' }).where(eq(agentTurns.id, row.ownerId)).run()
-      database.update(agentConversations).set({ revision: this.getAgentRevision(conversationId) + 1, updatedAt: now }).where(eq(agentConversations.id, conversationId)).run()
       database.update(chatSessions).set({ updatedAt: now }).where(eq(chatSessions.id, conversationId)).run()
     })
   }
@@ -366,10 +364,7 @@ export class ConversationRepository {
       id: turnId,
       conversationId: input.conversationId,
       speakerId,
-      sourceMessageId: 'opening',
       kind: 'opening',
-      provider: '',
-      model: '',
       createdAt: input.createdAt,
       variableStateJson: input.variableStateJson
     }).run()
@@ -380,8 +375,6 @@ export class ConversationRepository {
       input.content,
       JSON.stringify({ options: input.openingOptions, selectedId: input.selectedOpeningId })
     )
-    database.update(agentBranches).set({ headSequence: 0 }).where(eq(agentBranches.id, input.branchId)).run()
-    database.update(agentConversations).set({ revision: 1, updatedAt: input.createdAt }).where(eq(agentConversations.id, input.conversationId)).run()
     database.update(chatSessions).set({ historyMessageCount: 1 }).where(eq(chatSessions.id, input.conversationId)).run()
   }
 
@@ -393,9 +386,6 @@ export class ConversationRepository {
       .run(conversationId, ownerId, text, payloadJson, chunkIndex))
   }
 
-  private getAgentRevision(conversationId: string): number {
-    return (this.store.native.prepare('SELECT revision FROM agent_conversations WHERE id=?').get(conversationId) as { revision: number }).revision
-  }
 }
 
 function splitContent(content: string): string[] {

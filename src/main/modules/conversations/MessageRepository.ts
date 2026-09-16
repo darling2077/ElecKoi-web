@@ -28,12 +28,12 @@ export class MessageRepository {
     const firstSequence = selected.at(-1)?.sequence
     if (firstSequence === undefined) return { messages: [] as ChatMessage[], hasMore: false, beforeSequence: null }
     const rows = this.store.native.prepare(`
-      SELECT t.sourceMessageId AS id, t.id AS ownerId, 'turn' AS ownerType, t.id AS turnId, t.speakerId, p.sequence, -1 AS responseIndex,
+      SELECT CASE WHEN t.kind='opening' THEN 'opening' ELSE t.id END AS id, t.id AS ownerId, 'turn' AS ownerType, t.id AS turnId, t.speakerId, p.sequence, -1 AS responseIndex,
         CASE WHEN t.kind = 'user' THEN 'user' ELSE 'assistant' END AS role, 'completed' AS status, t.createdAt, t.variableStateJson
       FROM agent_conversations c JOIN agent_branch_turns p ON p.branchId = c.activeBranchId JOIN agent_turns t ON t.id = p.turnId AND t.conversationId = c.id
       WHERE c.id = ? AND p.sequence >= ? AND p.sequence < ?
       UNION ALL
-      SELECT r.sourceMessageId, r.id, 'response', r.turnId, r.speakerId, p.sequence, r.responseIndex, 'assistant', r.status, r.createdAt, r.variableStateJson
+      SELECT r.id, r.id, 'response', r.turnId, r.speakerId, p.sequence, r.responseIndex, 'assistant', r.status, r.createdAt, r.variableStateJson
       FROM agent_conversations c JOIN agent_branch_turns p ON p.branchId = c.activeBranchId JOIN agent_responses r ON r.turnId = p.turnId AND r.conversationId = c.id
       WHERE c.id = ? AND p.sequence >= ? AND p.sequence < ? ORDER BY sequence, responseIndex
     `).all(conversationId, firstSequence, beforeSequence ?? Number.MAX_SAFE_INTEGER, conversationId, firstSequence, beforeSequence ?? Number.MAX_SAFE_INTEGER) as LedgerMessage[]
@@ -77,9 +77,8 @@ export class MessageRepository {
       const speakerId = this.ensureSpeaker(conversationId, { id: 'user', name: profile?.userName ?? '你', avatar: profile?.userAvatar ?? '', kind: 'user' })
       const sequence = (this.store.native.prepare('SELECT COALESCE(MAX(sequence), -1) + 1 AS next FROM agent_branch_turns WHERE branchId = ?').get(conversation.activeBranchId) as { next: number }).next
       const variableStateJson = readCurrentConversationVariableState(conversationId, this.store.db)
-      this.store.native.prepare(`INSERT INTO agent_turns(id,conversationId,speakerId,sourceMessageId,kind,provider,model,createdAt,variableStateJson) VALUES (?,?,?,?,'user','','',?,?)`).run(id, conversationId, speakerId, id, now, variableStateJson)
+      this.store.native.prepare(`INSERT INTO agent_turns(id,conversationId,speakerId,kind,createdAt,variableStateJson) VALUES (?,?,?,'user',?,?)`).run(id, conversationId, speakerId, now, variableStateJson)
       this.store.native.prepare('INSERT INTO agent_branch_turns(branchId,sequence,turnId) VALUES (?,?,?)').run(conversation.activeBranchId, sequence, id)
-      this.store.native.prepare('UPDATE agent_branches SET headSequence = ? WHERE id = ?').run(sequence, conversation.activeBranchId)
       this.writeContent(conversationId, 'turn', id, 'user_text', content)
       this.writeInputImages(conversationId, id, inputImageAttachments)
       this.publish(conversationId, 1, 1)
@@ -101,8 +100,8 @@ export class MessageRepository {
       const now = new Date().toISOString()
       const responseIndex = (this.store.native.prepare('SELECT COALESCE(MAX(responseIndex),-1)+1 AS next FROM agent_responses WHERE turnId=?').get(turnId) as { next: number }).next
       const variableStateJson = readCurrentConversationVariableState(conversationId, this.store.db)
-      this.store.native.prepare(`INSERT INTO agent_responses(id,conversationId,turnId,responseIndex,speakerId,sourceMessageId,status,provider,model,createdAt,variableStateJson,runtimeThreadId,runtimeTurnId,turnStartedAtMillis,turnCompletedAtMillis)
-        VALUES (?,?,?,?,?,?,?,'','',?,? ,?,'',?,?)`).run(id, conversationId, turnId, responseIndex, speakerId, id, toStoredStatus(status), now, variableStateJson, runtimeThreadId, Date.now(), status === 'streaming' ? null : Date.now())
+      this.store.native.prepare(`INSERT INTO agent_responses(id,conversationId,turnId,responseIndex,speakerId,status,createdAt,variableStateJson,runtimeThreadId)
+        VALUES (?,?,?,?,?,?,?,?,?)`).run(id, conversationId, turnId, responseIndex, speakerId, toStoredStatus(status), now, variableStateJson, runtimeThreadId)
       this.writeContent(conversationId, 'response', id, 'assistant_text', content)
       this.publish(conversationId, 1, 0)
       return { id, conversationId, turnId, speakerId, sequence: turn.sequence, responseIndex, role: 'assistant', content, variableStateJson, status, createdAt: now }
@@ -120,12 +119,11 @@ export class MessageRepository {
     })
   }
 
-  bindPendingResponseToModel(conversationId: string, messageId: string, model: string): string {
+  requirePendingResponse(conversationId: string, messageId: string): string {
     const response = this.store.native.prepare(
       "SELECT id FROM agent_responses WHERE conversationId=? AND id=? AND status='pending'"
     ).get(conversationId, messageId) as { id: string } | undefined
     if (!response) throw new Error('执行记录必须关联本场回复。')
-    this.store.native.prepare('UPDATE agent_responses SET model=? WHERE id=?').run(model, response.id)
     return response.id
   }
 
@@ -141,20 +139,20 @@ export class MessageRepository {
 
   get(conversationId: string, messageId: string): ChatMessage {
     const row = this.store.native.prepare(`
-      SELECT t.sourceMessageId AS id, t.id AS ownerId, 'turn' AS ownerType, t.id AS turnId, t.speakerId,
+      SELECT CASE WHEN t.kind='opening' THEN 'opening' ELSE t.id END AS id, t.id AS ownerId, 'turn' AS ownerType, t.id AS turnId, t.speakerId,
         p.sequence, -1 AS responseIndex, CASE WHEN t.kind='user' THEN 'user' ELSE 'assistant' END AS role,
         'completed' AS status, t.createdAt, t.variableStateJson
       FROM agent_conversations c JOIN agent_branch_turns p ON p.branchId=c.activeBranchId
       JOIN agent_turns t ON t.id=p.turnId AND t.conversationId=c.id
-      WHERE c.id=? AND t.sourceMessageId=?
+      WHERE c.id=? AND (t.id=? OR (t.kind='opening' AND ?='opening'))
       UNION ALL
-      SELECT r.sourceMessageId, r.id, 'response', r.turnId, r.speakerId, p.sequence, r.responseIndex,
+      SELECT r.id, r.id, 'response', r.turnId, r.speakerId, p.sequence, r.responseIndex,
         'assistant', r.status, r.createdAt, r.variableStateJson
       FROM agent_conversations c JOIN agent_branch_turns p ON p.branchId=c.activeBranchId
       JOIN agent_responses r ON r.turnId=p.turnId AND r.conversationId=c.id
       WHERE c.id=? AND r.id=?
       ORDER BY responseIndex DESC LIMIT 1
-    `).get(conversationId, messageId, conversationId, messageId) as LedgerMessage | undefined
+    `).get(conversationId, messageId, messageId, conversationId, messageId) as LedgerMessage | undefined
     if (!row) throw new Error('找不到对应的聊天消息。')
     return this.project(conversationId, row)
   }
@@ -192,6 +190,202 @@ export class MessageRepository {
     return row?.runtimeThreadId || undefined
   }
 
+  /**
+   * Deletes one public message and every message after it on the active branch.
+   * This deliberately follows the conversation's causal order: retaining later
+   * replies after removing their input would leave Agent state and variables invalid.
+   */
+  deleteFrom(conversationId: string, targetMessageId: string): {
+    deletedMessageCount: number
+    remainingMessageCount: number
+    deletedAttachmentIds: string[]
+    obsoleteRuntimeThreadIds: string[]
+    deletedResponseIds: string[]
+    deletedMessageIds: string[]
+    rollbackSettingLibraryStateJson?: string | undefined
+  } {
+    return this.store.withWriteTx(() => {
+      const branch = this.store.native.prepare(
+        'SELECT activeBranchId AS branchId FROM agent_conversations WHERE id=?'
+      ).get(conversationId) as { branchId: string } | undefined
+      if (!branch) throw new Error('找不到当前对话分支。')
+
+      const target = this.store.native.prepare(`
+        SELECT t.id AS ownerId, 'turn' AS ownerType, p.sequence, -1 AS responseIndex
+        FROM agent_branch_turns p
+        JOIN agent_turns t ON t.id=p.turnId AND t.conversationId=?
+        WHERE p.branchId=? AND (t.id=? OR (t.kind='opening' AND ?='opening'))
+        UNION ALL
+        SELECT r.id AS ownerId, 'response' AS ownerType, p.sequence, r.responseIndex
+        FROM agent_branch_turns p
+        JOIN agent_responses r ON r.turnId=p.turnId AND r.conversationId=?
+        WHERE p.branchId=? AND r.id=?
+        ORDER BY responseIndex DESC LIMIT 1
+      `).get(
+        conversationId, branch.branchId, targetMessageId, targetMessageId,
+        conversationId, branch.branchId, targetMessageId
+      ) as { ownerId: string; ownerType: 'turn' | 'response'; sequence: number; responseIndex: number } | undefined
+      if (!target) throw new Error('找不到要删除的聊天消息。')
+
+      const targetTurn = this.store.native.prepare(`SELECT t.id,t.kind,t.variableStateJson
+        FROM agent_turns t JOIN agent_branch_turns p ON p.turnId=t.id
+        WHERE t.conversationId=? AND p.branchId=? AND p.sequence=?`)
+        .get(conversationId, branch.branchId, target.sequence) as {
+          id: string
+          kind: string
+          variableStateJson: string
+        } | undefined
+      if (!targetTurn) throw new Error('找不到要删除消息所属的对话轮次。')
+      const initialState = this.store.native.prepare(`SELECT stateJson FROM chat_session_variable_states
+        WHERE sessionId=? AND kind='initial'`).get(conversationId) as { stateJson: string } | undefined
+      const previousResponse = target.ownerType === 'response'
+        ? this.store.native.prepare(`SELECT id,variableStateJson FROM agent_responses
+            WHERE conversationId=? AND turnId=? AND responseIndex<?
+            ORDER BY responseIndex DESC LIMIT 1`)
+          .get(conversationId, targetTurn.id, target.responseIndex) as { id: string; variableStateJson: string } | undefined
+        : undefined
+      const rollbackVariableStateJson = targetTurn.kind === 'opening'
+        ? initialState?.stateJson || '{}'
+        : previousResponse?.variableStateJson || targetTurn.variableStateJson || initialState?.stateJson || '{}'
+      const rollbackSettingLibraryOwner = targetTurn.kind === 'opening'
+        ? undefined
+        : previousResponse
+          ? { ownerType: 'response', ownerId: previousResponse.id }
+          : { ownerType: 'turn', ownerId: targetTurn.id }
+      const rollbackSettingLibraryStateJson = rollbackSettingLibraryOwner
+        ? (this.store.native.prepare(`SELECT payloadJson FROM agent_content_parts
+            WHERE conversationId=? AND ownerType=? AND ownerId=? AND kind='setting_library_state'
+            ORDER BY partIndex DESC LIMIT 1`)
+          .get(conversationId, rollbackSettingLibraryOwner.ownerType, rollbackSettingLibraryOwner.ownerId) as { payloadJson: string } | undefined)?.payloadJson
+        : '[]'
+
+      const turns = this.store.native.prepare(`
+        SELECT p.turnId,t.kind,p.sequence
+        FROM agent_branch_turns p JOIN agent_turns t ON t.id=p.turnId
+        WHERE p.branchId=? AND p.sequence>=? ORDER BY p.sequence
+      `).all(branch.branchId, target.sequence) as Array<{ turnId: string; kind: string; sequence: number }>
+      const turnIds = turns
+        .filter((row) => target.ownerType === 'turn' || row.sequence > target.sequence)
+        .map((row) => row.turnId)
+      const responseRows = this.store.native.prepare(`
+        SELECT r.id,r.turnId,r.responseIndex,r.runtimeThreadId,p.sequence
+        FROM agent_responses r JOIN agent_branch_turns p ON p.turnId=r.turnId
+        WHERE r.conversationId=? AND p.branchId=? AND (
+          p.sequence>? OR (p.sequence=? AND ?='response' AND r.responseIndex>=?) OR
+          (p.sequence=? AND ?='turn')
+        ) ORDER BY p.sequence,r.responseIndex
+      `).all(
+        conversationId, branch.branchId,
+        target.sequence, target.sequence, target.ownerType, target.responseIndex,
+        target.sequence, target.ownerType
+      ) as Array<{ id: string; turnId: string; responseIndex: number; runtimeThreadId: string; sequence: number }>
+      const responseIds = responseRows.map((row) => row.id)
+      const publicTurnIds = turns
+        .filter((row) => turnIds.includes(row.turnId))
+        .map((row) => row.kind === 'opening' ? 'opening' : row.turnId)
+      const deletedPublicMessageIds = [...publicTurnIds, ...responseIds]
+      if (deletedPublicMessageIds.length === 0) throw new Error('没有可删除的聊天消息。')
+
+      const deletedOwners = [
+        ...turnIds.map((id) => ({ ownerType: 'turn', ownerId: id })),
+        ...responseIds.map((id) => ({ ownerType: 'response', ownerId: id }))
+      ]
+      const deletedAttachmentIds = deletedOwners.flatMap(({ ownerType, ownerId }) => (
+        this.store.native.prepare(`SELECT payloadJson FROM agent_content_parts
+          WHERE conversationId=? AND ownerType=? AND ownerId=? AND kind='user_image'`)
+          .all(conversationId, ownerType, ownerId) as { payloadJson: string }[]
+      ).flatMap((row) => {
+        const image = parseInputImage(row.payloadJson)
+        return image ? [image.attachmentId] : []
+      }))
+      const obsoleteRuntimeThreadIds = (this.store.native.prepare(`
+        SELECT DISTINCT runtimeThreadId FROM agent_responses
+        WHERE conversationId=? AND runtimeThreadId<>'' ORDER BY runtimeThreadId
+      `).all(conversationId) as { runtimeThreadId: string }[]).map((row) => row.runtimeThreadId)
+
+      for (const id of deletedPublicMessageIds) {
+        this.store.native.prepare('DELETE FROM roleplay_rich_heights WHERE sessionId=? AND messageId=?')
+          .run(conversationId, id)
+      }
+      for (const { ownerType, ownerId } of deletedOwners) {
+        this.store.native.prepare('DELETE FROM agent_content_parts WHERE conversationId=? AND ownerType=? AND ownerId=?')
+          .run(conversationId, ownerType, ownerId)
+      }
+      for (const id of responseIds) this.store.native.prepare('DELETE FROM agent_responses WHERE id=? AND conversationId=?').run(id, conversationId)
+      for (const id of turnIds) this.store.native.prepare('DELETE FROM agent_branch_turns WHERE branchId=? AND turnId=?').run(branch.branchId, id)
+      for (const id of turnIds) this.store.native.prepare('DELETE FROM agent_turns WHERE id=? AND conversationId=?').run(id, conversationId)
+
+      // A DSH session contains the full prior conversation. Even if its latest
+      // response was retained, it must not be resumed after history is truncated.
+      this.store.native.prepare("UPDATE agent_responses SET runtimeThreadId='' WHERE conversationId=?")
+        .run(conversationId)
+      this.store.native.prepare(`DELETE FROM conversation_speakers WHERE conversationId=?
+        AND id NOT IN (SELECT speakerId FROM agent_turns WHERE conversationId=?)
+        AND id NOT IN (SELECT speakerId FROM agent_responses WHERE conversationId=?)`)
+        .run(conversationId, conversationId, conversationId)
+
+      const remainingMessages = this.list(conversationId)
+      const remainingUserCount = remainingMessages.filter((item) => item.role === 'user').length
+      const latest = remainingMessages.at(-1)
+      writeCurrentConversationVariableState(
+        conversationId,
+        rollbackVariableStateJson,
+        this.store.db
+      )
+      this.store.native.prepare(`UPDATE chat_sessions SET
+        historySummary=?,historyMessageCount=?,historyUserMessageCount=?,updatedAt=? WHERE id=?`)
+        .run(
+          Array.from(latest?.content ?? '').slice(0, 240).join(''),
+          remainingMessages.length,
+          remainingUserCount,
+          new Date().toISOString(),
+          conversationId
+        )
+
+      return {
+        deletedMessageCount: deletedPublicMessageIds.length,
+        remainingMessageCount: remainingMessages.length,
+        deletedAttachmentIds: [...new Set(deletedAttachmentIds)],
+        obsoleteRuntimeThreadIds,
+        deletedResponseIds: responseIds,
+        deletedMessageIds: deletedPublicMessageIds,
+        rollbackSettingLibraryStateJson
+      }
+    })
+  }
+
+  writeSettingLibraryStateSnapshot(conversationId: string, messageId: string, stateJson: string): void {
+    this.store.withWriteTx(() => {
+      const owner = this.store.native.prepare(`
+        SELECT t.id AS ownerId,'turn' AS ownerType
+        FROM agent_turns t WHERE t.conversationId=? AND (t.id=? OR (t.kind='opening' AND ?='opening'))
+        UNION ALL
+        SELECT r.id AS ownerId,'response' AS ownerType
+        FROM agent_responses r WHERE r.conversationId=? AND r.id=?
+        LIMIT 1
+      `).get(conversationId, messageId, messageId, conversationId, messageId) as {
+        ownerId: string
+        ownerType: 'turn' | 'response'
+      } | undefined
+      if (!owner) throw new Error('找不到设定状态快照所属的消息。')
+      let value: unknown
+      try { value = JSON.parse(stateJson) } catch (error) {
+        throw new Error('设定状态快照不是合法 JSON。', { cause: error })
+      }
+      if (!Array.isArray(value)) throw new Error('设定状态快照格式不正确。')
+      this.store.native.prepare(`DELETE FROM agent_content_parts
+        WHERE conversationId=? AND ownerType=? AND ownerId=? AND kind='setting_library_state'`)
+        .run(conversationId, owner.ownerType, owner.ownerId)
+      const partIndex = (this.store.native.prepare(`SELECT COALESCE(MAX(partIndex),0)+1 AS next
+        FROM agent_content_parts WHERE ownerType=? AND ownerId=?`)
+        .get(owner.ownerType, owner.ownerId) as { next: number }).next
+      this.store.native.prepare(`INSERT INTO agent_content_parts(
+        conversationId,ownerType,ownerId,partIndex,kind,text,payloadJson,chunkIndex
+      ) VALUES (?,?,?,?,'setting_library_state','',?,0)`)
+        .run(conversationId, owner.ownerType, owner.ownerId, partIndex, JSON.stringify(value))
+    })
+  }
+
   /** Truncate the active branch at a user turn for Android-style edit/regenerate. */
   prepareRegeneration(conversationId: string, targetMessageId: string, replacement?: string): {
     turnId: string
@@ -201,18 +395,17 @@ export class MessageRepository {
     obsoleteRuntimeThreadIds: string[]
   } {
     return this.store.withWriteTx(() => {
-      const target = this.store.native.prepare(`SELECT r.turnId AS responseTurnId, t.id AS turnId, t.sourceMessageId,
-          p.sequence, t.kind
+      const target = this.store.native.prepare(`SELECT r.turnId AS responseTurnId, t.id AS turnId, p.sequence, t.kind
         FROM agent_conversations c JOIN agent_branch_turns p ON p.branchId=c.activeBranchId
         JOIN agent_turns t ON t.id=p.turnId
         LEFT JOIN agent_responses r ON r.id=? AND r.turnId=t.id
-        WHERE c.id=? AND (t.sourceMessageId=? OR r.id=?)
+        WHERE c.id=? AND (t.id=? OR r.id=?)
         ORDER BY p.sequence DESC LIMIT 1`).get(targetMessageId, conversationId, targetMessageId, targetMessageId) as {
-          responseTurnId?: string; turnId: string; sourceMessageId: string; sequence: number; kind: string
+          responseTurnId?: string; turnId: string; sequence: number; kind: string
         } | undefined
-      if (!target || target.kind === 'opening' || target.sourceMessageId === 'opening') throw new Error('只能从用户输入或对应的 AI 回复重新生成。')
+      if (!target || target.kind === 'opening') throw new Error('只能从用户输入或对应的 AI 回复重新生成。')
       const turnId = target.responseTurnId || target.turnId
-      const user = this.store.native.prepare('SELECT id,sourceMessageId FROM agent_turns WHERE id=?').get(turnId) as { id: string; sourceMessageId: string } | undefined
+      const user = this.store.native.prepare('SELECT id FROM agent_turns WHERE id=?').get(turnId) as { id: string } | undefined
       if (!user) throw new Error('找不到需要重新生成的用户输入。')
       let text = this.store.native.prepare("SELECT COALESCE(group_concat(text, ''), '') AS content FROM agent_content_parts WHERE conversationId=? AND ownerType='turn' AND ownerId=? AND kind='user_text' ORDER BY chunkIndex").get(conversationId, turnId) as { content: string }
       const inputImages = (this.store.native.prepare("SELECT payloadJson FROM agent_content_parts WHERE conversationId=? AND ownerType='turn' AND ownerId=? AND kind='user_image' ORDER BY partIndex")
@@ -245,7 +438,6 @@ export class MessageRepository {
       const retained = this.store.native.prepare('SELECT COUNT(*) AS count FROM agent_branch_turns WHERE branchId=?').get(branch.branchId) as { count: number }
       const retainedResponses = this.store.native.prepare('SELECT COUNT(*) AS count FROM agent_responses r JOIN agent_branch_turns p ON p.turnId=r.turnId WHERE p.branchId=?').get(branch.branchId) as { count: number }
       const users = this.store.native.prepare("SELECT COUNT(*) AS count FROM agent_branch_turns p JOIN agent_turns t ON t.id=p.turnId WHERE p.branchId=? AND t.kind='user'").get(branch.branchId) as { count: number }
-      this.store.native.prepare('UPDATE agent_branches SET headSequence=? WHERE id=?').run(target.sequence, branch.branchId)
       this.store.native.prepare('UPDATE chat_sessions SET historyMessageCount=?,historyUserMessageCount=?,updatedAt=? WHERE id=?')
         .run(retained.count + retainedResponses.count, users.count, new Date().toISOString(), conversationId)
       const state = this.store.native.prepare('SELECT variableStateJson FROM agent_turns WHERE id=?').get(turnId) as { variableStateJson: string } | undefined
@@ -292,10 +484,10 @@ export class MessageRepository {
       })
       this.writeContent(response.conversationId, 'response', response.id, 'assistant_text', content)
       if (variableStateJson === undefined) {
-        this.store.native.prepare('UPDATE agent_responses SET status=?,turnCompletedAtMillis=? WHERE id=?').run(toStoredStatus(status), Date.now(), response.id)
+        this.store.native.prepare('UPDATE agent_responses SET status=? WHERE id=?').run(toStoredStatus(status), response.id)
       } else {
-        this.store.native.prepare('UPDATE agent_responses SET status=?,turnCompletedAtMillis=?,variableStateJson=? WHERE id=?')
-          .run(toStoredStatus(status), Date.now(), variableStateJson, response.id)
+        this.store.native.prepare('UPDATE agent_responses SET status=?,variableStateJson=? WHERE id=?')
+          .run(toStoredStatus(status), variableStateJson, response.id)
       }
       this.settleProcessItems(response.conversationId, response.id, status)
       this.publish(response.conversationId)
@@ -386,9 +578,8 @@ export class MessageRepository {
   }
 
   private publish(conversationId: string, messages = 0, users = 0): void {
-    const now = new Date().toISOString()
-    this.store.native.prepare('UPDATE agent_conversations SET revision=revision+1,updatedAt=? WHERE id=?').run(now, conversationId)
-    if (messages) this.store.native.prepare('UPDATE chat_sessions SET historyMessageCount=historyMessageCount+?,historyUserMessageCount=historyUserMessageCount+?,updatedAt=? WHERE id=?').run(messages, users, now, conversationId)
+    if (messages) this.store.native.prepare('UPDATE chat_sessions SET historyMessageCount=historyMessageCount+?,historyUserMessageCount=historyUserMessageCount+?,updatedAt=? WHERE id=?')
+      .run(messages, users, new Date().toISOString(), conversationId)
   }
 
   private project(conversationId: string, row: LedgerMessage): ChatMessage {

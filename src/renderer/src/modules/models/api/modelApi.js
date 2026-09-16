@@ -98,6 +98,15 @@ export function testModelConnection(config) {
   return desktopClient.request("command.models.test_connection", normalizeModelConfig(config));
 }
 
+export function fetchModelCapabilities(config, model = config?.model) {
+  const normalized = normalizeModelConfig(config);
+  return desktopClient.request("query.agent.model_capabilities", {
+    baseUrl: normalized.base_url,
+    model: String(model || normalized.model || "").trim(),
+    apiFormat: normalized.api_format,
+  });
+}
+
 export function getActiveModelSelection() {
   return readSetting(MODEL_SELECTION_KEY);
 }

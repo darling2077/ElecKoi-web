@@ -35,8 +35,10 @@ export function fileBase64(file) {
   });
 }
 
-export function downloadPresetJson(fileName, json) {
-  const url = URL.createObjectURL(new Blob([json], { type: 'application/json;charset=utf-8' }));
+export function downloadPresetFile({ fileName, mimeType, base64 }) {
+  const binary = atob(base64);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
   const anchor = document.createElement('a');
   anchor.href = url;
   anchor.download = fileName;

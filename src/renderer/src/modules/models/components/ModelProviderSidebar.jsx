@@ -11,6 +11,7 @@ export function ModelProviderSidebar({
   createProviderItems,
   activeProviderId,
   collapsedGroups,
+  collapseStateReady,
   onToggle,
   onSelect,
   onCreate,
@@ -107,7 +108,7 @@ export function ModelProviderSidebar({
         ) : null}
       </div>
       <div className="model-config-list">
-        {visibleGroups.map((section) => {
+        {collapseStateReady ? visibleGroups.map((section) => {
           const collapsed = collapsedGroups?.[section.id] === true;
           const showProviderList = !collapsed || Boolean(query.trim());
           return (
@@ -152,8 +153,8 @@ export function ModelProviderSidebar({
               ) : null}
             </div>
           );
-        })}
-        {!visibleGroups.length ? <p className="model-provider-empty">没有匹配的模型配置</p> : null}
+        }) : null}
+        {collapseStateReady && !visibleGroups.length ? <p className="model-provider-empty">没有匹配的模型配置</p> : null}
       </div>
       {providerMenu ? (
         <ModelProviderContextMenu

@@ -21,6 +21,7 @@
   },
   "include": [
     "electron.vite.config.ts",
+    "scripts/vite-author-vendor-plugin.ts",
     "src/main/**/*.ts",
     "src/preload/**/*.ts",
     "src/shared/**/*.ts",

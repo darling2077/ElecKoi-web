@@ -13,6 +13,8 @@ import { SqliteDatabase } from '../src/main/platform/sqlite/SqliteDatabase'
 import { UserSettingsStore } from '../src/main/modules/settings/UserSettingsStore'
 import { APP_DEFAULT_CHAT_BACKGROUND } from '../src/shared/contracts/characters/chatBackground'
 import { LocalMediaStore } from '../src/main/platform/filesystem/LocalMediaStore'
+import { decodeSettingLibrarySnapshot } from '../src/main/modules/characterTransfer/portableSnapshots'
+import { readPngText } from '../src/main/platform/filesystem/PngTextChunkCodec'
 
 const encoder = new TextEncoder()
 const databases: SqliteDatabase[] = []
@@ -95,12 +97,23 @@ function tavernCard(name = '测试角色甲') {
 }
 
 describe('character card import', () => {
+  it('rejects retired setting kinds embedded in an ElecKoi character package', () => {
+    expect(() => decodeSettingLibrarySnapshot(JSON.stringify({
+      format: 'eleckoi.setting-library-snapshot',
+      active_version_id: 'v1',
+      versions: [{
+        id: 'v1', name: '设定', entries: [{ id: 'old-plan', kind: 'roleplay_plan' }],
+        groups: [], prompt_positions: [], list_all_expanded: true, expanded_group_ids: []
+      }]
+    }), 'character'))
+      .toThrow('角色卡设定类型不受支持')
+  })
+
   it('converts SillyTavern JSON into the current desktop domains', () => {
     const decoded = decodeCharacterCard(jsonBytes(tavernCard()), 'sillytavern')
 
     expect(decoded.packageData.character).toMatchObject({
       name: '测试角色甲',
-      characterMode: 'story',
       opening: '你好。',
       showOpening: true
     })
@@ -111,7 +124,6 @@ describe('character card import', () => {
     expect(decoded.settingLibrary?.entries.map((entry) => entry.title)).toEqual(expect.arrayContaining([
       'AI角色开场白', '角色描述', '舞台', '歌声'
     ]))
-    expect(decoded.settingLibrary?.entries.some((entry) => entry.kind === 'roleplay_plan')).toBe(false)
     expect(decoded.settingLibrary?.entries.find((entry) => entry.title === '舞台')?.agentReadStrategy).toBe('required')
     expect(decoded.settingLibrary?.entries.find((entry) => entry.title === '歌声')?.keywords).toEqual(['歌曲'])
     expect(decoded.variableConfig?.variables).toEqual(expect.arrayContaining([
@@ -170,15 +182,113 @@ describe('character card import', () => {
     expect(decoded.variableConfig?.variables.map((item) => item.title)).toEqual(['名称', '标签', '状态'])
   })
 
-  it('keeps ElecKoi standard JSON on the lightweight standard-card path', () => {
-    const decoded = decodeCharacterCard(jsonBytes({
+  it('does not treat third-party JSON as an ElecKoi character card', () => {
+    expect(() => decodeCharacterCard(jsonBytes({
       spec: 'chara_card_v2',
       spec_version: '2.0',
       data: { name: '本项目角色', first_mes: '开场白' }
-    }), 'eleckoi')
+    }), 'eleckoi')).toThrow('这不是 ElecKoi 角色卡')
+  })
 
-    expect(decoded.packageData.character).toMatchObject({ name: '本项目角色', opening: '开场白' })
-    expect(decoded.summary).toBe('标准角色卡')
+  it('exports one complete ElecKoi payload as both JSON and a single-block PNG', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'eleckoi-card-export-'))
+    directories.push(directory)
+    const database = new SqliteDatabase(join(directory, 'data.sqlite3'))
+    database.open()
+    databases.push(database)
+    const media = new LocalMediaStore(join(directory, 'media'))
+    const characters = new CharacterRepository(database, {
+      deleteForCharacter() {},
+      flushCleanup() {},
+      refreshCharacterIdentity() {}
+    }, media)
+    const settingLibraries = new SettingLibraryRepository(database)
+    const variables = new VariableConfigRepository(database)
+    const agentPresets = new AgentPresetRepository(database)
+    agentPresets.ensureInitialized()
+    const regexRules = new RegexRuleRepository(database, agentPresets)
+    const picture = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII='
+    characters.create({
+      id: 'export-character',
+      name: '完整角色',
+      group: '测试组',
+      frontendBeautyEnabled: true,
+      profileAge: '18',
+      profileSex: '女',
+      profileHeight: '160',
+      profileBirthday: '09-15',
+      profileLike: '唱歌',
+      chatBackground: picture,
+      chatBackgroundOpacity: 0.25,
+      chatBackgroundBlur: 9,
+      chatBackgroundScrim: 0.8,
+      persona: {
+        assistant_name: '完整角色',
+        assistant_avatar: picture,
+        assistant_square: picture,
+        assistant_cover: picture,
+        image_prompt: '蓝色长发',
+        opening: '你好。',
+        show_opening: true
+      }
+    })
+    const regex = regexRules.get('export-character')
+    regexRules.save('export-character', {
+      ...regex,
+      characterRules: [{
+        id: 'character-rule',
+        name: '角色规则',
+        pattern: '测试',
+        replacement: '完成',
+        targets: ['AiOutput'],
+        enabled: false,
+        displayOnly: true,
+        promptOnly: false,
+        runOnEdit: true,
+        order: 0
+      }]
+    }, regex.revision)
+    const transfers = new CharacterTransferService(database, characters, settingLibraries, variables, regexRules, media)
+
+    const jsonExport = transfers.export('export-character', 'json')
+    const root = JSON.parse(Buffer.from(jsonExport.base64, 'base64').toString('utf8'))
+    expect(jsonExport.fileName).toBe('完整角色.json')
+    expect(root).toMatchObject({ format: 'eleckoi.character-card', version: 1 })
+    expect(root.character).not.toHaveProperty('chat_background_mode')
+    expect(root.character).not.toHaveProperty('chat_background_opacity')
+    expect(root.assets.map((asset: { key: string }) => asset.key)).toEqual([
+      'avatar.circle', 'avatar.square', 'avatar.portrait'
+    ])
+    expect(JSON.parse(root.setting_library).versions.length).toBeGreaterThan(0)
+    expect(JSON.parse(root.variable_config).versions.length).toBeGreaterThan(0)
+    expect(root.regex_rules).toEqual([
+      expect.objectContaining({ id: 'character-rule', enabled: false, display_only: true, run_on_edit: true })
+    ])
+
+    const pngExport = transfers.export('export-character', 'png')
+    const pngBytes = Buffer.from(pngExport.base64, 'base64')
+    const text = readPngText(pngBytes)
+    expect([...text.keys()]).toEqual(['eleckoi-card'])
+    expect(text.has('chara')).toBe(false)
+    expect(text.has('ccv3')).toBe(false)
+    const decodedPng = decodeCharacterCard(pngBytes, 'eleckoi')
+    expect(decodedPng.packageData.character).toEqual(decodeCharacterCard(Buffer.from(jsonExport.base64, 'base64'), 'eleckoi').packageData.character)
+    expect(decodedPng.regexRules).toEqual([
+      expect.objectContaining({ id: 'character-rule', enabled: false, displayOnly: true, runOnEdit: true })
+    ])
+
+    const preview = transfers.prepare([{
+      displayName: jsonExport.fileName,
+      mimeType: jsonExport.mimeType,
+      base64: jsonExport.base64
+    }], 'eleckoi')
+    const imported = transfers.commit(preview.token)
+    const importedId = imported.importedCharacterIds[0]!
+    expect(settingLibraries.get(importedId).versions.length).toBeGreaterThan(0)
+    expect(variables.get(importedId).versions.length).toBeGreaterThan(0)
+    expect(regexRules.get(importedId).characterRules).toEqual([
+      expect.objectContaining({ name: '角色规则', enabled: false })
+    ])
   })
 
   it('commits one converted card and its settings, variables and regex atomically', () => {
@@ -212,7 +322,6 @@ describe('character card import', () => {
     expect(result.collection.items[0]).toMatchObject({
       id: characterId,
       name: '测试角色甲',
-      characterMode: 'story',
       chatBackground: '',
       chatBackgroundOpacity: 0.72,
       chatBackgroundBlur: 2,

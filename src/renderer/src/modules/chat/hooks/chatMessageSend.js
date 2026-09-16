@@ -3,7 +3,6 @@ import {
   listenAgentProcess,
   listenChatStreamDelta,
   sendChatMessage,
-  sendChatMessageStream,
 } from "../api/chatApi.js";
 import { encodeImageDraft } from "./useChatInputImages.js";
 
@@ -12,7 +11,7 @@ export async function runChatMessageSend(options) {
     event, input, inputImagesRef, isSending, modelConfig, modelSupportsImages, setStatus,
     requestRef, setIsSending, sessionId, chatCharacter, setSessionId, replaceChatMessages,
     setChatCharacter, normalizeLatestChatCharacter, refreshSessionsOnly, setInput, clearInputImages,
-    modelSelection, language, setMessages, updatePendingReply, requestScrollToEnd,
+    setMessages, updatePendingReply, requestScrollToEnd,
     reconcileChatMessages, commitPendingError,
   } = options;
   event.preventDefault();
@@ -63,14 +62,10 @@ export async function runChatMessageSend(options) {
       })),
     };
     clearInputImages();
-    const parameters = modelSelection.parameters || {};
-    const streamEnabled = Boolean(parameters.stream);
     const payload = {
-      message: text, images: encodedImages, session_id: targetSessionId, model_config: modelConfig,
-      model_parameters: parameters, language, character_id: chatCharacter.character_id || "",
-      character_name: chatCharacter.character_name || "", character_avatar: chatCharacter.character_avatar || "",
-      assistant_name: chatCharacter.assistant_name || "", assistant_avatar: chatCharacter.assistant_avatar || "",
-      opening: chatCharacter.opening || "", show_opening: chatCharacter.show_opening || false,
+      message: text,
+      images: encodedImages,
+      session_id: targetSessionId,
     };
 
     assistantId = `pending-${Date.now()}`;
@@ -84,23 +79,18 @@ export async function runChatMessageSend(options) {
     });
     activeRequest.unlisten = unlistenProcess;
     throwIfAborted(controller.signal);
-    let unlistenDelta = () => {};
-    if (streamEnabled) {
-      unlistenDelta = await listenChatStreamDelta((event) => {
-        if (event?.request_id !== requestId || event?.session_id !== targetSessionId || !event?.delta) return;
-        updatePendingReply((current) => current?.id === assistantId
-          ? { ...current, pending: true, content: `${current.content || ""}${event.delta}` }
-          : current);
-      });
-    }
+    const unlistenDelta = await listenChatStreamDelta((event) => {
+      if (event?.request_id !== requestId || event?.session_id !== targetSessionId || !event?.delta) return;
+      updatePendingReply((current) => current?.id === assistantId
+        ? { ...current, pending: true, content: `${current.content || ""}${event.delta}` }
+        : current);
+    });
     activeRequest.unlisten = () => { unlistenDelta(); unlistenProcess(); };
     throwIfAborted(controller.signal);
     setMessages((items) => [...items, userMessage]);
     updatePendingReply({ id: assistantId, conversationId: targetSessionId, role: "assistant", content: "", variableStateJson: '{}', pending: true, created_at: createdAt });
     requestScrollToEnd("smooth");
-    const result = streamEnabled
-      ? await sendChatMessageStream(payload, requestId)
-      : await sendChatMessage(payload, requestId);
+    const result = await sendChatMessage(payload, requestId);
     if (requestRef.current !== activeRequest) return;
     if (result.cancelled) {
       reconcileChatMessages(result.chat);

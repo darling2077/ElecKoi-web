@@ -11,11 +11,23 @@ if (!existsSync(executable) || !existsSync(appAsar)) {
 }
 
 const probe = `
-  import('node:fs/promises').then(async ({ mkdtemp, rm }) => {
+  import('node:fs/promises').then(async ({ mkdtemp, readFile, rm }) => {
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const { pathToFileURL } = await import('node:url')
     const appAsar = ${JSON.stringify(appAsar)}
+    const mainSource = await readFile(join(appAsar, 'out', 'main', 'main.js'), 'utf8')
+    const externalUpdaterDependencies = ['electron-updater', 'builder-util-runtime', 'debug', 'sax']
+    for (const dependency of externalUpdaterDependencies) {
+      const loadMarkers = ['require("' + dependency, "require('" + dependency]
+      if (loadMarkers.some((marker) => mainSource.includes(marker))) {
+        throw new Error('Packaged main process still loads ' + dependency + ' as an external dependency.')
+      }
+    }
+    if (!mainSource.includes('class AppUpdater') || !mainSource.includes('NsisUpdater')) {
+      throw new Error('Packaged main process does not contain the bundled updater runtime.')
+    }
+    process.stdout.write('Packaged updater runtime check passed.\\n')
     const runtimeUrl = pathToFileURL(join(appAsar, 'node_modules', '@eleckoi', 'dsh-runtime', 'dist', 'index.mjs')).href
     const { DshRuntime } = await import(runtimeUrl)
     const root = await mkdtemp(join(tmpdir(), 'eleckoi-packaged-dsh-'))

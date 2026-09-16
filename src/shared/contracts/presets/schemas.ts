@@ -100,13 +100,18 @@ export const agentPresetImportResultSchema = z.object({
   skippedDepthRegexCount: z.number().int().nonnegative()
 }).strict()
 
+export const agentPresetExportFormatSchema = z.enum(['json', 'png'])
+
 export const agentPresetExportResultSchema = z.object({
   fileName: z.string().min(1),
-  json: z.string().min(1)
+  mimeType: z.string().min(1),
+  base64: z.string().min(1)
 }).strict()
 
 export type AgentPreset = z.output<typeof agentPresetSchema>
 export type AgentPresetCatalog = z.output<typeof agentPresetCatalogSchema>
+export type AgentPresetExportFormat = z.output<typeof agentPresetExportFormatSchema>
+export type AgentPresetExportResult = z.output<typeof agentPresetExportResultSchema>
 export type AgentPresetImportDocument = z.output<typeof agentPresetImportDocumentSchema>
 export type AgentPresetImportResult = z.output<typeof agentPresetImportResultSchema>
 export type AgentPresetImportSource = z.output<typeof agentPresetImportSourceSchema>

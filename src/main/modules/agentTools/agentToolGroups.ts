@@ -1,6 +1,6 @@
 import type { AgentToolGroup } from '@shared/contracts/agent/tools'
 
-export const AGENT_TOOL_GROUPS: ReadonlyArray<Omit<AgentToolGroup, 'enabled'>> = [
+export const AGENT_TOOL_GROUPS: ReadonlyArray<Omit<AgentToolGroup, 'enabled' | 'included'>> = [
   group('builtin:mcp-resources', 'MCP 资源读取', '列出并读取 MCP 服务器提供的资源和资源模板', [
     'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'
   ]),
@@ -47,10 +47,11 @@ export function agentToolGroups(enabledIds: ReadonlySet<string> = DEFAULT_AGENT_
   return AGENT_TOOL_GROUPS.map((item) => ({
     ...item,
     members: item.members.map((member) => ({ ...member })),
-    enabled: enabledIds.has(item.id)
+    enabled: enabledIds.has(item.id),
+    included: enabledIds.has(item.id)
   }))
 }
 
-function group(id: string, name: string, description: string, members: string[]): Omit<AgentToolGroup, 'enabled'> {
+function group(id: string, name: string, description: string, members: string[]): Omit<AgentToolGroup, 'enabled' | 'included'> {
   return { id, name, description, source: 'built_in', members: members.map((member) => ({ name: member, description: '' })) }
 }

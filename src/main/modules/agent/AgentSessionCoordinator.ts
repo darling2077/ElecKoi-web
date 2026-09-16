@@ -133,20 +133,24 @@ export class AgentSessionCoordinator {
       this.dependencies.messages.latestRuntimeThreadId(conversationId),
       agentPreset
     )
-    const assistantMessage = this.dependencies.database.withWriteTx((database) => {
-      this.dependencies.messages.create(conversationId, 'user', storedText, 'complete', database, '', inputImages)
+    const createdMessages = this.dependencies.database.withWriteTx((database) => {
+      const settingState = this.dependencies.settingLibraries?.snapshotConversationRuntimeState(conversationId, database)
+      const user = this.dependencies.messages.create(conversationId, 'user', storedText, 'complete', database, '', inputImages)
+      if (settingState !== undefined) {
+        this.dependencies.messages.writeSettingLibraryStateSnapshot(conversationId, user.id, settingState)
+      }
       const assistant = this.dependencies.messages.create(conversationId, 'assistant', '', 'streaming', database, runtimeThreadId)
-      this.dependencies.generations.start(runId, conversationId, assistant.id, settings.model)
+      this.dependencies.generations.start(runId, conversationId, assistant.id)
       const preview = storedText || '图片'
       this.dependencies.conversations.titleFromFirstMessage(conversationId, preview, database)
       this.dependencies.conversations.touch(conversationId, preview, database)
-      return assistant
+      return { user, assistant }
     })
 
     const active: ActiveRun = {
       conversationId,
       runId,
-      messageId: assistantMessage.id,
+      messageId: createdMessages.assistant.id,
       cancelled: false,
       accumulated: '',
       sequence: 0,
@@ -159,9 +163,10 @@ export class AgentSessionCoordinator {
       subagentSettings
     }
     this.activeRuns.set(conversationId, active)
+    this.emitMessagesChanged(conversationId, 'sent', [createdMessages.user.id, createdMessages.assistant.id])
     active.done = this.execute(active, storedText, settings, inputImages)
     void active.done
-    return { accepted: true as const, conversationId, runId, messageId: assistantMessage.id }
+    return { accepted: true as const, conversationId, runId, messageId: createdMessages.assistant.id }
   }
 
   regenerate(conversationId: string, targetMessageId: string, replacementMessage?: string) {
@@ -181,7 +186,7 @@ export class AgentSessionCoordinator {
       : undefined
     const runtimeThreadId = runtimeThreadForPreset(prepared.runtimeThreadId, agentPreset)
     const assistantMessage = this.dependencies.messages.create(conversationId, 'assistant', '', 'streaming', undefined, runtimeThreadId)
-    this.dependencies.generations.start(runId, conversationId, assistantMessage.id, settings.model)
+    this.dependencies.generations.start(runId, conversationId, assistantMessage.id)
     const active: ActiveRun = {
       conversationId, runId, messageId: assistantMessage.id, cancelled: false, accumulated: '', sequence: 0,
       done: Promise.resolve(), checkpointAt: 0, checkpointLength: 0, runtimeThreadId,
@@ -190,6 +195,11 @@ export class AgentSessionCoordinator {
       subagentSettings
     }
     this.activeRuns.set(conversationId, active)
+    this.emitMessagesChanged(
+      conversationId,
+      replacementMessage === undefined ? 'regenerated' : 'edited',
+      [prepared.turnId, assistantMessage.id]
+    )
     active.done = this.execute(active, prepared.text, settings, prepared.inputImages)
     void active.done
     return { accepted: true as const, conversationId, runId, messageId: assistantMessage.id }
@@ -222,6 +232,42 @@ export class AgentSessionCoordinator {
     await this.dependencies.runtime.disposeConversation(conversationId)
   }
 
+  async deleteMessagesFrom(conversationId: string, targetMessageId: string) {
+    this.deletingConversations.add(conversationId)
+    try {
+      const preparing = this.preparingRuns.get(conversationId)
+      if (preparing !== undefined) {
+        await this.cancel(conversationId)
+        await preparing.done
+      }
+      if (this.activeRuns.has(conversationId)) await this.cancel(conversationId)
+      const deleted = this.dependencies.database.withWriteTx((database) => {
+        const result = this.dependencies.messages.deleteFrom(conversationId, targetMessageId)
+        this.dependencies.generations.deleteForMessages(conversationId, result.deletedResponseIds)
+        if (result.rollbackSettingLibraryStateJson !== undefined) {
+          this.dependencies.settingLibraries?.restoreConversationRuntimeState(
+            conversationId,
+            result.rollbackSettingLibraryStateJson,
+            database
+          )
+        }
+        return result
+      })
+      await this.dependencies.runtime.disposeConversation(conversationId, deleted.obsoleteRuntimeThreadIds)
+      this.dependencies.discardPreparedImages?.(deleted.deletedAttachmentIds)
+      this.dependencies.gateway.broadcast('records.changed', { module: 'conversations' })
+      this.emitMessagesChanged(conversationId, 'deleted', deleted.deletedMessageIds)
+      this.emitState(conversationId, 'idle')
+      return {
+        ok: true as const,
+        deletedMessageCount: deleted.deletedMessageCount,
+        remainingMessageCount: deleted.remainingMessageCount
+      }
+    } finally {
+      this.deletingConversations.delete(conversationId)
+    }
+  }
+
   finishDelete(conversationId: string): void {
     this.deletingConversations.delete(conversationId)
   }
@@ -237,6 +283,11 @@ export class AgentSessionCoordinator {
       accumulated: active.accumulated,
       sequence: active.sequence
     }
+  }
+
+  readImage(conversationId: string, attachmentId: string) {
+    if (!this.dependencies.runtime.readImage) throw new Error('图片运行时尚未就绪。')
+    return this.dependencies.runtime.readImage(this.dependencies.messages.findInputImage(conversationId, attachmentId))
   }
 
   hasActiveRun(): boolean {
@@ -452,6 +503,13 @@ export class AgentSessionCoordinator {
           )
         }
         const finished = this.dependencies.messages.finish(active.messageId, content, status, database, committedVariableState)
+        if (this.dependencies.settingLibraries) {
+          this.dependencies.messages.writeSettingLibraryStateSnapshot(
+            active.conversationId,
+            active.messageId,
+            this.dependencies.settingLibraries.snapshotConversationRuntimeState(active.conversationId, database)
+          )
+        }
         this.dependencies.generations.finish(active.runId, status)
         this.dependencies.conversations.touch(active.conversationId, content, database)
         return finished
@@ -494,7 +552,7 @@ export class AgentSessionCoordinator {
           database
         )
         this.dependencies.conversations.touch(active.conversationId, errorContent, database)
-        this.dependencies.generations.finish(active.runId, 'error', diagnosticMessage)
+        this.dependencies.generations.finish(active.runId, 'error')
         return finished
       })
       this.dependencies.gateway.broadcast('agent.run.failed', {
@@ -515,6 +573,14 @@ export class AgentSessionCoordinator {
   private emitState(conversationId: string, state: AgentState, detail?: string): void {
     const payload = detail === undefined ? { conversationId, state } : { conversationId, state, detail }
     this.dependencies.gateway.broadcast('agent.state.changed', payload)
+  }
+
+  private emitMessagesChanged(
+    conversationId: string,
+    reason: 'sent' | 'edited' | 'deleted' | 'regenerated',
+    messageIds: string[]
+  ): void {
+    this.dependencies.gateway.broadcast('messages.changed', { conversationId, reason, messageIds })
   }
 
   private isCurrent(active: ActiveRun): boolean {

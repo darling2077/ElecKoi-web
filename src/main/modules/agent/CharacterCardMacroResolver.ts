@@ -4,6 +4,7 @@ import type {
 } from '@shared/contracts/agent/runtime'
 import {
   resolveCharacterCardMacros,
+  resolveCharacterCardMacrosInJson,
   type CharacterCardMacroValues
 } from '@shared/foundation/characterCardMacros'
 
@@ -14,6 +15,8 @@ export function resolveVariableContextCharacterCardMacros(
   if (!context || !values) return context
   return {
     ...context,
+    initialStateJson: resolveCharacterCardMacrosInJson(context.initialStateJson, values),
+    stateJson: resolveCharacterCardMacrosInJson(context.stateJson, values),
     objects: context.objects.map((item) => ({
       ...item,
       description: resolveCharacterCardMacros(item.description, values),

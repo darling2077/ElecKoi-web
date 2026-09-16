@@ -5,20 +5,31 @@ import type { MessageStatus } from '@shared/contracts/entities/chat'
 export class GenerationRepository implements ConversationDeleteGuard {
   constructor(
     private readonly store: SqliteDatabase,
-    private readonly messages: Pick<MessageRepository, 'bindPendingResponseToModel'>
+    private readonly messages: Pick<MessageRepository, 'requirePendingResponse'>
   ) {}
 
-  start(id: string, conversationId: string, messageId: string, model: string): void {
+  start(id: string, conversationId: string, messageId: string): void {
     this.store.withWriteTx(() => {
-      const responseId = this.messages.bindPendingResponseToModel(conversationId, messageId, model)
-      this.store.native.prepare(`INSERT INTO generation_attempts(id,conversationId,kind,ownerId,parentAttemptId,outputMessageId,attemptNumber,state,createdAtMillis,startedAtMillis,finishedAtMillis,errorMessage,outputPath,supersededByAttemptId)
-        VALUES (?,?,'text',?,NULL,?,1,'running',?,?,NULL,'','',NULL)`).run(id, conversationId, responseId, messageId, Date.now(), Date.now())
+      const responseId = this.messages.requirePendingResponse(conversationId, messageId)
+      this.store.native.prepare(`INSERT INTO generation_attempts(id,conversationId,ownerId,state)
+        VALUES (?,?,?,'running')`).run(id, conversationId, responseId)
     })
   }
 
-  finish(id: string, status: MessageStatus, error = ''): void {
-    this.store.native.prepare(`UPDATE generation_attempts SET state=?,finishedAtMillis=?,errorMessage=? WHERE id=? AND state='running'`)
-      .run(status === 'complete' ? 'succeeded' : status === 'cancelled' ? 'cancelled' : 'failed', Date.now(), error, id)
+  finish(id: string, status: MessageStatus): void {
+    this.store.native.prepare(`UPDATE generation_attempts SET state=? WHERE id=? AND state='running'`)
+      .run(status === 'complete' ? 'succeeded' : status === 'cancelled' ? 'cancelled' : 'failed', id)
+  }
+
+  deleteForMessages(conversationId: string, messageIds: readonly string[]): void {
+    const ids = [...new Set(messageIds.filter(Boolean))]
+    if (ids.length === 0) return
+    this.store.withWriteTx(() => {
+      const statement = this.store.native.prepare(
+        'DELETE FROM generation_attempts WHERE conversationId=? AND ownerId=?'
+      )
+      for (const id of ids) statement.run(conversationId, id)
+    })
   }
 
   assertCanDelete(conversationId: string): void {

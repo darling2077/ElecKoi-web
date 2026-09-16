@@ -5,13 +5,10 @@ import { integer, real, text, primaryKey, sqliteTable } from 'drizzle-orm/sqlite
 
 export const chatSessions = sqliteTable('chat_sessions', {
   id: text('id').notNull().primaryKey(),
-  workspaceId: text('workspaceId').notNull(),
   title: text('title').notNull(),
   characterId: text('characterId').notNull(),
   characterName: text('characterName').notNull(),
   characterAvatar: text('characterAvatar').notNull(),
-  characterMode: text('characterMode').notNull(),
-  permissionMode: text('permissionMode').notNull(),
   historySummary: text('historySummary').notNull(),
   historyMessageCount: integer('historyMessageCount').notNull(),
   historyUserMessageCount: integer('historyUserMessageCount').notNull(),
@@ -22,11 +19,6 @@ export const chatSessions = sqliteTable('chat_sessions', {
 export const chatSessionCharacterSnapshots = sqliteTable('chat_session_character_snapshots', {
   sessionId: text('sessionId').notNull().primaryKey(),
   personaJson: text('personaJson').notNull(),
-})
-
-export const chatSessionModelSettings = sqliteTable('chat_session_model_settings', {
-  sessionId: text('sessionId').notNull().primaryKey(),
-  settingsJson: text('settingsJson').notNull(),
 })
 
 export const chatSessionVariableStates = sqliteTable('chat_session_variable_states', {
@@ -45,7 +37,6 @@ export const characters = sqliteTable('characters', {
   orderIndex: integer('orderIndex').notNull(),
   groupViewOrder: integer('groupViewOrder').notNull(),
   folder: text('folder').notNull(),
-  characterMode: text('characterMode').notNull(),
   frontendBeautyEnabled: integer('frontendBeautyEnabled').notNull(),
   assistantName: text('assistantName').notNull(),
   assistantAvatar: text('assistantAvatar').notNull(),
@@ -187,25 +178,12 @@ export const regexState = sqliteTable('regex_state', {
   revision: integer('revision').notNull(),
 })
 
-export const globalToolConfig = sqliteTable('global_tool_config', {
+export const webSearchSettings = sqliteTable('web_search_settings', {
   singletonId: integer('singletonId').notNull().primaryKey(),
-  payloadJson: text('payloadJson').notNull(),
+  mode: text('mode').notNull(),
+  maxResults: integer('maxResults').notNull(),
+  tavilyApiKey: text('tavilyApiKey').notNull(),
   updatedAt: text('updatedAt').notNull(),
-})
-
-export const frontendProjects = sqliteTable('frontend_projects', {
-  id: text('id').notNull().primaryKey(),
-  characterId: text('characterId').notNull(),
-  name: text('name').notNull(),
-  entryFile: text('entryFile').notNull(),
-  filesJson: text('filesJson').notNull(),
-  importedAt: text('importedAt').notNull(),
-})
-
-export const characterFrontendSettings = sqliteTable('character_frontend_settings', {
-  characterId: text('characterId').notNull().primaryKey(),
-  selectedProjectId: text('selectedProjectId'),
-  messageRendererEnabled: integer('messageRendererEnabled').notNull(),
 })
 
 export const cleanupOperations = sqliteTable('cleanup_operations', {
@@ -221,31 +199,12 @@ export const cleanupOperations = sqliteTable('cleanup_operations', {
 
 export const agentConversations = sqliteTable('agent_conversations', {
   id: text('id').notNull().primaryKey(),
-  surface: text('surface').notNull(),
   activeBranchId: text('activeBranchId').notNull(),
-  createdAt: text('createdAt').notNull(),
-  updatedAt: text('updatedAt').notNull(),
-  revision: integer('revision').notNull(),
 })
-
-export const agentConversationDisplayCache = sqliteTable('agent_conversation_display_cache', {
-  conversationId: text('conversationId').notNull(),
-  chunkIndex: integer('chunkIndex').notNull(),
-  ledgerRevision: integer('ledgerRevision').notNull(),
-  payloadJson: text('payloadJson').notNull(),
-  rendererVersion: integer('rendererVersion').notNull(),
-  updatedAt: text('updatedAt').notNull(),
-}, (table) => [primaryKey({ columns: [table.conversationId, table.chunkIndex] })])
 
 export const agentBranches = sqliteTable('agent_branches', {
   id: text('id').notNull().primaryKey(),
   conversationId: text('conversationId').notNull(),
-  parentBranchId: text('parentBranchId'),
-  forkedFromTurnId: text('forkedFromTurnId'),
-  headSequence: integer('headSequence').notNull(),
-  name: text('name').notNull(),
-  reason: text('reason').notNull(),
-  createdAt: text('createdAt').notNull(),
 })
 
 export const conversationSpeakers = sqliteTable('conversation_speakers', {
@@ -261,10 +220,7 @@ export const agentTurns = sqliteTable('agent_turns', {
   id: text('id').notNull().primaryKey(),
   conversationId: text('conversationId').notNull(),
   speakerId: text('speakerId').notNull(),
-  sourceMessageId: text('sourceMessageId').notNull(),
   kind: text('kind').notNull(),
-  provider: text('provider').notNull(),
-  model: text('model').notNull(),
   createdAt: text('createdAt').notNull(),
   variableStateJson: text('variableStateJson').notNull(),
 })
@@ -275,16 +231,10 @@ export const agentResponses = sqliteTable('agent_responses', {
   turnId: text('turnId').notNull(),
   responseIndex: integer('responseIndex').notNull(),
   speakerId: text('speakerId').notNull(),
-  sourceMessageId: text('sourceMessageId').notNull(),
   status: text('status').notNull(),
-  provider: text('provider').notNull(),
-  model: text('model').notNull(),
   createdAt: text('createdAt').notNull(),
   variableStateJson: text('variableStateJson').notNull(),
   runtimeThreadId: text('runtimeThreadId').notNull(),
-  runtimeTurnId: text('runtimeTurnId').notNull(),
-  turnStartedAtMillis: integer('turnStartedAtMillis').notNull(),
-  turnCompletedAtMillis: integer('turnCompletedAtMillis'),
 })
 
 export const agentBranchTurns = sqliteTable('agent_branch_turns', {
@@ -307,18 +257,8 @@ export const agentContentParts = sqliteTable('agent_content_parts', {
 export const generationAttempts = sqliteTable('generation_attempts', {
   id: text('id').notNull().primaryKey(),
   conversationId: text('conversationId').notNull(),
-  kind: text('kind').notNull(),
   ownerId: text('ownerId').notNull(),
-  parentAttemptId: text('parentAttemptId'),
-  outputMessageId: text('outputMessageId').notNull(),
-  attemptNumber: integer('attemptNumber').notNull(),
   state: text('state').notNull(),
-  createdAtMillis: integer('createdAtMillis').notNull(),
-  startedAtMillis: integer('startedAtMillis'),
-  finishedAtMillis: integer('finishedAtMillis'),
-  errorMessage: text('errorMessage').notNull(),
-  outputPath: text('outputPath').notNull(),
-  supersededByAttemptId: text('supersededByAttemptId'),
 })
 
 export const settingLibraries = sqliteTable('setting_libraries', {
@@ -419,7 +359,6 @@ export const agentPresets = sqliteTable('agent_presets', {
   activeVersionId: text('activeVersionId').notNull().default(sql.raw("''")),
   authorName: text('authorName').notNull().default(sql.raw("''")),
   authorAvatarPath: text('authorAvatarPath').notNull().default(sql.raw("''")),
-  usageInstructions: text('usageInstructions').notNull().default(sql.raw("''")),
   sortIndex: integer('sortIndex').notNull(),
   expandedGroupIdsJson: text('expandedGroupIdsJson').notNull(),
 })
@@ -476,4 +415,4 @@ export const agentPresetVersionGroups = sqliteTable('agent_preset_version_groups
   payloadJson: text('payloadJson').notNull(),
 }, (table) => [primaryKey({ columns: [table.presetId, table.versionId, table.groupId] })])
 
-export const commonTables = { chatSessions, chatSessionCharacterSnapshots, chatSessionModelSettings, chatSessionVariableStates, characters, characterTextContents, characterMeta, userProfile, modelConfigs, modelConfigMeta, variableConfigs, variableConfigVersions, variableConfigVersionContents, variableConfigObjects, variableConfigVariables, globalRegexRules, characterRegexRules, regexEnablementVersions, regexState, globalToolConfig, frontendProjects, characterFrontendSettings, cleanupOperations, agentConversations, agentConversationDisplayCache, agentBranches, conversationSpeakers, agentTurns, agentResponses, agentBranchTurns, agentContentParts, generationAttempts, settingLibraries, settingEntryContents, settingLibraryEntryLinks, settingLibraryGroups, settingLibraryVersions, settingLibraryVersionEntryLinks, settingLibraryVersionGroups, conversationSettingChanges, roleplayRichHeights, agentPresetState, agentPresetLibraryGroups, agentPresets, agentPresetContents, agentPresetEntries, agentPresetGroups, agentPresetVersions, agentPresetVersionContents, agentPresetVersionEntries, agentPresetVersionGroups }
+export const commonTables = { chatSessions, chatSessionCharacterSnapshots, chatSessionVariableStates, characters, characterTextContents, characterMeta, userProfile, modelConfigs, modelConfigMeta, variableConfigs, variableConfigVersions, variableConfigVersionContents, variableConfigObjects, variableConfigVariables, globalRegexRules, characterRegexRules, regexEnablementVersions, regexState, webSearchSettings, cleanupOperations, agentConversations, agentBranches, conversationSpeakers, agentTurns, agentResponses, agentBranchTurns, agentContentParts, generationAttempts, settingLibraries, settingEntryContents, settingLibraryEntryLinks, settingLibraryGroups, settingLibraryVersions, settingLibraryVersionEntryLinks, settingLibraryVersionGroups, conversationSettingChanges, roleplayRichHeights, agentPresetState, agentPresetLibraryGroups, agentPresets, agentPresetContents, agentPresetEntries, agentPresetGroups, agentPresetVersions, agentPresetVersionContents, agentPresetVersionEntries, agentPresetVersionGroups }

@@ -58,7 +58,6 @@ export interface ConversationMetadata {
   characterName: string
   characterAvatar: string
   characterPersona: Record<string, unknown>
-  modelSettings: Record<string, unknown>
 }
 
 export interface ChatMessage {
