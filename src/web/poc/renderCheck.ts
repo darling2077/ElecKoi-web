@@ -372,7 +372,7 @@ async function main(): Promise<void> {
     const configId = configs.find((config) => config.name === 'RENDER-MOCK')?.id
     await call('command.settings.write', {
       key: 'models.active',
-      value: { capability: 'chat', config_id: configId, model: 'mock-model', parameters: { stream: true, temperature: 1, top_p: 1 } }
+      value: { capability: 'chat', config_id: configId, model: 'mock-model' }
     })
     await call('command.characters.create', {
       id: 'char-render',
@@ -389,8 +389,7 @@ async function main(): Promise<void> {
         characterId: 'char-render',
         characterName: '渲染验收',
         characterAvatar: '',
-        characterPersona: {},
-        modelSettings: {}
+        characterPersona: {}
       }
     })
     const conversationId = details.conversation?.id

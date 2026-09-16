@@ -5,12 +5,36 @@
 
 ## 约定
 
-- 每个补丁一个文件，命名 `NNNN-简短说明.patch`（`git diff` 格式）。
+- 每个补丁一个文件，命名 **`NNNN-简短说明.patch`**（四位数字前缀，`git diff` 格式）。
 - 补丁由构建前的 `scripts/apply-patches.mjs` 施加；**打不上即失败**，
   这正是上游改动到我们依赖的那几行时的告警点。
 - 每增加一个补丁，必须在本文件登记：改了什么、为什么非改不可、如何验证。
 - **上游自带同类修复时删掉我们的补丁**，不重复维护。先例：0003 曾修「块级 HTML 标签
   吞掉代码围栏」，上游 v0.1.1 的 `normalizeMarkdownForRendering.js` 修得更彻底，我们随即删除。
+
+### ⚠️ 数字前缀不是风格问题，是硬约束（v0.1.2 起）
+
+**上游 v0.1.2 开始，`patches/` 这个目录上游自己也在用了**——里面放的是 pnpm 包补丁：
+
+```
+patches/@deepseek-ai__dsh-llm@0.1.1-rc.2.patch
+patches/@deepseek-ai__dsh-llm-pi-ai@0.1.1-rc.2.patch
+patches/@deepseek-ai__dsh-sdk-jsonrpc-server@0.1.1-rc.2.patch
+patches/@earendil-works__pi-ai.patch
+```
+
+它们由 `package.json` 的 `pnpm.patchedDependencies` 消费，**不是 git 补丁**。
+两个后果，升级时都实际踩到了：
+
+1. **`apply-patches.mjs` 不能按 `*.patch` 通配。** 拿它们去 `git apply` 必然失败
+   （内部路径相对包根，目标文件在 `node_modules` 里）。现只认 `^\d{4}-.+\.patch$`。
+2. **门禁解析补丁时同样要筛。** pnpm 补丁里的路径写作 `a/package.json`
+   （指**该包自己的** package.json），不筛掉就会被当成**本仓库根** `package.json`
+   的期望改动量，报出「补丁 +1/-1，实际 +22/-1」这种看起来毫不相干的错。
+
+同理**不要整目录放行 `patches/`**：门禁白名单已改为按模式放行
+（`patches/NNNN-*.patch` 与 `patches/README.md`），这样「上游删掉或改了自己的某个
+pnpm 补丁」仍会被门禁抓到。
 
 ## 当前补丁
 
