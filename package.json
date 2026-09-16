@@ -53,6 +53,7 @@
     "webui:cardisolation": "node scripts/apply-patches.mjs && vite build --config src/web/vite.cardisolation.config.ts && node out/web/cardisolation.mjs",
     "webui:csp": "node scripts/apply-patches.mjs && vite build --config src/web/vite.csp.config.ts && node out/web/csp.mjs",
     "webui:quota": "node scripts/apply-patches.mjs && vite build --config src/web/vite.quota.config.ts && node out/web/quota.mjs",
+    "webui:import-cards": "node scripts/apply-patches.mjs && vite build --config src/web/vite.importcards.config.ts && node out/web/importCards.mjs",
     "webui:backup": "node scripts/apply-patches.mjs && vite build --config src/web/vite.backup.config.ts && node out/web/backup.mjs",
     "webui:avatar": "node scripts/apply-patches.mjs && vite build --config src/web/vite.avatar.config.ts && node out/web/avatar.mjs",
     "webui:chrome": "node scripts/apply-patches.mjs && vite build --config src/web/vite.chrome.config.ts && node out/web/chrome.mjs",
