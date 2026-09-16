@@ -43,6 +43,9 @@ docker compose -f docker/compose.yml up -d --build
   把你的数据以图片请求发给它（落进对方日志，第三方站点你无法核实谁看得到）。
   另一种不需要任何放行的做法是内联成 `data:` URI（CSP 本来就允许），见该文档的
   方案对照表。
+- 导入卡片时自动搬图由 `ELECKOI_IMAGE_PUBLIC_BASE` / `UPLOAD_API` / `UPLOAD_TOKEN`
+  三个变量共同启用（缺一个即关闭）；默认后台搬运，靠 `ELECKOI_IMAGE_LOCALIZE_MODE=inline`
+  才阻塞导入——大卡绝不能 inline，否则导入请求会被反向代理掐断。
 - 可选的图床（Zipline）在 `images` profile 下，配置全部在 `docker/.env` 的
   「自带图床」段（`ZIPLINE_*`）；不启用不影响默认部署（默认那条 `up -d` 仍只起
   `eleckoi-web`）。⚠️ `ZIPLINE_USER_REGISTRATION` 与 `ZIPLINE_INVITES_ENABLED`
