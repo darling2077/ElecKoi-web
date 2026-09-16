@@ -68,11 +68,19 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       # 放在构建成功之后：构建失败时不该留下一个声称"镜像已发布"的 Release。
-      - name: 创建 Release
+      #
+      # 幂等：同一个 tag 被移动后重新发布时（上游自己就这么干过——他们把 v0.1.2
+      # 强制移动到了新提交），Release 已经存在，`gh release create` 会直接报错退出。
+      # 这种情况应当更新说明，而不是让整个作业失败。
+      - name: 创建或更新 Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" \
-            --title "ElecKoi WebUI ${{ steps.names.outputs.version }}" \
-            --notes-file docs/webui/发行说明.md
+          TITLE="ElecKoi WebUI ${{ steps.names.outputs.version }}"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME 已存在，更新说明。"
+            gh release edit "$GITHUB_REF_NAME" --title "$TITLE" --notes-file docs/webui/发行说明.md
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$TITLE" --notes-file docs/webui/发行说明.md
+          fi
