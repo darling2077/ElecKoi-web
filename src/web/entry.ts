@@ -50,6 +50,7 @@ const stack = await startWebUiStack({
   idleMs,
   maxLive,
   ...(process.env.ELECKOI_CARD_ORIGIN ? { cardOrigin: process.env.ELECKOI_CARD_ORIGIN } : {}),
+  cardImageOrigins: (process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').split(','),
   ...(process.env.ELECKOI_SOURCE_URL ? { sourceUrl: process.env.ELECKOI_SOURCE_URL } : {}),
   maxConcurrentRuns: Number(process.env.ELECKOI_MAX_CONCURRENT_RUNS ?? 2),
   adminEmails: (process.env.ELECKOI_ADMIN_EMAILS ?? '').split(',').map((item) => item.trim()).filter(Boolean),
@@ -72,6 +73,9 @@ if (!process.env.ELECKOI_SOURCE_URL) {
 console.log(process.env.ELECKOI_CARD_ORIGIN
   ? `卡片源：${process.env.ELECKOI_CARD_ORIGIN}（富内容已跨源隔离）\n`
   : `卡片源：未配置——富内容与宿主同源，仅限本地自用，请勿开放公网。\n`)
+if ((process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').trim() !== '') {
+  console.log(`卡片可加载的外部图片源：${process.env.ELECKOI_CARD_IMAGE_ORIGINS}\n`)
+}
 
 let shuttingDown = false
 async function shutdown(signal: string): Promise<void> {
