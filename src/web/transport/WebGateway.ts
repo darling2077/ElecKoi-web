@@ -42,6 +42,21 @@ export interface RunQuota {
   end(conversationId: string): void
 }
 
+/** 导入角色卡后自动搬运卡片图片的钩子（由 WebHost 在挂载租户时注入）。 */
+export interface ImportImageHook {
+  localizeCharacters(characterIds: readonly string[]): Promise<{
+    localized: number
+    urlsLocalized: number
+    skipped: number
+    failed: number
+    deferred: number
+  }>
+  waitForIdle(): Promise<void>
+}
+
+/** 导入提交这条路由：它的返回值里带着刚导入的角色 id。 */
+const IMPORT_COMMIT = 'command.characters.import.commit'
+
 export class WebGateway extends DesktopGateway {
   private readonly connections = new Set<WebConnection>()
   /** 媒体 URL 重写开关：默认开启，保留开关便于对照实验。 */
@@ -56,6 +71,21 @@ export class WebGateway extends DesktopGateway {
    * 超限的请求根本不应该被执行。
    */
   runQuota: RunQuota | undefined
+  /**
+   * 导入后的图片搬运钩子。设置后，`command.characters.import.commit` 返回前会
+   * 把新卡里的外链图片搬到自己的图床并改写引用——导入这一步就把事情做完，
+   * 用户不需要再去跑外部脚本。
+   */
+  importImageHook: ImportImageHook | undefined
+  /**
+   * 搬运时机：
+   *  - `background`（默认）：导入立刻返回，搬运在后台继续，完成后广播刷新。
+   *    几百张图的大卡必须走这个——阻塞住导入请求会被反向代理掐断（504）。
+   *  - `inline`：等搬运完再返回。小卡（一两张图）这样最直观。
+   */
+  importImageMode: 'background' | 'inline' = 'background'
+  /** 搬运完成后的通知（用于让前端刷新被改写的模块）。 */
+  onImagesLocalized: ((modules: readonly string[]) => void) | undefined
 
   attach(connection: WebConnection): () => void {
     this.connections.add(connection)
@@ -97,8 +127,31 @@ export class WebGateway extends DesktopGateway {
       if (slot !== undefined) this.runQuota!.end(slot)
       throw error
     }
+    // 导入完成即搬运卡片图片。放在这里（而不是上游的导入代码里）有两个好处：
+    // 不改上游文件，且浏览器与批量工具走的是同一条 dispatch，行为完全一致。
+    if (envelope.name === IMPORT_COMMIT && this.importImageHook !== undefined) {
+      if (this.importImageMode === 'inline') await this.localizeImportedImages(result)
+      else void this.localizeImportedImages(result)
+    }
     if (!this.rewriteMediaUrls) return result
     return rewriteLocalMediaReferences(result, this.mediaSigner === undefined ? undefined : this.mediaSigner.sign)
+  }
+
+  /**
+   * 把刚导入的角色卡里的外链图片搬到自己的图床。
+   *
+   * **失败不能让导入失败**：卡已经进库了，图片搬不动只是显示不出来，
+   * 所以这里吞掉异常并记日志——用户可以稍后用外部脚本重跑（它是幂等的）。
+   */
+  private async localizeImportedImages(result: unknown): Promise<void> {
+    const ids = (result as { importedCharacterIds?: unknown } | null | undefined)?.importedCharacterIds
+    if (!Array.isArray(ids) || ids.length === 0) return
+    try {
+      const outcome = await this.importImageHook!.localizeCharacters(ids.filter((id): id is string => typeof id === 'string'))
+      if (outcome.localized > 0) this.onImagesLocalized?.(['personas', 'variables', 'regexRules', 'settingLibraries'])
+    } catch (error) {
+      console.error(`[card-images] 导入后搬运图片失败：${error instanceof Error ? error.message : String(error)}`)
+    }
   }
 
   override dispose(): void {

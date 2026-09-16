@@ -25,6 +25,8 @@ import { sqlitePlugin } from '@main/host/plugins'
 import { createWebPlatformPlugin } from './platform/webPlatformPlugin'
 import { createWebShellPlugin } from './modules/webShellPlugin'
 import { WebGateway, type RunQuota } from './transport/WebGateway'
+import type { SqliteDatabase } from '@main/platform/sqlite/SqliteDatabase'
+import { createCardImageLocalizer, type CardImageLocalizer } from './media/cardImageLocalizer'
 import { createMediaSigner } from './mediaSignature'
 import type { Plugin } from '@deepseek-ai/cordis'
 
@@ -65,6 +67,38 @@ function createWebGatewayPlugin(gateway: WebGateway): Plugin.Object {
   }
 }
 
+/**
+ * 按环境变量装配「导入卡片时自动搬图」。
+ *
+ * 需要三个变量同时就位才启用；缺任何一个都返回 undefined（= 不启用，行为与以前一致）：
+ *   ELECKOI_IMAGE_PUBLIC_BASE   图床对外地址，如 https://img.kidamita.top:57789
+ *   ELECKOI_IMAGE_UPLOAD_API    上传接口地址，通常与上面同源
+ *   ELECKOI_IMAGE_UPLOAD_TOKEN  图床后台生成的 API 令牌
+ *
+ * 另外三个可调（都有默认值）：ELECKOI_IMAGE_MAX_PER_IMPORT、ELECKOI_IMAGE_TIME_BUDGET_MS、
+ * ELECKOI_IMAGE_MAX_BYTES。
+ */
+export function createImportImageLocalizer(database: SqliteDatabase): CardImageLocalizer | undefined {
+  const publicBase = (process.env.ELECKOI_IMAGE_PUBLIC_BASE ?? '').trim()
+  const uploadApi = (process.env.ELECKOI_IMAGE_UPLOAD_API ?? '').trim()
+  const uploadToken = (process.env.ELECKOI_IMAGE_UPLOAD_TOKEN ?? '').trim()
+  if (publicBase === '' || uploadApi === '' || uploadToken === '') return undefined
+  const number = (raw: string | undefined, fallback: number): number => {
+    const value = Number((raw ?? '').trim())
+    return Number.isFinite(value) && value > 0 ? value : fallback
+  }
+  return createCardImageLocalizer({
+    database,
+    publicBase,
+    uploadApi,
+    uploadToken,
+    maxImages: number(process.env.ELECKOI_IMAGE_MAX_PER_IMPORT, 2000),
+    maxBytes: number(process.env.ELECKOI_IMAGE_MAX_BYTES, 20 * 1024 * 1024),
+    budgetMs: number(process.env.ELECKOI_IMAGE_TIME_BUDGET_MS, 900_000),
+    log: (message) => console.log(`[card-images]${message}`)
+  })
+}
+
 export class WebHost {
   static async mountTenant(options: MountTenantOptions): Promise<TenantRuntime> {
     const context = new Context()
@@ -102,6 +136,15 @@ export class WebHost {
 
     const mounted = context.desktopGateway as WebGateway
     if (mounted !== gateway) throw new Error('desktopGateway 服务不是本租户的网关实例。')
+
+    // 导入卡片后自动搬图：没配图床就自动关闭（不影响任何既有行为）。
+    const localizer = createImportImageLocalizer(context.database)
+    if (localizer !== undefined) {
+      mounted.importImageHook = localizer
+      // 搬运完成后让前端刷新角色列表：卡片内容被改写了，不刷新会一直显示旧的黑图。
+      mounted.onImagesLocalized = () => mounted.broadcast('records.changed', { module: 'personas' })
+      mounted.importImageMode = (process.env.ELECKOI_IMAGE_LOCALIZE_MODE ?? '').trim() === 'inline' ? 'inline' : 'background'
+    }
     let disposed = false
 
     return {
