@@ -59,6 +59,9 @@ services:
       ELECKOI_CARD_IMAGE_ORIGINS: "${ELECKOI_CARD_IMAGE_ORIGINS:-}"
       # 导入角色卡时**自动**把卡里的外链图片搬到自己的图床（三个都配齐才启用，
       # 缺任何一个就自动关闭、行为与以前完全一致）。见 docs/webui/卡片外链图片本地化.md
+      # 单次请求体上限。导入角色卡会把整张卡的 base64 放进一次请求，默认 128 MB；
+      # 顶到上限时会返回明确的 413（旧版是 8 MB 且直接断线，只报"连接已断开"）。
+      ELECKOI_MAX_BODY_BYTES: "${ELECKOI_MAX_BODY_BYTES:-134217728}"
       ELECKOI_IMAGE_PUBLIC_BASE: "${ELECKOI_IMAGE_PUBLIC_BASE:-}"
       ELECKOI_IMAGE_UPLOAD_API: "${ELECKOI_IMAGE_UPLOAD_API:-}"
       ELECKOI_IMAGE_UPLOAD_TOKEN: "${ELECKOI_IMAGE_UPLOAD_TOKEN:-}"
