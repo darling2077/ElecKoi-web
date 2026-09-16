@@ -586,7 +586,7 @@ async function main(): Promise<void> {
     })
     await call('command.settings.write', {
       key: 'models.active',
-      value: { capability: 'chat', config_id: configId, model: 'mock-model', parameters: { stream: true, temperature: 1, top_p: 1 } }
+      value: { capability: 'chat', config_id: configId, model: 'mock-model' }
     })
     await call('command.characters.create', {
       id: 'char-mobile', name: '移动端测试', description: '布局验收', personality: '', scenario: '',
@@ -597,7 +597,7 @@ async function main(): Promise<void> {
       title: '移动端测试会话',
       metadata: {
         characterId: 'char-mobile', characterName: '移动端测试',
-        characterAvatar: FIXTURE_ART, characterPersona: {}, modelSettings: {}
+        characterAvatar: FIXTURE_ART, characterPersona: {}
       }
     }) as { conversation?: { id?: string } }
     const conversationId = details?.conversation?.id

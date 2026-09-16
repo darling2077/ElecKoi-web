@@ -34,7 +34,6 @@ const root = resolve(import.meta.dirname, '..')
 const ALLOWED_ADDITIONS = [
   'src/web/',
   'docker/',
-  'patches/',
   'docs/webui/',
   // 我们自己加的 workflow（构建并发布容器镜像）。
   // 注意只放行 workflows/ 子目录：上游那两个 workflow 若是被改动或删除，
@@ -55,6 +54,9 @@ const ALLOWED_ADDITIONS = [
  *   两者都是纯文档，上游改动导致冲突时人工合并即可，不影响可构建性。
  */
 const ALLOWED_MODIFICATIONS = new Set(['package.json', 'README.md', 'NOTICE'])
+
+/** 我们自己的补丁命名：0001-xxx.patch（上游的 pnpm 补丁没有数字前缀）。 */
+const OUR_PATCH = /^\d{4}-.+\.patch$/
 
 function git(args, options = {}) {
   // core.quotePath=false：否则中文路径会被转义成八进制，白名单比对失效。
@@ -88,7 +90,10 @@ function patchedFiles() {
   const dir = join(root, 'patches')
   if (!existsSync(dir)) return new Map()
   const expected = new Map()
-  for (const name of readdirSync(dir).filter((entry) => entry.endsWith('.patch'))) {
+  // 同 apply-patches：只解析我们自己的补丁。上游 v0.1.2 在 patches/ 里
+  // 放了 pnpm 包补丁，其内部路径（a/package.json 等）相对包根，
+  // 不筛掉会把包内的 package.json 误算成仓库根 package.json 的期望改动量。
+  for (const name of readdirSync(dir).filter((entry) => OUR_PATCH.test(entry))) {
     const content = readFileSync(join(dir, name), 'utf8')
     let current = null
     for (const line of content.split('\n')) {
@@ -125,7 +130,20 @@ function listUntracked() {
     .filter(Boolean)
 }
 
+/**
+ * 按模式放行的新增路径。
+ *
+ * `patches/` 不能整目录放行：上游 v0.1.2 自己也建了 `patches/` 放 pnpm 包补丁
+ * （`@scope__name@version.patch`）。整目录放行会让"上游删掉或改了自己的某个补丁"
+ * 逃过门禁。只认我们自己的命名约定：四位数字前缀的补丁，加上我们写的 README。
+ */
+const ALLOWED_ADDITION_PATTERNS = [
+  /^patches\/\d{4}-[^/]+\.patch$/,
+  /^patches\/README\.md$/
+]
+
 function isAllowedAddition(path) {
+  if (ALLOWED_ADDITION_PATTERNS.some((pattern) => pattern.test(path))) return true
   return ALLOWED_ADDITIONS.some((prefix) => path === prefix || path.startsWith(prefix))
 }
 
