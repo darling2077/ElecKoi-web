@@ -23,6 +23,34 @@ const appRoot = process.env.ELECKOI_APP_ROOT ?? process.cwd()
 const rendererDir = process.env.ELECKOI_RENDERER_DIR ?? resolve(appRoot, 'out', 'renderer')
 
 /**
+ * 卡片图片策略。
+ *
+ * `ELECKOI_CARD_IMAGE_MODE=third-party`（别名 `any`）= 放开档：img-src/media-src 用
+ * `https:` 通配，任意 https 图床都能显示、**不需要每张卡加白名单**。
+ * 代价是卡片也能把数据发往任意域（见 cardFrame.ts 的说明）。
+ * `ELECKOI_CARD_IMAGE_ALLOW_HTTP=1` 时连 http 图床也放行（更宽松）。
+ */
+function readCardImagePolicy(): { allowAnyHttps?: boolean; allowAnyHttp?: boolean } {
+  const mode = (process.env.ELECKOI_CARD_IMAGE_MODE ?? '').trim()
+  if (mode !== 'third-party' && mode !== 'any') return {}
+  return {
+    allowAnyHttps: true,
+    ...((process.env.ELECKOI_CARD_IMAGE_ALLOW_HTTP ?? '').trim() === '1' ? { allowAnyHttp: true } : {})
+  }
+}
+
+/**
+ * 图片黑名单（主机名或后缀，逗号分隔）。
+ * 由卡片帧在写入卡片 HTML 前过滤 + 动态插入兜底，**尽力而为**，不是安全边界。
+ */
+function readBlockedImageHosts(): string[] {
+  return (process.env.ELECKOI_CARD_IMAGE_BLOCKED_HOSTS ?? '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^\*\./, ''))
+    .filter((item) => item !== '')
+}
+
+/**
  * 「本地图床」模式的图片目录。
  *
  * 只有 ELECKOI_CARD_IMAGE_MODE=local 才需要：图片落到这里，由本服务在卡片源上以
@@ -68,6 +96,8 @@ const stack = await startWebUiStack({
   rendererDir,
   maxBodyBytes: readMaxBodyBytes(),
   ...(readCardImageDir() === undefined ? {} : { cardImageDir: readCardImageDir() as string }),
+  cardImagePolicy: readCardImagePolicy(),
+  cardImageBlockedHosts: readBlockedImageHosts(),
   masterKeyBase64,
   appVersion: process.env.ELECKOI_VERSION ?? '0.1.0-web',
   host: process.env.ELECKOI_HOST ?? '127.0.0.1',
@@ -116,8 +146,12 @@ if ((process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').trim() !== '') {
     console.log(`卡片图片做法：inline —— 导入时内联成 data: URI（不需要图床与白名单，导出即自带图），搬运时机 ${when}\n`)
   } else if (mode === 'local') {
     console.log(`卡片图片做法：local —— 导入时存到 ${readCardImageDir()}，由本服务在卡片源 /card-images/ 提供（不需要白名单，导出后别人看不到），搬运时机 ${when}\n`)
-  } else if (mode === 'third-party') {
-    console.log(`卡片图片做法：third-party —— 只放行第三方图床、不搬运。放行清单：${(process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').trim() || '（空！请设 ELECKOI_CARD_IMAGE_ORIGINS）'}\n`)
+  } else if (mode === 'third-party' || mode === 'any') {
+    const blocked = readBlockedImageHosts()
+    console.log('卡片图片做法：third-party —— 放行**任意 https 图床**、不搬运（不需要白名单）。')
+    console.log('  ⚠️ 放开意味着卡片也能把你的数据以图片请求发往任意域；只导入你信任的卡。')
+    console.log(`  黑名单（尽力而为）：${blocked.length > 0 ? blocked.join('、') : '未设置'}`
+      + `${(process.env.ELECKOI_CARD_IMAGE_ALLOW_HTTP ?? '').trim() === '1' ? '；已额外放行 http 图床' : ''}\n`)
   } else if (mode === 'off') {
     console.log('卡片图片做法：off —— 不搬运，卡片里的外链图片会被 CSP 拦掉（显示为黑块）\n')
   } else if (publicBase !== '' && uploadApi !== '' && token !== '') {

@@ -23,7 +23,13 @@ import type { GatewayEventEnvelope, RequestContext } from '@shared/contracts/gat
 import { failure, success } from '@shared/foundation/result'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, type WebGateway } from '../transport/WebGateway'
 import { readSignedMedia } from '../mediaSignature'
-import { CARD_FRAME_PATH, cardFrameCsp, renderCardFrame, resolveCardImageOrigins } from './cardFrame'
+import {
+  CARD_FRAME_PATH,
+  cardFrameCsp,
+  renderCardFrame,
+  resolveCardImageOrigins,
+  type CardImagePolicy
+} from './cardFrame'
 import { readCardImageJob } from '../media/cardImageJobs'
 import { faviconLinks } from './favicon'
 import { APP_TOKENS_PATH, readAppTokens } from './appTokens'
@@ -110,6 +116,16 @@ export interface WebServerOptions {
    * 用于角色卡把立绘放在外部图床的常见写法；只应填**自己的**域，见 cardFrame.ts 的说明。
    */
   cardImageOrigins?: readonly string[]
+  /**
+   * 卡片图片策略：`allowAnyHttps` 即"放开"档（ELECKOI_CARD_IMAGE_MODE=third-party），
+   * img-src/media-src 用 `https:` 通配，任意图床都能显示、零配置。
+   */
+  cardImagePolicy?: CardImagePolicy
+  /**
+   * 图片黑名单（主机名或后缀）。**尽力而为**：由卡片帧在写入卡片 HTML 前过滤，
+   * 并对常见动态插入兜底；CSP 本身做不到"允许全部、排除某几个"。
+   */
+  cardImageBlockedHosts?: readonly string[]
   /**
    * 免鉴权即可访问的静态路径白名单（默认空）。
    * 只用于健康检查与端到端测试的辅助页面；**生产不要设置**。
@@ -294,9 +310,12 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     throw new Error('配置了 ELECKOI_CARD_ORIGIN 时必须同时提供 ELECKOI_APP_ORIGINS，否则卡片帧会拒绝所有文档。')
   }
   const cardImageOrigins = resolveCardImageOrigins(options.cardImageOrigins)
+  const cardImagePolicy = options.cardImagePolicy ?? {}
+  const cardImageBlockedHosts = options.cardImageBlockedHosts ?? []
   const cardFrameSource = renderCardFrame({
     allowedOrigins: appOrigins,
-    csp: cardFrameCsp(appOrigins, cardImageOrigins)
+    csp: cardFrameCsp(appOrigins, cardImageOrigins, cardImagePolicy),
+    blockedImageHosts: cardImageBlockedHosts
   })
   const openStreams = new Set<ServerResponse>()
   let nextConnectionId = 1
@@ -445,7 +464,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
-        'content-security-policy': cardFrameCsp(appOrigins, cardImageOrigins),
+        'content-security-policy': cardFrameCsp(appOrigins, cardImageOrigins, cardImagePolicy),
         'x-content-type-options': 'nosniff',
         'referrer-policy': 'no-referrer'
       })
