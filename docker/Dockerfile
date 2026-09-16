@@ -79,6 +79,7 @@ COPY --from=builder --chown=root:root /app/out ./out
 RUN mkdir -p /app/docker && chmod 755 /app/docker
 COPY --from=builder --chown=root:root --chmod=0644 /app/docker/backup-tenants.mjs ./docker/backup-tenants.mjs
 COPY --from=builder --chown=root:root --chmod=0644 /app/docker/migrate-preset-tool-policy.mjs ./docker/migrate-preset-tool-policy.mjs
+COPY --from=builder --chown=root:root --chmod=0755 /app/docker/entrypoint.sh ./docker/entrypoint.sh
 
 USER eleckoi
 
@@ -88,4 +89,7 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.ELECKOI_PORT||8790)+'/__eleckoi/web-bridge.js').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+# 入口先跑数据迁移（幂等），再 exec 服务本体。
+# 用 ENTRYPOINT + CMD 的组合：compose 里覆盖 command 时仍会经过入口。
+ENTRYPOINT ["sh", "/app/docker/entrypoint.sh"]
 CMD ["node", "out/web/entry.mjs"]
