@@ -97,9 +97,11 @@ function collectDatabases(input) {
   if (statSync(target).isFile()) return [target]
   const direct = join(target, DB_RELATIVE)
   if (existsSync(direct)) return [direct]
+  // 传进来的可能是「数据根目录」（下面有 tenants/），也可能直接就是 tenants/ 本身，
+  // 两种都要认——否则对着 tenants/ 跑会静默地「一个库都没找到」。
   const tenantsRoot = join(target, 'tenants')
-  if (!existsSync(tenantsRoot)) return []
-  return readdirSync(tenantsRoot).map((e) => join(tenantsRoot, e, DB_RELATIVE)).filter(existsSync).sort()
+  const root = existsSync(tenantsRoot) ? tenantsRoot : target
+  return readdirSync(root).map((e) => join(root, e, DB_RELATIVE)).filter(existsSync).sort()
 }
 
 /** 从一段文本里找出所有外部图片 URL（跳过我方域名与 data:/blob:）。 */
