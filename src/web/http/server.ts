@@ -22,7 +22,7 @@ import type { GatewayEventEnvelope, RequestContext } from '@shared/contracts/gat
 import { failure, success } from '@shared/foundation/result'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, type WebGateway } from '../transport/WebGateway'
 import { readSignedMedia } from '../mediaSignature'
-import { CARD_FRAME_PATH, cardFrameCsp, renderCardFrame } from './cardFrame'
+import { CARD_FRAME_PATH, cardFrameCsp, renderCardFrame, resolveCardImageOrigins } from './cardFrame'
 import { faviconLinks } from './favicon'
 import { APP_TOKENS_PATH, readAppTokens } from './appTokens'
 import { WEB_CHROME_CSS_PATH, WEB_CHROME_JS_PATH, buildWebChromeCss, buildWebChromeScript } from './webChrome'
@@ -87,6 +87,11 @@ export interface WebServerOptions {
    * 未设置时卡片与宿主同源——**仅限本地自用，不可开放公网**。
    */
   cardOrigin?: string
+  /**
+   * 额外允许卡片加载图片/媒体的源（逗号分隔已由调用方拆分）。
+   * 用于角色卡把立绘放在外部图床的常见写法；只应填**自己的**域，见 cardFrame.ts 的说明。
+   */
+  cardImageOrigins?: readonly string[]
   /**
    * 免鉴权即可访问的静态路径白名单（默认空）。
    * 只用于健康检查与端到端测试的辅助页面；**生产不要设置**。
@@ -190,7 +195,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   if (cardOrigin !== '' && appOrigins.length === 0) {
     throw new Error('配置了 ELECKOI_CARD_ORIGIN 时必须同时提供 ELECKOI_APP_ORIGINS，否则卡片帧会拒绝所有文档。')
   }
-  const cardFrameSource = renderCardFrame({ allowedOrigins: appOrigins, csp: cardFrameCsp(appOrigins) })
+  const cardImageOrigins = resolveCardImageOrigins(options.cardImageOrigins)
+  const cardFrameSource = renderCardFrame({
+    allowedOrigins: appOrigins,
+    csp: cardFrameCsp(appOrigins, cardImageOrigins)
+  })
   const openStreams = new Set<ServerResponse>()
   let nextConnectionId = 1
 
@@ -331,7 +340,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
-        'content-security-policy': cardFrameCsp(appOrigins),
+        'content-security-policy': cardFrameCsp(appOrigins, cardImageOrigins),
         'x-content-type-options': 'nosniff',
         'referrer-policy': 'no-referrer'
       })
