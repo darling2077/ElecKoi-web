@@ -53,26 +53,46 @@ services:
       # 未配置时卡片与宿主同源：角色卡能调用宿主全部 IPC，仅限本地自用。
       ELECKOI_CARD_ORIGIN: "${ELECKOI_CARD_ORIGIN:-}"
       ELECKOI_APP_ORIGINS: "${ELECKOI_APP_ORIGINS:-}"
-      # 允许卡片加载图片/媒体的**额外源**（逗号分隔的纯源）。
-      # 卡里的外链图片默认被卡片帧 CSP 拦掉（表现为图片位置全黑）。
-      # ⚠️ 只填你自己控制的域：卡片是作者写的 JS，放行谁就等于允许它把数据发给谁。
+      # ── 卡片图片：四种做法，改 ELECKOI_CARD_IMAGE_MODE 一个变量切换 ──
+      #
+      # 背景：卡片里的 <img src="https://某图床/x.png"> 默认会被卡片帧的 CSP 拦掉，
+      # 现象是图片位置一块黑。四种做法各有取舍，按需选一种：
+      #
+      #   self-hosted（默认）导入时把图片传进你自己的图床。导出给别人也能取到图；
+      #       代价是要自建图床。需要下面三个 IMAGE_* 变量 + 卡片源白名单填图床域。
+      #
+      #   local      导入时把图片存到宿主机目录，由本服务在卡片源上以 /card-images/ 提供。
+      #       与卡片帧同源 → **不需要任何白名单**，也不用外部图床；
+      #       代价：导出给别人后打不开（别人访问不到你的机器）。
+      #       默认零配置：图片放在数据卷里的 /data/card-images。
+      #
+      #   inline     导入时把图片内联成 data: URI。不用图床、不用白名单，导出即自带图；
+      #       代价是图片以 base64 写进卡片数据，只适合小图（默认只内联 256KB 以下）。
+      #       不需要任何额外配置。
+      #
+      #   third-party 只放行第三方图床、不搬运。最省事；代价是卡片能把数据发给对方，
+      #       且对方删图后卡片就空了。只需设 ELECKOI_CARD_IMAGE_ORIGINS。
+      #
+      #   off        什么都不做（外链图保持黑块，与旧版本一致）。
+      ELECKOI_CARD_IMAGE_MODE: "${ELECKOI_CARD_IMAGE_MODE:-self-hosted}"
+      # self-hosted / third-party 用：额外允许卡片加载图片的源（逗号分隔的纯源）。
+      # ⚠️ 只填**你自己控制**的域：放行哪个域就等于允许卡片把数据以图片请求发给它。
       ELECKOI_CARD_IMAGE_ORIGINS: "${ELECKOI_CARD_IMAGE_ORIGINS:-}"
-      # 导入角色卡时**自动**把卡里的外链图片搬到自己的图床（三个都配齐才启用，
-      # 缺任何一个就自动关闭、行为与以前完全一致）。见 docs/webui/卡片外链图片本地化.md
-      # 单次请求体上限。导入角色卡会把整张卡的 base64 放进一次请求，默认 128 MB；
-      # 顶到上限时会返回明确的 413（旧版是 8 MB 且直接断线，只报"连接已断开"）。
-      ELECKOI_MAX_BODY_BYTES: "${ELECKOI_MAX_BODY_BYTES:-134217728}"
+      # self-hosted 用：图床对外地址、上传接口、API 令牌（三个都要，缺一自动关闭搬运）
       ELECKOI_IMAGE_PUBLIC_BASE: "${ELECKOI_IMAGE_PUBLIC_BASE:-}"
       ELECKOI_IMAGE_UPLOAD_API: "${ELECKOI_IMAGE_UPLOAD_API:-}"
       ELECKOI_IMAGE_UPLOAD_TOKEN: "${ELECKOI_IMAGE_UPLOAD_TOKEN:-}"
+      # local 用：图片目录（容器内）。默认在数据卷里，零配置；要放别的大盘就自己加挂载
+      ELECKOI_IMAGE_LOCAL_DIR: "${ELECKOI_IMAGE_LOCAL_DIR:-/data/card-images}"
       # 搬运时机：inline（默认，导入等图片搬完才返回，界面上有进度条）或 background
       ELECKOI_IMAGE_LOCALIZE_MODE: "${ELECKOI_IMAGE_LOCALIZE_MODE:-inline}"
-      # 单次导入的搬运上限（张数 / 单图字节 / 总时间预算）
+      # 单次导入的搬运上限（张数 / 单图字节 / 总时间预算）与并发数
       ELECKOI_IMAGE_MAX_PER_IMPORT: "${ELECKOI_IMAGE_MAX_PER_IMPORT:-2000}"
       ELECKOI_IMAGE_MAX_BYTES: "${ELECKOI_IMAGE_MAX_BYTES:-20971520}"
       ELECKOI_IMAGE_TIME_BUDGET_MS: "${ELECKOI_IMAGE_TIME_BUDGET_MS:-900000}"
-      # 同时搬运几张（4 路并发能把几百张图从几分钟压到一分钟级）
       ELECKOI_IMAGE_CONCURRENCY: "${ELECKOI_IMAGE_CONCURRENCY:-4}"
+      # inline 模式：单图内联上限（超过的保留外链，避免卡片数据暴涨）
+      ELECKOI_IMAGE_INLINE_MAX_BYTES: "${ELECKOI_IMAGE_INLINE_MAX_BYTES:-262144}"
       # 是否允许搬运本机地址（默认否：卡里写死的 localhost 多半是作者的开发地址）
       ELECKOI_IMAGE_ALLOW_LOCAL: "${ELECKOI_IMAGE_ALLOW_LOCAL:-0}"
       # AGPL-3.0 §13：以网络提供服务时须向使用者提供对应源码。
@@ -84,6 +104,9 @@ services:
       ELECKOI_TRUST_PROXY: "${ELECKOI_TRUST_PROXY:-0}"
     volumes:
       - eleckoi-data:/data
+      # local 图片模式默认就放在这个数据卷里（/data/card-images），零额外配置。
+      # 想放到别的大盘上，自己加一条挂载并保证属主是 10001:10001，例如：
+      #   - /vol1/1000/eleckoi-card-images:/data/card-images
     # 容器加固
     security_opt:
       - no-new-privileges:true

@@ -78,6 +78,12 @@ async function startFakeHost(): Promise<FakeHost> {
 
   const host = await listen((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    // 上传完成后能按返回的地址取回原图（真实图床就是这个行为）
+    if (req.method === 'GET' && url.pathname.startsWith('/u/')) {
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': String(png.length) })
+      res.end(png)
+      return
+    }
     if (req.method === 'POST' && url.pathname === '/api/upload') {
       const chunks: Buffer[] = []
       req.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -184,6 +190,94 @@ function cardWithImages(origin: string, name: string): string {
       extensions: {}
     }
   })
+}
+
+
+/**
+ * 四种做法各跑一遍导入，检查"搬完之后卡里的引用长什么样"。
+ *
+ * 这条是给用户看的承诺：改 ELECKOI_CARD_IMAGE_MODE 一个变量，行为就跟着变，
+ * 且都不需要动上游代码。用真实导入 + 真实 HTTP 取回验证，不看内部实现。
+ */
+async function checkMode(
+  mode: string,
+  env: Record<string, string>,
+  expectation: { pattern: RegExp; fetchable: boolean; label: string }
+): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), `eleckoi-mode-${mode}-`))
+  const fake = await startFakeHost()
+  // 每个模式都用独立的租户，互不影响。
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('ELECKOI_IMAGE_') || key === 'ELECKOI_CARD_IMAGE_MODE' || key === 'ELECKOI_CARD_ORIGIN') delete process.env[key]
+  }
+  process.env.ELECKOI_CARD_IMAGE_MODE = mode
+  process.env.ELECKOI_IMAGE_ALLOW_LOCAL = '1'
+  process.env.ELECKOI_IMAGE_LOCALIZE_MODE = 'inline'
+  // __HOST__ 占位符替换成本次假图床的地址（每次端口都不同，没法写死）
+  for (const [key, value] of Object.entries(env)) process.env[key] = value.replace('__HOST__', fake.hostOrigin)
+
+  const tenant = await WebHost.mountTenant({
+    tenantId: `tenant-mode-${mode}`,
+    tenantRoot: join(root, 'tenant'),
+    masterKeyBase64: randomBytes(32).toString('base64'),
+    appVersion: '0.1.0-web-cardimages'
+  })
+  const server = await startWebServer({
+    host: '127.0.0.1',
+    port: 0,
+    rendererDir: resolve('out/renderer'),
+    // local 模式必须把它挂上，否则 /card-images/ 无人提供（生产里由 entry.ts 决定）
+    ...(mode === 'local' ? { cardImageDir: process.env.ELECKOI_IMAGE_LOCAL_DIR ?? '/data/card-images' } : {}),
+    resolveSession: singleTenantResolver(tenant.gateway, tenant.context.mediaAssets)
+  })
+  const base = server.url
+
+  try {
+    const card = cardWithImages(fake.sourceOrigin, `模式-${mode}-${Date.now()}`)
+    void fake
+    const prepared = await fetch(`${base}/api/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        name: 'command.characters.import.prepare',
+        input: {
+          source: 'sillytavern',
+          files: [{ displayName: 'mode.json', mimeType: 'application/json', base64: Buffer.from(card, 'utf8').toString('base64') }]
+        }
+      })
+    }).then((r) => r.json()) as { ok: boolean; data?: { token: string } }
+    if (!prepared.ok || prepared.data === undefined) throw new Error('prepare 失败')
+    const committed = await fetch(`${base}/api/rpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'command.characters.import.commit', input: { token: prepared.data.token } })
+    }).then((r) => r.json()) as { ok: boolean }
+    if (!committed.ok) throw new Error('commit 失败')
+
+    const database = new Database(join(root, 'tenant', 'db', 'eleckoi-common.sqlite3'), { readonly: true })
+    const rows = database.prepare('SELECT content FROM character_text_contents').all() as Array<{ content: string }>
+    database.close()
+    const text = rows.map((row) => row.content).join('\n')
+    const outside = text.match(new RegExp(`${fake.sourceOrigin}/img/`, 'g'))?.length ?? 0
+    const matched = (text.match(expectation.pattern) ?? []).length
+    record(`MODE-${mode}`, matched >= IMAGE_COUNT && outside === 0,
+      `${expectation.label}：改写 ${matched}/${IMAGE_COUNT} 处，残留原地址 ${outside} 处`)
+
+    // self-hosted / local 的图应当能被取回；inline 是 data: URI，不需要取回。
+    if (expectation.fetchable && matched > 0) {
+      const raw = (text.match(expectation.pattern) ?? [''])[0]
+      // local 模式在没配卡片源时给的是相对地址（/card-images/xxx），补上服务地址再取。
+      const probe = raw.startsWith('http') ? raw : `${base}${raw}`
+      const response = await fetch(probe).catch(() => undefined)
+      record(`MODE-${mode}-取回`, response !== undefined && response.status === 200 && (response.headers.get('content-type') ?? '').startsWith('image/'),
+        `${expectation.label}：搬完的地址可直接取回 → HTTP ${response?.status ?? '失败'} ${response?.headers.get('content-type') ?? ''}`)
+    }
+  } finally {
+    await server.close()
+    await tenant.dispose()
+    for (const server of fake.servers) server.close()
+    await rm(root, { recursive: true, force: true })
+  }
 }
 
 async function main(): Promise<void> {
@@ -330,6 +424,26 @@ async function main(): Promise<void> {
     for (const server of fake.servers) server.close()
     await rm(root, { recursive: true, force: true })
   }
+
+  // ── 四种做法各跑一遍 ──
+  await checkMode('self-hosted', {
+    ELECKOI_IMAGE_PUBLIC_BASE: '__HOST__',
+    ELECKOI_IMAGE_UPLOAD_API: '__HOST__',
+    ELECKOI_IMAGE_UPLOAD_TOKEN: 'test-token'
+  }, { pattern: /http:\/\/127\.0\.0\.1:\d+\/u\//g, fetchable: true, label: 'self-hosted：传进图床' })
+    .catch((error) => record('MODE-self-hosted', false, String(error)))
+
+  await checkMode('local', { ELECKOI_IMAGE_LOCAL_DIR: join(tmpdir(), `eleckoi-card-images-${Date.now()}`) }, {
+    pattern: /\/card-images\/[a-f0-9]{32}\.png/g,
+    fetchable: true,
+    label: 'local：存本地目录并由本服务提供'
+  }).catch((error) => record('MODE-local', false, String(error)))
+
+  await checkMode('inline', {}, {
+    pattern: /data:image\/png;base64,/g,
+    fetchable: false,
+    label: 'inline：内联成 data URI'
+  }).catch((error) => record('MODE-inline', false, String(error)))
 
   const failed = outcomes.filter((outcome) => !outcome.ok)
   console.log(`\n== 结果：${outcomes.length - failed.length}/${outcomes.length} 通过 ==`)
