@@ -19,19 +19,33 @@ export interface CardFrameOptions {
   allowedOrigins: readonly string[]
   /** 卡片源自身的 CSP。 */
   csp: string
+  /**
+   * 图片黑名单（主机名或后缀，如 `postimg.cc`、`i.postimg.cc`）。
+   * 命中的图片地址会在写入卡片 HTML 前被替换成透明占位图，动态插入的也会被兜底拦掉。
+   * **尽力而为**，不是安全边界——真正的边界是 CSP 白名单/放开策略。
+   */
+  blockedImageHosts?: readonly string[]
 }
 
 /**
- * 额外允许卡片加载图片/媒体的源（`ELECKOI_CARD_IMAGE_ORIGINS`）。
+ * 卡片图片来源的两种策略。
  *
- * 为什么需要：角色卡经常把立绘放在外部图床上（`<img src="https://i.postimg.cc/...">`
- * 这类写法很常见）。默认 CSP 的 `img-src 'self' data: blob:` 会把它们全部拦掉，
- * 卡片就会显示成一片黑。把**自己的**图床加进来，卡片就能正常显示。
+ * **白名单（精确）**：`ELECKOI_CARD_IMAGE_ORIGINS` 列出的源才允许加载。
+ * 安全性最好，但每来一张引用新图床的卡就要加一条——用起来烦。
  *
- * 放宽到自己的域和放宽到第三方图床是两件性质不同的事：
- * 卡片只能通过图片 URL 发起 GET，数据最多落在**你自己服务器的访问日志**里，
- * 攻击者读不到；而第三方图床的图片是公开可访问的，等于直接泄给第三方。
- * 因此这里只应当填你自己的域，不要填公共图床。
+ * **放开（宽松）+ 可选黑名单**：`ELECKOI_CARD_IMAGE_MODE=third-party` 时
+ * img-src/media-src 直接用 `https:` 通配，任意 https 图床都能显示，零配置；
+ * 再给一个 `ELECKOI_CARD_IMAGE_BLOCKED_HOSTS` 让你把不想要的域排除掉。
+ *
+ * ⚠️ 必须说清楚的危险：放宽 img-src 就等于承认**卡片能把你的数据发出去**——
+ * 卡片是作者写的 JS，它拼一个 `https://任意域/<聊天内容>.png` 就能外传，
+ * 这是图片请求（GET），CSP 拦不住。放开之后，这件事的去向就取决于你导入的卡
+ * 是否可信，而不是取决于配置。
+ *
+ * 黑名单是**尽力而为**，不是安全边界：CSP 只能"允许某些源"，做不到"允许全部、
+ * 排除某几个"，所以黑名单由卡片帧在写入卡片 HTML 前过滤、并对常见的动态插入
+ * 做兜底。它能挡住普通卡片的静态引用，但**挡不住蓄意绕过的脚本**。
+ * 真要隔离，用白名单模式或 self-hosted/local（把图搬到你自己的域）。
  */
 /**
  * 校验 `ELECKOI_CARD_IMAGE_ORIGINS`：必须是 `scheme://host[:port]` 形式的纯源。
@@ -81,11 +95,24 @@ function mediaSourceList(extraOrigins: readonly string[]): string {
  * imageOrigins 只放宽 img-src / media-src；connect-src 仍是 'none'，
  * 所以卡片依旧发不出 fetch/XHR/WebSocket，只是能"显示"外部图片而已。
  */
+export interface CardImagePolicy {
+  /** 放行任意 https 图床（third-party 模式）。 */
+  allowAnyHttps?: boolean
+  /** 连 http 图床也放行（更宽松，默认否）。 */
+  allowAnyHttp?: boolean
+}
+
 export function cardFrameCsp(
   allowedOrigins: readonly string[] = [],
-  imageOrigins: readonly string[] = []
+  imageOrigins: readonly string[] = [],
+  policy: CardImagePolicy = {}
 ): string {
-  const mediaSources = mediaSourceList(imageOrigins)
+  // 通配是"放开"那一档：任意 https 图床都能显示，代价是卡片也能把数据发往任意域。
+  const wildcards = [
+    ...(policy.allowAnyHttps === true ? ['https:'] : []),
+    ...(policy.allowAnyHttp === true ? ['http:'] : [])
+  ]
+  const mediaSources = [mediaSourceList(imageOrigins), ...wildcards].join(' ')
   return [
     "default-src 'none'",
     "script-src 'unsafe-inline' 'unsafe-eval'",
@@ -106,6 +133,7 @@ export const CARD_FRAME_PATH = '/__eleckoi/card-frame.html'
 
 export function renderCardFrame(options: CardFrameOptions): string {
   const origins = JSON.stringify([...options.allowedOrigins])
+  const blocked = JSON.stringify([...(options.blockedImageHosts ?? [])].map((host) => host.trim().toLowerCase()).filter((host) => host !== ''))
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -119,7 +147,101 @@ export function renderCardFrame(options: CardFrameOptions): string {
 (() => {
   'use strict';
   const allowed = new Set(${origins});
+  const blockedHosts = ${blocked};
   let written = false;
+
+  // ── 图片黑名单：尽力而为，不是安全边界 ────────────────────────────────
+  // CSP 只能"允许哪些源"，做不到"允许全部、排除某几个"，所以黑名单只能在
+  // 卡片 HTML 写入前过滤、并对常见的动态插入兜底。它挡得住普通卡片的静态引用，
+  // 挡不住蓄意绕过的脚本——真要隔离请用白名单模式或把图搬到自己域。
+  const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  const hostBlocked = (hostname) => {
+    const host = String(hostname || '').toLowerCase();
+    return blockedHosts.some((blocked) => host === blocked || host.endsWith('.' + blocked));
+  };
+  // 注意：这里是**注入到页面的脚本**，外层是模板字符串——正则里的反斜杠必须写两份，
+  // 否则会被模板吃掉（曾因此让整段脚本语法错误、卡片帧直接不工作）。
+  const isHttpUrl = (text) => {
+    const head = text.slice(0, 8).toLowerCase();
+    return head.startsWith('http://') || head.startsWith('https://');
+  };
+  const urlBlocked = (raw) => {
+    const text = String(raw || '').trim();
+    if (!isHttpUrl(text)) return false;
+    try { return hostBlocked(new URL(text).hostname); } catch (error) { return false; }
+  };
+  /** 把一段属性值里被屏蔽的地址换成透明占位图（srcset 逐项处理）。 */
+  const scrubValue = (value) => value
+    .split(',')
+    .map((part) => {
+      const trimmed = part.trim();
+      const url = trimmed.split(/\\s+/)[0];
+      return urlBlocked(url) ? trimmed.replace(url, BLANK) : part;
+    })
+    .join(',');
+  /** 写入前过滤：属性里的 src/srcset/poster/data-src，以及 style 与 <style> 里的 url()。 */
+  const scrubHtml = (html) => {
+    if (blockedHosts.length === 0) return html;
+    let out = html.replace(
+      /(\\s(?:src|srcset|poster|data-src|data-original)\\s*=\\s*)("[^"]*"|'[^']*'|[^\\s>]+)/gi,
+      (match, prefix, rawValue) => {
+        const quote = rawValue[0] === '"' || rawValue[0] === "'" ? rawValue[0] : '';
+        const inner = quote ? rawValue.slice(1, -1) : rawValue;
+        return prefix + quote + scrubValue(inner) + quote;
+      }
+    );
+    out = out.replace(/url\\(\\s*("[^"]*"|'[^']*'|[^)]*)\\s*\\)/gi, (match, rawValue) => {
+      const quote = rawValue[0] === '"' || rawValue[0] === "'" ? rawValue[0] : '';
+      const inner = quote ? rawValue.slice(1, -1) : rawValue;
+      const url = inner.trim();
+      return urlBlocked(url) ? 'url(' + quote + BLANK + quote + ')' : match;
+    });
+    return out;
+  };
+  /** 运行期兜底：卡片脚本动态插进来的图片也拦一道。 */
+  const guardNode = (node) => {
+    if (blockedHosts.length === 0 || !node || node.nodeType !== 1) return;
+    for (const attr of ['src', 'poster', 'data-src']) {
+      const value = node.getAttribute && node.getAttribute(attr);
+      if (value && urlBlocked(value)) node.setAttribute(attr, BLANK);
+    }
+    const srcset = node.getAttribute && node.getAttribute('srcset');
+    if (srcset) node.setAttribute('srcset', scrubValue(srcset));
+    const style = node.getAttribute && node.getAttribute('style');
+    if (style && /url\\(/i.test(style)) node.setAttribute('style', scrubHtml(style));
+  };
+  if (blockedHosts.length > 0) {
+    const nativeSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function (name, value) {
+      const key = String(name).toLowerCase();
+      if ((key === 'src' || key === 'poster' || key === 'data-src') && urlBlocked(value)) value = BLANK;
+      else if (key === 'srcset') value = scrubValue(String(value));
+      else if (key === 'style') value = scrubHtml(String(value));
+      return nativeSetAttribute.call(this, name, value);
+    };
+    const imgSrc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src');
+    if (imgSrc && imgSrc.set) {
+      Object.defineProperty(HTMLImageElement.prototype, 'src', {
+        ...imgSrc,
+        set(value) { imgSrc.set.call(this, urlBlocked(value) ? BLANK : value); }
+      });
+    }
+    const mediaSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+    if (mediaSrc && mediaSrc.set) {
+      Object.defineProperty(HTMLMediaElement.prototype, 'src', {
+        ...mediaSrc,
+        set(value) { mediaSrc.set.call(this, urlBlocked(value) ? '' : value); }
+      });
+    }
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          guardNode(node);
+          if (node.querySelectorAll) for (const child of node.querySelectorAll('img,video,audio,source')) guardNode(child);
+        }
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  }
 
   const receive = (event) => {
     if (!allowed.has(event.origin)) return;
@@ -131,7 +253,7 @@ export function renderCardFrame(options: CardFrameOptions): string {
     // document.open() 会替换文档内容但保留本源的 URL 与源，
     // 因此卡片代码运行在卡片源内，而不是应用源内。
     document.open();
-    document.write(data.html);
+    document.write(scrubHtml(data.html));
     document.close();
   };
 

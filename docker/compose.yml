@@ -70,14 +70,21 @@ services:
       #       代价是图片以 base64 写进卡片数据，只适合小图（默认只内联 256KB 以下）。
       #       不需要任何额外配置。
       #
-      #   third-party 只放行第三方图床、不搬运。最省事；代价是卡片能把数据发给对方，
-      #       且对方删图后卡片就空了。只需设 ELECKOI_CARD_IMAGE_ORIGINS。
+      #   third-party 放行**任意 https 图床**、不搬运。最省事：不用给每张卡加白名单。
+      #       ⚠️ 放开就等于承认卡片能把你的数据以图片请求发往任意域（GET，CSP 拦不住），
+      #          只导入你信任的卡。可用 ELECKOI_CARD_IMAGE_BLOCKED_HOSTS 排除个别域
+      #          （**尽力而为**：CSP 只能"允许某些源"，黑名单由卡片帧过滤，挡不住蓄意绕过）。
       #
       #   off        什么都不做（外链图保持黑块，与旧版本一致）。
       ELECKOI_CARD_IMAGE_MODE: "${ELECKOI_CARD_IMAGE_MODE:-self-hosted}"
-      # self-hosted / third-party 用：额外允许卡片加载图片的源（逗号分隔的纯源）。
+      # self-hosted 用（third-party 已放开全部 https，不需要它）：
+      # 额外允许卡片加载图片的源（逗号分隔的纯源）。
       # ⚠️ 只填**你自己控制**的域：放行哪个域就等于允许卡片把数据以图片请求发给它。
       ELECKOI_CARD_IMAGE_ORIGINS: "${ELECKOI_CARD_IMAGE_ORIGINS:-}"
+      # third-party 用的黑名单（主机名或后缀，逗号分隔），如 postimg.cc,imgur.com
+      ELECKOI_CARD_IMAGE_BLOCKED_HOSTS: "${ELECKOI_CARD_IMAGE_BLOCKED_HOSTS:-}"
+      # third-party 是否连 http 图床也放行（默认否；开了更宽松）
+      ELECKOI_CARD_IMAGE_ALLOW_HTTP: "${ELECKOI_CARD_IMAGE_ALLOW_HTTP:-0}"
       # self-hosted 用：图床对外地址、上传接口、API 令牌（三个都要，缺一自动关闭搬运）
       ELECKOI_IMAGE_PUBLIC_BASE: "${ELECKOI_IMAGE_PUBLIC_BASE:-}"
       ELECKOI_IMAGE_UPLOAD_API: "${ELECKOI_IMAGE_UPLOAD_API:-}"
