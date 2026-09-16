@@ -22,6 +22,12 @@ import type {
 } from '@shared/contracts/gateway/types'
 import type { EventName } from '@shared/contracts/gateway/definitions'
 import { DesktopGateway } from '@main/gateway/DesktopGateway'
+import {
+  abortCardImageJob,
+  beginCardImageJob,
+  finishCardImageJob,
+  updateCardImageJob
+} from '../media/cardImageJobs'
 
 export const LOCAL_MEDIA_REFERENCE_PREFIX = 'eleckoi-media://asset/v1/'
 export const WEB_MEDIA_REFERENCE_PREFIX = '/media/v1/'
@@ -44,7 +50,10 @@ export interface RunQuota {
 
 /** 导入角色卡后自动搬运卡片图片的钩子（由 WebHost 在挂载租户时注入）。 */
 export interface ImportImageHook {
-  localizeCharacters(characterIds: readonly string[]): Promise<{
+  localizeCharacters(
+    characterIds: readonly string[],
+    onProgress?: (progress: { phase: 'working'; done: number; total: number }) => void
+  ): Promise<{
     localized: number
     urlsLocalized: number
     skipped: number
@@ -146,10 +155,17 @@ export class WebGateway extends DesktopGateway {
   private async localizeImportedImages(result: unknown): Promise<void> {
     const ids = (result as { importedCharacterIds?: unknown } | null | undefined)?.importedCharacterIds
     if (!Array.isArray(ids) || ids.length === 0) return
+    beginCardImageJob(this)
     try {
-      const outcome = await this.importImageHook!.localizeCharacters(ids.filter((id): id is string => typeof id === 'string'))
+      const outcome = await this.importImageHook!.localizeCharacters(
+        ids.filter((id): id is string => typeof id === 'string'),
+        (progress) => updateCardImageJob(this, progress)
+      )
+      finishCardImageJob(this, outcome)
       if (outcome.localized > 0) this.onImagesLocalized?.(['personas', 'variables', 'regexRules', 'settingLibraries'])
     } catch (error) {
+      // 出错也要复位进度状态，否则界面上的进度条会一直挂着。
+      abortCardImageJob(this)
       console.error(`[card-images] 导入后搬运图片失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }

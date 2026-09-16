@@ -60,6 +60,16 @@ export interface CardImageLocalizerOptions {
   maxBytes?: number
   timeoutMs?: number
   budgetMs?: number
+  /** 同时搬运几张。串行搬 300 张要几分钟，导入就得干等；4 路并发能把这段压到一分钟级。 */
+  concurrency?: number
+  /**
+   * 允许搬运本机地址（127.0.0.1/localhost/::1）。
+   * 默认为假：卡里写死本机地址的多半是作者自己的开发地址，服务端搬不到、也不该搬。
+   * 只有验收（假图床就跑在本机）或确实在本机跑图床时才打开。
+   */
+  allowLocalAddresses?: boolean
+  /** 进度回调：图片总数已知时先报一次 total，每搬完一张报一次 done。 */
+  onProgress?: (progress: { phase: 'idle' | 'working' | 'done'; done: number; total: number }) => void
   log?: (message: string) => void
 }
 
@@ -75,7 +85,11 @@ export interface LocalizeOutcome {
 }
 
 export interface CardImageLocalizer {
-  localizeCharacters(characterIds: readonly string[]): Promise<LocalizeOutcome>
+  /** 传进来的 onProgress 会与选项里的那个**同时**触发（一个给界面、一个给调用方）。 */
+  localizeCharacters(
+    characterIds: readonly string[],
+    onProgress?: (progress: { phase: 'working'; done: number; total: number }) => void
+  ): Promise<LocalizeOutcome>
   /**
    * 后台模式下等待当前进行中的搬运结束。
    * 浏览器不需要它（结果通过事件通知）；批量导入工具用它保证"跑完才算完"。
@@ -126,6 +140,15 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
   const maxBytes = options.maxBytes ?? 20 * 1024 * 1024
   const timeoutMs = options.timeoutMs ?? 20_000
   const budgetMs = options.budgetMs ?? 900_000
+  const concurrency = Math.max(1, Math.min(options.concurrency ?? 4, 16))
+  const allowLocal = options.allowLocalAddresses ?? false
+  /**
+   * 进度有两个消费者：选项里的（装配时接进任务状态）与本次调用传入的（HTTP 接口读它）。
+   * 两者都在 emit 里**各调一次**——早期版本用一个可变的"当前回调"转发，
+   * 结果两个回调互相调用把栈打爆了（Maximum call stack size exceeded）。
+   */
+  type Working = { phase: 'working'; done: number; total: number }
+  type Progress = Working | { phase: 'done'; done: number; total: number }
   const baseOrigin = (() => {
     try {
       return new URL(options.publicBase).origin
@@ -192,7 +215,14 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
   // 后台模式下进行中的任务：waitForIdle 用它，避免进程退出把搬运掐断。
   let pending: Promise<LocalizeOutcome> | undefined
 
-  async function localize(characterIds: readonly string[]): Promise<LocalizeOutcome> {
+  async function localize(
+    characterIds: readonly string[],
+    report?: (progress: Working) => void
+  ): Promise<LocalizeOutcome> {
+    const emit = (progress: Progress): void => {
+      options.onProgress?.(progress)
+      if (progress.phase === 'working') report?.({ phase: 'working', done: progress.done, total: progress.total })
+    }
       const outcome: LocalizeOutcome = { localized: 0, urlsLocalized: 0, skipped: 0, failed: 0, deferred: 0 }
       if (characterIds.length === 0) return outcome
       const native = options.database.native
@@ -219,32 +249,50 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
           for (const url of urls) unique.add(url)
         }
       }
-      if (unique.size === 0) return outcome
+      log(`  扫描到 ${unique.size} 个外链图片（分布在 ${rows.length} 条记录里）`)
+      if (unique.size === 0) {
+        emit({ phase: 'done', done: 0, total: 0 })
+        return outcome
+      }
 
-      // ── 下载 + 上传（同一 URL 只处理一次）──
+      // ── 下载 + 上传（同一 URL 只处理一次，多路并发）──
+      const candidates: string[] = []
+      for (const url of unique) {
+        if (NON_IMAGE_EXT.test(url) || (!allowLocal && isLocalAddress(url))) outcome.skipped += 1
+        else candidates.push(url)
+      }
+      const queue = candidates.slice(0, maxImages)
+      outcome.deferred += candidates.length - queue.length
       const replacements = new Map<string, string>()
       const deadline = Date.now() + budgetMs
-      for (const url of unique) {
-        if (NON_IMAGE_EXT.test(url) || isLocalAddress(url)) {
-          outcome.skipped += 1
-          continue
-        }
-        if (replacements.size >= maxImages || Date.now() > deadline) {
-          outcome.deferred += 1
-          continue
-        }
-        try {
-          const { buffer, kind } = await download(url)
-          replacements.set(url, await upload(buffer, kind))
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          if (message.includes('不是可识别的图片')) outcome.skipped += 1
-          else {
-            outcome.failed += 1
-            log(`  ✗ 卡片图片搬运失败 ${url.slice(0, 72)}：${message}`)
+      let handled = 0
+      emit({ phase: 'working', done: 0, total: queue.length })
+      let cursor = 0
+      const worker = async (): Promise<void> => {
+        while (cursor < queue.length) {
+          if (Date.now() > deadline) {
+            outcome.deferred += queue.length - cursor
+            cursor = queue.length
+            return
           }
+          const url = queue[cursor++]!
+          try {
+            const { buffer, kind } = await download(url)
+            replacements.set(url, await upload(buffer, kind))
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            if (message.includes('不是可识别的图片')) outcome.skipped += 1
+            else {
+              outcome.failed += 1
+              log(`  ✗ 卡片图片搬运失败 ${url.slice(0, 72)}：${message}`)
+            }
+          }
+          handled += 1
+          emit({ phase: 'working', done: handled, total: queue.length })
         }
       }
+      await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, worker))
+      emit({ phase: 'done', done: handled, total: queue.length })
       if (replacements.size === 0) return outcome
 
       // ── 就地改写（一个事务）──
@@ -275,9 +323,9 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
 
   return {
     summary,
-    localizeCharacters(characterIds) {
+    localizeCharacters(characterIds, progress) {
       // 串行化：同一租户短时间内连续导入多批时，避免并发抢写同一个库。
-      const run = (pending ?? Promise.resolve()).then(() => localize(characterIds))
+      const run = (pending ?? Promise.resolve()).then(() => localize(characterIds, progress))
       pending = run.catch(() => ({ localized: 0, urlsLocalized: 0, skipped: 0, failed: 0, deferred: 0 }))
       return run
     },

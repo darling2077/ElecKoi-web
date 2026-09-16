@@ -23,6 +23,7 @@ import { failure, success } from '@shared/foundation/result'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, type WebGateway } from '../transport/WebGateway'
 import { readSignedMedia } from '../mediaSignature'
 import { CARD_FRAME_PATH, cardFrameCsp, renderCardFrame, resolveCardImageOrigins } from './cardFrame'
+import { readCardImageJob } from '../media/cardImageJobs'
 import { faviconLinks } from './favicon'
 import { APP_TOKENS_PATH, readAppTokens } from './appTokens'
 import { WEB_CHROME_CSS_PATH, WEB_CHROME_JS_PATH, buildWebChromeCss, buildWebChromeScript } from './webChrome'
@@ -389,6 +390,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         // 与上游 GatewayResult 语义一致：错误也走 200 + {ok:false}，由渲染层 unwrap 抛出。
         sendJson(res, 200, failure(error))
       }
+      return
+    }
+
+    // 导入卡片时的搬图进度。前端是上游代码、不能改，所以由我们注入的桥脚本轮询它，
+    // 自己画一根进度条——用户要求"进度条走完才算导入成功"。
+    if (path === '/api/card-images/progress' && req.method === 'GET') {
+      sendJson(res, 200, success(readCardImageJob(binding.gateway)))
       return
     }
 
