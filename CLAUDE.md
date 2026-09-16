@@ -38,6 +38,13 @@ docker compose -f docker/compose.yml up -d --build
 - 反向代理后必须开 `ELECKOI_TRUST_PROXY=1`，否则所有用户共用一个代理 IP，
   累计十次登录失败会让**全站**被限流十五分钟。
 - 反向代理的后端读超时需 ≥300 秒：`POST /api/rpc` 会同步等待整个 Agent 回合结束才返回。
+- 卡片里的外链图片默认会被卡片帧 CSP 拦掉（现象是图片位置全黑）。要放行就设
+  `ELECKOI_CARD_IMAGE_ORIGINS`，**只填自己的图床**——放行谁的域就等于允许卡片把
+  聊天内容发给谁，第三方公共图床是公开可读的。
+- 可选的图床（Zipline）在 `images` profile 下，配置全部在 `docker/.env` 的
+  「自带图床」段（`ZIPLINE_*`）；不启用不影响默认部署（默认那条 `up -d` 仍只起
+  `eleckoi-web`）。⚠️ `ZIPLINE_USER_REGISTRATION` 与 `ZIPLINE_INVITES_ENABLED`
+  极易配反，配反等于开放注册——取值说明见 `.env.example`。
 
 ## 改代码前必读
 
@@ -61,3 +68,4 @@ docker compose -f docker/compose.yml up -d --build
 | `docs/webui/上游升级流程.md` | 跟进上游更新的标准步骤与坑 |
 | `docs/webui/自有页面外观.md` | 登录/账号/管理页如何与应用本体保持一致 |
 | `docs/webui/GitHub-发布方案.md` | 发布与提交切分 |
+| `docs/webui/卡片外链图片本地化.md` | 卡片图片全黑的成因、图床放行与批量改写 |
