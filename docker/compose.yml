@@ -55,7 +55,7 @@ services:
       ELECKOI_APP_ORIGINS: "${ELECKOI_APP_ORIGINS:-}"
       # 允许卡片加载图片/媒体的**额外源**（逗号分隔的纯源）。
       # 卡里的外链图片默认被卡片帧 CSP 拦掉（表现为图片位置全黑）。
-      # ⚠️ 只填你自己的图床：卡片是作者写的 JS，放行谁就等于允许它把数据发给谁。
+      # ⚠️ 只填你自己控制的域：卡片是作者写的 JS，放行谁就等于允许它把数据发给谁。
       ELECKOI_CARD_IMAGE_ORIGINS: "${ELECKOI_CARD_IMAGE_ORIGINS:-}"
       # AGPL-3.0 §13：以网络提供服务时须向使用者提供对应源码。
       # 未配置时服务会打印警告，并在登录页省略该入口。
