@@ -17,6 +17,13 @@
  * 数据最多落在**你自己服务器的访问日志**里，攻击者读不到；而第三方图床的图是
  * 公开可访问的，等于直接泄给第三方。所以本工具只应指向你自己的域。
  *
+ * ── 三种搬运方式（选一种，对应 docs/webui/卡片外链图片本地化.md 的方案表）──
+ *   --upload-dir <目录>            图落到本地目录 → 方案 3（纯自用；别人导出后打不开）
+ *   --upload-api <URL> --upload-token <令牌>
+ *                                  传进自建图床服务 → 方案 4（导出后别人也能取到图）
+ *   --inline                       内联成 data: URI → 方案 2（不用图床、导出即自带，
+ *                                  但只适合小图：base64 会写进卡片数据，随每次渲染下发）
+ *
  * ── 用法 ────────────────────────────────────────────────────────────────
  *   node docker/rewrite-card-images.mjs <库文件|租户目录|数据根目录> \
  *     --public-base https://img.example.com \
@@ -46,7 +53,7 @@ const SCAN_TARGETS = [
 ]
 
 function parseArgs(argv) {
-  const options = { apply: false, maxBytes: 20 * 1024 * 1024, timeoutMs: 20000, inputs: [] }
+  const options = { apply: false, maxBytes: 20 * 1024 * 1024, timeoutMs: 20000, inputs: [], inlineMaxBytes: 256 * 1024 }
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i]
     if (arg === '--apply') options.apply = true
@@ -55,6 +62,8 @@ function parseArgs(argv) {
     else if (arg === '--upload-api') options.uploadApi = argv[++i]
     else if (arg === '--upload-token') options.uploadToken = argv[++i]
     else if (arg === '--upload-folder') options.uploadFolder = argv[++i]
+    else if (arg === '--inline') options.inline = true
+    else if (arg === '--inline-max-bytes') options.inlineMaxBytes = Number(argv[++i])
     else if (arg === '--max-bytes') options.maxBytes = Number(argv[++i])
     else if (arg === '--timeout-ms') options.timeoutMs = Number(argv[++i])
     else if (arg.startsWith('--')) throw new Error(`未知参数：${arg}`)
@@ -62,31 +71,35 @@ function parseArgs(argv) {
   }
   if (options.inputs.length === 0) {
     throw new Error([
-      '用法：node docker/rewrite-card-images.mjs <库文件|租户目录|数据根目录> --public-base <URL> \\',
-      '        （二选一）--upload-dir <目录>           图片落到本地目录，交给你自己的静态服务',
-      '        （二选一）--upload-api <URL> --upload-token <令牌>   传进图床服务（Zipline）',
-      '      [--apply] [--upload-folder <文件夹ID>] [--max-bytes N] [--timeout-ms N]'
+      '用法：node docker/rewrite-card-images.mjs <库文件|租户目录|数据根目录> （三选一）',
+      '        --upload-dir <目录>           图片落到本地目录，交给你自己的静态服务',
+      '        --upload-api <URL> --upload-token <令牌>   传进图床服务（Zipline）',
+      '        --inline                      直接内联成 data: URI（不用图床，导出即自带）',
+      '      [--public-base <URL>] [--apply] [--upload-folder <ID>]',
+      '      [--inline-max-bytes N] [--max-bytes N] [--timeout-ms N]'
     ].join('\n'))
   }
-  if (options.publicBase === undefined) {
-    throw new Error('必须提供 --public-base（图床对外的公网地址，用于识别「已经搬过的引用」）')
-  }
   const usesApi = options.uploadApi !== undefined
-  if (usesApi && options.uploadDir !== undefined) {
-    throw new Error('--upload-dir 与 --upload-api 只能选一个')
-  }
-  if (!usesApi && options.uploadDir === undefined) {
-    throw new Error('必须提供 --upload-dir（图片落盘目录）或 --upload-api（图床服务地址）')
+  const usesDir = options.uploadDir !== undefined
+  const chosen = [usesApi, usesDir, options.inline === true].filter(Boolean).length
+  if (chosen !== 1) {
+    throw new Error('--upload-dir / --upload-api / --inline 三种搬运方式必须且只能选一个')
   }
   if (usesApi && options.uploadToken === undefined) {
     throw new Error('用 --upload-api 时必须同时提供 --upload-token（图床后台生成的 API 令牌）')
   }
+  // 内联模式没有「自己的域名」这回事，不需要 --public-base。
+  if (!options.inline && options.publicBase === undefined) {
+    throw new Error('必须提供 --public-base（图床对外的公网地址，用于识别「已经搬过的引用」）')
+  }
 
-  const base = new URL(options.publicBase)
-  if (base.protocol !== 'https:' && base.protocol !== 'http:') throw new Error('--public-base 只支持 http/https')
-  options.publicBase = options.publicBase.replace(/\/+$/, '')
-  options.baseOrigin = base.origin
-  if (options.uploadDir !== undefined) options.uploadDir = resolve(options.uploadDir)
+  if (options.publicBase !== undefined) {
+    const base = new URL(options.publicBase)
+    if (base.protocol !== 'https:' && base.protocol !== 'http:') throw new Error('--public-base 只支持 http/https')
+    options.publicBase = options.publicBase.replace(/\/+$/, '')
+    options.baseOrigin = base.origin
+  }
+  if (usesDir) options.uploadDir = resolve(options.uploadDir)
   if (usesApi) options.uploadApi = options.uploadApi.replace(/\/+$/, '')
   return options
 }
@@ -121,7 +134,7 @@ function findImageUrls(text, baseOrigin) {
     }
     let url
     try { url = new URL(raw) } catch { continue }
-    if (url.origin === baseOrigin) continue
+    if (baseOrigin !== undefined && url.origin === baseOrigin) continue
     // 不靠扩展名或关键词猜：图床的路径形态太多（无扩展名、查询串变换、
     // 文件名带括号……），猜错的代价是静默漏掉一张图。
     // 一律收作候选，下载后用魔数判定是不是图片。
@@ -246,17 +259,20 @@ async function main() {
   const databases = options.inputs.flatMap((input) => collectDatabases(input))
   if (databases.length === 0) { console.log('没有找到任何 eleckoi-common.sqlite3，什么都没做。'); return }
 
-  const where = options.uploadApi === undefined
-    ? `落盘：${options.uploadDir}`
-    : `图床：${options.uploadApi}（API 上传${options.uploadFolder === undefined ? '' : `，文件夹 ${options.uploadFolder}`}）`
+  const where = options.inline === true
+    ? `方式：内联成 data: URI（上限 ${(options.inlineMaxBytes / 1024).toFixed(0)}KB，超过的保留外链）`
+    : options.uploadApi === undefined
+      ? `落盘：${options.uploadDir}`
+      : `图床：${options.uploadApi}（API 上传${options.uploadFolder === undefined ? '' : `，文件夹 ${options.uploadFolder}`}）`
   console.log(options.apply
-    ? `模式：写入（--apply）\n对外地址：${options.publicBase}\n${where}\n`
-    : `模式：dry-run（只报告，不下载不改库；确认后加 --apply）\n对外地址：${options.publicBase}\n${where}\n`)
+    ? `模式：写入（--apply）\n${options.publicBase === undefined ? '' : `对外地址：${options.publicBase}\n`}${where}\n`
+    : `模式：dry-run（只报告，不下载不改库；确认后加 --apply）\n${options.publicBase === undefined ? '' : `对外地址：${options.publicBase}\n`}${where}\n`)
   if (options.apply && options.uploadDir !== undefined) mkdirSync(options.uploadDir, { recursive: true })
 
   const downloaded = new Map() // 原 URL → 新地址（完整 URL）
   const skipped = new Set()    // 下载到了但不是图片，保持原样
   const ignored = new Set()    // 一眼就不是图片 / 本机地址，连请求都不发
+  const tooBigForInline = []   // 内联模式里超过上限、保留外链的
   const allUrls = new Set()    // 见过的所有 URL，用于结论里的总数
   let totalRewrites = 0
   let totalFailures = 0
@@ -295,7 +311,17 @@ async function main() {
           const { buffer, kind } = attempt
           const name = `${createHash('sha256').update(buffer).digest('hex').slice(0, 32)}.${kind}`
           let target
-          if (options.uploadApi === undefined) {
+          if (options.inline === true) {
+            // 内联：图直接变成 data: URI 写进卡片数据。
+            // CSP 本来就允许 img-src/media-src 的 data:，所以不用配任何白名单，
+            // 导出给别人也自带图。代价是体积涨约 1/3，且会随卡片数据每次下发。
+            if (buffer.length > options.inlineMaxBytes) {
+              tooBigForInline.push(url)
+              console.log(`    – ${url.slice(0, 72)}…：${(buffer.length / 1024).toFixed(0)}KB 超过内联上限，保留外链`)
+              continue
+            }
+            target = `data:${MIME[kind] ?? 'application/octet-stream'};base64,${buffer.toString('base64')}`
+          } else if (options.uploadApi === undefined) {
             const file = join(options.uploadDir, name)
             if (!existsSync(file)) writeFileSync(file, buffer)
             target = `${options.publicBase}/${name}`
@@ -303,7 +329,7 @@ async function main() {
             target = await uploadToImageHost(buffer, kind, name, options)
           }
           downloaded.set(url, target)
-          console.log(`    ↓ ${url.slice(0, 72)}… → ${target.slice(0, 96)}…（${(buffer.length / 1024).toFixed(0)}KB）`)
+          console.log(`    ↓ ${url.slice(0, 72)}… → ${options.inline === true ? `内联 data: URI（${(buffer.length / 1024).toFixed(0)}KB 原始大小）` : `${target.slice(0, 96)}…（${(buffer.length / 1024).toFixed(0)}KB）`}`)
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           if (message.includes('不是可识别的图片')) {
@@ -351,10 +377,16 @@ async function main() {
   console.log(`结论：改写 ${totalRewrites} 条记录；扫描到 ${allUrls.size} 个不同 URL —— `
     + `判定为图片 ${imageCount} 个、不是图片 ${skipped.size} 个、直接跳过 ${ignored.size} 个`
     + (totalFailures > 0 ? `，下载失败 ${totalFailures} 个（见上）。` : '。'))
-  if (options.apply && totalRewrites > 0) {
+  if (options.apply && totalRewrites > 0 && options.inline !== true) {
     console.log('')
     console.log('别忘了把图床域名加进卡片帧白名单，否则外链仍会被 CSP 拦掉：')
     console.log('  ELECKOI_CARD_IMAGE_ORIGINS=' + options.baseOrigin)
+  }
+  if (options.inline === true && tooBigForInline.length > 0) {
+    console.log('')
+    console.log(`有 ${tooBigForInline.length} 张图超过内联上限（保留为外链，别人导出后仍依赖原图床）：`)
+    for (const url of tooBigForInline) console.log('  ' + url)
+    console.log('想全部内联就调大 --inline-max-bytes —— 但卡片数据会同比变大。')
   }
   if (!options.apply) console.log('确认无误后加 --apply 重新执行。')
 }
