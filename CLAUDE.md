@@ -41,11 +41,11 @@ docker compose -f docker/compose.yml up -d --build
 - `POST /api/rpc` 的请求体上限是 `ELECKOI_MAX_BODY_BYTES`（默认 128 MB）。导入角色卡会把
   整张卡的 base64 放进一次请求，**上限偏小 + 超限直接断线**会让"上传大图/批量导入"只报
   「与桌面服务的连接已断开」——现在超限会回明确的 413，排查这类报错先看这里。
-- 卡片里的外链图片默认会被卡片帧 CSP 拦掉（现象是图片位置全黑）。要放行就设
-  `ELECKOI_CARD_IMAGE_ORIGINS`，**只填你自己控制的域**——放行哪个域就等于允许卡片
-  把你的数据以图片请求发给它（落进对方日志，第三方站点你无法核实谁看得到）。
-  另一种不需要任何放行的做法是内联成 `data:` URI（CSP 本来就允许），见该文档的
-  方案对照表。
+- 卡片图片用 `ELECKOI_CARD_IMAGE_MODE` 一个变量选：`self-hosted`（默认）/ `local` /
+  `inline` / `third-party`（放行任意 https 图床，可用 `ELECKOI_CARD_IMAGE_BLOCKED_HOSTS`
+  排除个别域）/ `off`。放行任一外部域都等于允许卡片把数据以图片请求发给它（GET，
+  `connect-src 'none'` 挡不住 `<img>`）；`third-party` 的取舍就是"省事 vs 信任导入的卡"。
+  黑名单只是卡片帧里的尽力而为过滤，**不是安全边界**。
 - 导入卡片时自动搬图由 `ELECKOI_IMAGE_PUBLIC_BASE` / `UPLOAD_API` / `UPLOAD_TOKEN`
   三个变量共同启用（缺一个即关闭）。默认 **inline（同步）**：导入请求等图片搬完才返回，
   界面由注入的桥脚本画进度条（`/api/card-images/progress` + `webBridge.ts`）。
