@@ -93,6 +93,12 @@ export interface WebServerOptions {
    */
   cardOrigin?: string
   /**
+   * 「本地图床」模式下图片落盘的目录。设置后本服务会在**卡片源**与**应用源**上
+   * 以 `/card-images/<内容哈希>.<ext>` 提供它们——与卡片帧同源，因此不需要任何
+   * CSP 白名单。文件名是内容哈希且只认图片扩展名，不接受目录穿越，也不列表。
+   */
+  cardImageDir?: string
+  /**
    * `POST /api/rpc` 的请求体上限（字节）。导入角色卡会把**整张卡的 base64** 放进一次请求，
    * 上游契约单文件就允许到 132 MB，所以这个值必须给够——太小会让"上传大图/批量导入"
    * 直接失败（旧上限 8 MB 就是这个症状：浏览器只报「与桌面服务的连接已断开」）。
@@ -121,6 +127,34 @@ export interface WebServerHandle {
   readonly url: string
   readonly port: number
   close(): Promise<void>
+}
+
+
+/** 卡片图片路径前缀（本地图床模式）。 */
+export const CARD_IMAGES_PREFIX = '/card-images/'
+
+/** 只认内容哈希文件名 + 图片扩展名：这两条就足够挡掉目录穿越与任意文件读取。 */
+const CARD_IMAGE_NAME = /^[a-f0-9]{16,64}\.(png|jpg|jpeg|webp|gif|avif|svg)$/
+
+/** 本地图床的图片：公开可读（卡片帧不带 Cookie），文件名不可猜。 */
+function sendCardImage(res: ServerResponse, directory: string, rawName: string): void {
+  const name = rawName.split('?')[0] ?? ''
+  if (!CARD_IMAGE_NAME.test(name)) {
+    sendText(res, 404, 'not found')
+    return
+  }
+  const file = join(directory, name)
+  if (!existsSync(file) || !statSync(file).isFile()) {
+    sendText(res, 404, 'not found')
+    return
+  }
+  res.writeHead(200, {
+    'content-type': MIME_TYPES[extname(file).toLowerCase()] ?? 'application/octet-stream',
+    // 内容哈希即文件名，内容变了名字就变，可以长期缓存
+    'cache-control': 'public, max-age=31536000, immutable',
+    'x-content-type-options': 'nosniff'
+  })
+  createReadStream(file).pipe(res)
 }
 
 export function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -253,6 +287,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   })
   /** 卡片源的 Host（含端口）；未配置卡片源时为 undefined。 */
   const cardHost = cardOrigin === '' ? undefined : new URL(cardOrigin).host
+  const cardImageDir = options.cardImageDir
   /** 应用源白名单：卡片帧只接受来自这些源的文档投递。 */
   const appOrigins = resolveAppOrigins(options.appOrigins)
   if (cardOrigin !== '' && appOrigins.length === 0) {
@@ -281,6 +316,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     // 按"对外 Host"分流：反向代理未必保留 Host，信任代理时以 X-Forwarded-Host 为准。
     if (cardHost !== undefined && effectiveHost(req) === cardHost) {
       await handleCardOrigin(res, path, url)
+      return
+    }
+
+    // 卡片图片必须在**会话门禁之前**处理：卡片帧在另一个源上，它发起的图片请求
+    // 不携带会话 Cookie，走鉴权只会 401 让图全裂。
+    if (cardImageDir !== undefined && path.startsWith(CARD_IMAGES_PREFIX)) {
+      sendCardImage(res, cardImageDir, path.slice(CARD_IMAGES_PREFIX.length))
       return
     }
 
@@ -408,6 +450,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
         'referrer-policy': 'no-referrer'
       })
       res.end(cardFrameSource)
+      return
+    }
+
+    if (cardImageDir !== undefined && path.startsWith(CARD_IMAGES_PREFIX)) {
+      sendCardImage(res, cardImageDir, path.slice(CARD_IMAGES_PREFIX.length))
       return
     }
 
