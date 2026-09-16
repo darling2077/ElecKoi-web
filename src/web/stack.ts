@@ -34,6 +34,8 @@ export interface WebUiStackOptions {
   adminEmails?: readonly string[]
   /** 卡片源（如 https://cards.example.com）；未设置则卡片与宿主同源（不可公网）。 */
   cardOrigin?: string
+  /** 额外允许卡片加载图片/媒体的源（见 server.ts 的 resolveCardImageOrigins）。 */
+  cardImageOrigins?: readonly string[]
   /**
    * 对外公开的应用源（反向代理后的地址也要列进来）。
    * 同时用于三处：卡片帧的投递白名单、卡片帧的 frame-ancestors、写操作的同源校验。
@@ -86,6 +88,7 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
     ...(options.port === undefined ? {} : { port: options.port }),
     rendererDir: options.rendererDir,
     ...(options.cardOrigin === undefined ? {} : { cardOrigin: options.cardOrigin }),
+    ...(options.cardImageOrigins === undefined ? {} : { cardImageOrigins: options.cardImageOrigins }),
     appOrigins,
     ...(options.publicPaths === undefined ? {} : { publicPaths: options.publicPaths }),
     auth: createAuthHandler({
