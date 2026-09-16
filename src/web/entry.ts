@@ -77,6 +77,19 @@ if ((process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').trim() !== '') {
   console.log(`卡片可加载的外部图片源：${process.env.ELECKOI_CARD_IMAGE_ORIGINS}\n`)
 }
 
+// 导入卡片时自动搬图是否就绪——出问题时第一眼要看的就是这行。
+{
+  const publicBase = (process.env.ELECKOI_IMAGE_PUBLIC_BASE ?? '').trim()
+  const uploadApi = (process.env.ELECKOI_IMAGE_UPLOAD_API ?? '').trim()
+  const token = (process.env.ELECKOI_IMAGE_UPLOAD_TOKEN ?? '').trim()
+  if (publicBase !== '' && uploadApi !== '' && token !== '') {
+    const mode = (process.env.ELECKOI_IMAGE_LOCALIZE_MODE ?? '').trim() === 'inline' ? 'inline（导入等到搬完）' : 'background（导入立即返回）'
+    console.log(`导入卡片时自动搬图：已启用 → ${publicBase}，方式 ${mode}\n`)
+  } else {
+    console.log('导入卡片时自动搬图：未启用（缺 ELECKOI_IMAGE_PUBLIC_BASE / UPLOAD_API / UPLOAD_TOKEN 之一）\n')
+  }
+}
+
 let shuttingDown = false
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return
