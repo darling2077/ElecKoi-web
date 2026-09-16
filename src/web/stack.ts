@@ -21,6 +21,9 @@ export interface WebUiStackOptions {
   maxBodyBytes?: number
   /** 本地图床（ELECKOI_CARD_IMAGE_MODE=local）的图片目录。 */
   cardImageDir?: string
+  /** 卡片图片策略（放开档）与黑名单，见 cardFrame.ts。 */
+  cardImagePolicy?: { allowAnyHttps?: boolean; allowAnyHttp?: boolean }
+  cardImageBlockedHosts?: readonly string[]
   dataRoot: string
   rendererDir: string
   masterKeyBase64: string
@@ -91,6 +94,8 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
       // exactOptionalPropertyTypes：未配置时不要把这些键传成 undefined
       ...(options.maxBodyBytes === undefined ? {} : { maxBodyBytes: options.maxBodyBytes }),
       ...(options.cardImageDir === undefined ? {} : { cardImageDir: options.cardImageDir }),
+      ...(options.cardImagePolicy === undefined ? {} : { cardImagePolicy: options.cardImagePolicy }),
+      ...(options.cardImageBlockedHosts === undefined ? {} : { cardImageBlockedHosts: options.cardImageBlockedHosts }),
     ...(options.host === undefined ? {} : { host: options.host }),
     ...(options.port === undefined ? {} : { port: options.port }),
     rendererDir: options.rendererDir,

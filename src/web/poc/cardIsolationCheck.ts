@@ -65,6 +65,8 @@ function renderTestScript(): string {
 
   // 第一时间回报「脚本已执行」，便于区分「页面没加载」与「逻辑卡住」。
   send({ stage: 'started', cardOrigin });
+  // 页面自身的报错也要能看到，否则只能干等超时。
+  addEventListener('error', (event) => send({ stage: 'page-error', message: String(event.message || event) }));
 
   function report() {
     out.textContent = 'RESULT ' + JSON.stringify(results);
@@ -89,15 +91,35 @@ function renderTestScript(): string {
       return;
     }
     if (data.type === 'eleckoi:card-ready') {
-      const card = '<!doctype html><html><body><script>' +
+      send({ stage: 'frame-ready' });
+      // 图片黑名单验收用：卡片里放两张图，一张来自被屏蔽的域、一张来自放行的域。
+      // 用 ?blocked=<url>&allowed=<url> 传入（hostname 不同才能验证"按域"屏蔽）。
+      const params = new URLSearchParams(location.search);
+      const blockedImg = params.get('blocked') || '';
+      const allowedImg = params.get('allowed') || '';
+      const imgTags = (blockedImg ? '<img id="b" src="' + blockedImg + '">' : '')
+        + (allowedImg ? '<img id="a" src="' + allowedImg + '">' : '');
+      const card = '<!doctype html><html><body>' + imgTags + '<script>' +
         'const r = {};' +
         'try { const v = parent.eleckoi; r.bridge = (v && typeof v.request === "function") ? "LEAKED" : "blocked"; }' +
         'catch (e) { r.bridge = "blocked"; }' +
         'try { const d = parent.document; r.parentDocument = d ? "LEAKED" : "blocked"; }' +
         'catch (e) { r.parentDocument = "blocked"; }' +
         'r.postMessage = (typeof parent.postMessage === "function") ? "ok" : "broken";' +
-        'parent.postMessage({ type: "card-result", bridge: r.bridge, parentDocument: r.parentDocument, postMessage: r.postMessage }, "*");' +
-        '<\\/script></body></html>';
+        // 立刻回报（与加图片之前完全一致的那条路径，隔离结论不受影响）
+        'const report = () => parent.postMessage({ type: "card-result", bridge: r.bridge, parentDocument: r.parentDocument, postMessage: r.postMessage }, "*");' +
+        'report();' +
+        // 图片黑名单验收用：两张图各自 settle 后再报一次（谁加载成功、谁失败）。
+        // 注意：真正的判据是**服务端有没有收到请求**，这里只是给自己看的旁证。
+        'const watch = (id, key) => { const el = document.getElementById(id); if (!el) return;' +
+        '  const settle = (state) => { r[key] = state; parent.postMessage({ type: "card-result", bridge: r.bridge, parentDocument: r.parentDocument, postMessage: r.postMessage, blockedImg: r.blockedImg || "pending", allowedImg: r.allowedImg || "pending" }, "*"); };' +
+        '  el.addEventListener("load", () => settle("loaded"));' +
+        '  el.addEventListener("error", () => settle("failed"));' +
+        '  if (el.complete) settle(el.naturalWidth > 0 ? "loaded" : "failed"); };' +
+        'watch("b", "blockedImg"); watch("a", "allowedImg");' +
+        // 这里必须是真正的闭合标签：早先写成带反斜杠的 <\/script>，HTML 根本不认为
+        // 脚本结束，多出来的反斜杠在 JS 里是语法错误，整段脚本都不会执行。
+        '</script></body></html>';
       frame.contentWindow.postMessage({ type: 'eleckoi:card-document', html: card }, cardOrigin);
     }
   });
@@ -175,6 +197,29 @@ async function captureFromBrowser(buildUrl: (beaconUrl: string) => string, timeo
   }
 }
 
+/**
+ * 带计数的图片服务器：用来判断"这个域到底有没有收到请求"。
+ * 不指定 host 时 Node 绑到 :: （双栈），因此 localhost 解析成 ::1 也能连上。
+ */
+async function startImageServer(): Promise<{ url(host: string): string; hits(): number; close(): Promise<void> }> {
+  const { createServer } = await import('node:http')
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+  let count = 0
+  const server = createServer((_req, res) => {
+    count += 1
+    res.writeHead(200, { 'content-type': 'image/png', 'content-length': String(png.length), 'access-control-allow-origin': '*' })
+    res.end(png)
+  })
+  await new Promise<void>((ready) => server.listen(0, ready))
+  const address = server.address()
+  const port = typeof address === 'object' && address !== null ? address.port : 0
+  return {
+    url: (host: string) => `http://${host}:${port}/pixel.png`,
+    hits: () => count,
+    close: () => new Promise<void>((done) => server.close(() => done()))
+  }
+}
+
 /** 先占一个空闲端口，因为卡片源必须在服务启动前就确定。 */
 async function freePort(): Promise<number> {
   const { createServer } = await import('node:net')
@@ -232,6 +277,23 @@ async function main(): Promise<void> {
     // 卡片源行为：只放行卡片帧与签名媒体
     const frameResponse = await fetch(`${cardOrigin}/__eleckoi/card-frame.html`)
     const csp = frameResponse.headers.get('content-security-policy') ?? ''
+    // 帧的内联脚本必须**真能编译**：它整段套在模板字符串里，反斜杠容易被吃掉，
+    // 而构建期看不出来（vite 只当它是字符串）——曾因此让卡片帧彻底不工作。
+    {
+      const frameHtml = await frameResponse.clone().text()
+      const open = frameHtml.indexOf('<script>') + '<script>'.length
+      const close = frameHtml.indexOf('</scr' + 'ipt>', open)
+      let compiled = true
+      let reason = ''
+      try {
+        new Function(frameHtml.slice(open, close))
+      } catch (error) {
+        compiled = false
+        reason = error instanceof Error ? error.message : String(error)
+      }
+      record('M3-9', compiled && close > open,
+        compiled ? `帧内联脚本可编译（${close - open} 字符）` : `帧内联脚本无法编译：${reason}`)
+    }
     record('M3-1', frameResponse.status === 200 && csp.includes("connect-src 'none'"),
       `卡片帧 ${frameResponse.status}，CSP 含 connect-src 'none'`)
 
@@ -274,6 +336,54 @@ async function main(): Promise<void> {
         `恶意卡片访问 parent.eleckoi → ${result.bridge}；访问 parent.document → ${result.parentDocument}`)
       record('M3-6', result.postMessage === 'ok',
         `postMessage 通道仍可用（卡片正常功能不受影响）：${result.postMessage}`)
+    }
+    // ── M3-7/M3-8：图片黑名单（放开档 + 按域屏蔽）──
+    // 关键点：两个域必须在**真实浏览器**里验证——被屏蔽的域一次请求都不该收到，
+    // 放行的域必须收到。CSP 只能"允许哪些源"，黑名单由卡片帧过滤，所以只能这么验。
+    const blockedServer = await startImageServer()
+    const allowedServer = await startImageServer()
+    const policyPort = await freePort()
+    const policyCardOrigin = `http://127.0.0.2:${policyPort}`
+    const policyAppBase = `http://127.0.0.1:${policyPort}`
+    const policyServer = await startWebServer({
+      host: '0.0.0.0',
+      port: policyPort,
+      rendererDir,
+      cardOrigin: policyCardOrigin,
+      appOrigins: [policyAppBase],
+      // 放开档：任意 http/https 图床都允许显示（测试用 http，省掉证书）
+      cardImagePolicy: { allowAnyHttps: true, allowAnyHttp: true },
+      // 黑名单：127.0.0.1 被屏蔽；放行那张走 localhost（不同主机名）
+      cardImageBlockedHosts: ['127.0.0.1'],
+      resolveSession: singleTenantResolver(tenant.gateway, tenant.context.mediaAssets)
+    })
+    try {
+      const blockedUrl = blockedServer.url('127.0.0.1')
+      const allowedUrl = allowedServer.url('localhost')
+      let policyPayload: string | undefined
+      try {
+        const raw = await captureFromBrowser(
+          (beaconUrl) => `${policyAppBase}/${TEST_PAGE}?beacon=${encodeURIComponent(beaconUrl)}`
+            + `&blocked=${encodeURIComponent(blockedUrl)}&allowed=${encodeURIComponent(allowedUrl)}`,
+          60_000
+        )
+        policyPayload = raw.trim() === '' ? undefined : raw
+      } catch (error) {
+        record('M3-7', false, `浏览器未产出结果：${error instanceof Error ? error.message : String(error)}`)
+      }
+      // beacon 可能在图片加载完之前就回来了，给放行那张图留出加载时间再数。
+      await new Promise((done) => setTimeout(done, 2500))
+      const policyResult = policyPayload === undefined ? undefined : JSON.parse(policyPayload) as Record<string, string>
+      record('M3-7', allowedServer.hits() > 0,
+        `放开档下放行的域确实收到了图片请求（${allowedServer.hits()} 次）`
+        + `——以服务端计数为准；这一条同时证明测试是"活的"，不是什么都拦住了`)
+      void policyResult
+      record('M3-8', blockedServer.hits() === 0,
+        `黑名单里的域一次请求都没收到（${blockedServer.hits()} 次）：卡片在写入前就被替换成占位图`)
+    } finally {
+      await policyServer.close()
+      await blockedServer.close()
+      await allowedServer.close()
     }
   } finally {
     await server.close()
