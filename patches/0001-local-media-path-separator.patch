@@ -1,5 +1,5 @@
 diff --git a/src/main/platform/filesystem/LocalMediaStore.ts b/src/main/platform/filesystem/LocalMediaStore.ts
-index 2d912e3..b50ae9d 100644
+index c540136..7ea64f5 100644
 --- a/src/main/platform/filesystem/LocalMediaStore.ts
 +++ b/src/main/platform/filesystem/LocalMediaStore.ts
 @@ -8,7 +8,7 @@ import {
@@ -8,8 +8,8 @@ index 2d912e3..b50ae9d 100644
  } from 'node:fs'
 -import { join, resolve } from 'node:path'
 +import { isAbsolute, join, relative, resolve } from 'node:path'
+ import { LOCAL_MEDIA_SCHEME } from '@shared/foundation/mediaReference'
  
- export const LOCAL_MEDIA_SCHEME = 'eleckoi-media'
  const REFERENCE_PREFIX = `${LOCAL_MEDIA_SCHEME}://asset/v1/`
 @@ -94,14 +94,12 @@ export class LocalMediaStore {
      const [, ownerHash, slot, fileName] = parts
