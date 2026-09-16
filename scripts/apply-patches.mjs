@@ -16,6 +16,9 @@
 
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
+
+/** 我们自己的补丁命名：0001-xxx.patch。上游的 pnpm 补丁不含数字前缀。 */
+const OUR_PATCH = /^\d{4}-.+\.patch$/
 import { join, resolve } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
@@ -42,7 +45,11 @@ function assertGitAvailable() {
 
 function patchFiles() {
   if (!existsSync(patchDir)) return []
-  return readdirSync(patchDir).filter((name) => name.endsWith('.patch')).sort()
+  // 只认我们自己的命名约定（四位数字前缀）。
+  // 上游 v0.1.2 起也在 patches/ 里放 pnpm 包补丁（`@scope__name@version.patch`），
+  // 那些是给 pnpm 用的、内部路径相对包根，用 git apply 打不上，
+  // 而且它们里面的 `a/package.json` 会被误认成本仓库根的 package.json。
+  return readdirSync(patchDir).filter((name) => OUR_PATCH.test(name)).sort()
 }
 
 function canApply(file, reverse) {
