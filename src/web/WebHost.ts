@@ -92,6 +92,8 @@ export function createImportImageLocalizer(database: SqliteDatabase): CardImageL
     publicBase,
     uploadApi,
     uploadToken,
+    allowLocalAddresses: (process.env.ELECKOI_IMAGE_ALLOW_LOCAL ?? '').trim() === '1',
+    concurrency: number(process.env.ELECKOI_IMAGE_CONCURRENCY, 4),
     maxImages: number(process.env.ELECKOI_IMAGE_MAX_PER_IMPORT, 2000),
     maxBytes: number(process.env.ELECKOI_IMAGE_MAX_BYTES, 20 * 1024 * 1024),
     budgetMs: number(process.env.ELECKOI_IMAGE_TIME_BUDGET_MS, 900_000),
@@ -143,7 +145,11 @@ export class WebHost {
       mounted.importImageHook = localizer
       // 搬运完成后让前端刷新角色列表：卡片内容被改写了，不刷新会一直显示旧的黑图。
       mounted.onImagesLocalized = () => mounted.broadcast('records.changed', { module: 'personas' })
-      mounted.importImageMode = (process.env.ELECKOI_IMAGE_LOCALIZE_MODE ?? '').trim() === 'inline' ? 'inline' : 'background'
+      // 默认同步：导入请求等图片搬完才返回，界面上的进度条走完才算导入成功。
+      // 这样卡一出现在列表里就是"图已经搬好"的最终态，不存在中途改引用的窗口。
+      mounted.importImageMode = (process.env.ELECKOI_IMAGE_LOCALIZE_MODE ?? '').trim() === 'background'
+        ? 'background'
+        : 'inline'
     }
     let disposed = false
 

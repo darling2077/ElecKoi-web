@@ -62,12 +62,16 @@ services:
       ELECKOI_IMAGE_PUBLIC_BASE: "${ELECKOI_IMAGE_PUBLIC_BASE:-}"
       ELECKOI_IMAGE_UPLOAD_API: "${ELECKOI_IMAGE_UPLOAD_API:-}"
       ELECKOI_IMAGE_UPLOAD_TOKEN: "${ELECKOI_IMAGE_UPLOAD_TOKEN:-}"
-      # 搬运时机：background（默认，导入立刻返回、后台搬完再刷新）或 inline（等搬完才返回）
-      ELECKOI_IMAGE_LOCALIZE_MODE: "${ELECKOI_IMAGE_LOCALIZE_MODE:-background}"
+      # 搬运时机：inline（默认，导入等图片搬完才返回，界面上有进度条）或 background
+      ELECKOI_IMAGE_LOCALIZE_MODE: "${ELECKOI_IMAGE_LOCALIZE_MODE:-inline}"
       # 单次导入的搬运上限（张数 / 单图字节 / 总时间预算）
       ELECKOI_IMAGE_MAX_PER_IMPORT: "${ELECKOI_IMAGE_MAX_PER_IMPORT:-2000}"
       ELECKOI_IMAGE_MAX_BYTES: "${ELECKOI_IMAGE_MAX_BYTES:-20971520}"
       ELECKOI_IMAGE_TIME_BUDGET_MS: "${ELECKOI_IMAGE_TIME_BUDGET_MS:-900000}"
+      # 同时搬运几张（4 路并发能把几百张图从几分钟压到一分钟级）
+      ELECKOI_IMAGE_CONCURRENCY: "${ELECKOI_IMAGE_CONCURRENCY:-4}"
+      # 是否允许搬运本机地址（默认否：卡里写死的 localhost 多半是作者的开发地址）
+      ELECKOI_IMAGE_ALLOW_LOCAL: "${ELECKOI_IMAGE_ALLOW_LOCAL:-0}"
       # AGPL-3.0 §13：以网络提供服务时须向使用者提供对应源码。
       # 未配置时服务会打印警告，并在登录页省略该入口。
       ELECKOI_SOURCE_URL: "${ELECKOI_SOURCE_URL:-}"
