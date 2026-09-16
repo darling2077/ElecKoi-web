@@ -19,6 +19,8 @@ import { TenantRegistry } from './TenantRegistry'
 export interface WebUiStackOptions {
   /** POST /api/rpc 的请求体上限（字节）；导入角色卡会一次性上传整张卡。 */
   maxBodyBytes?: number
+  /** 本地图床（ELECKOI_CARD_IMAGE_MODE=local）的图片目录。 */
+  cardImageDir?: string
   dataRoot: string
   rendererDir: string
   masterKeyBase64: string
@@ -86,8 +88,9 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
   const appOrigins = resolveAppOrigins(options.appOrigins)
 
   const server = await startWebServer({
-      // exactOptionalPropertyTypes：未配置时不要把这个键传成 undefined
+      // exactOptionalPropertyTypes：未配置时不要把这些键传成 undefined
       ...(options.maxBodyBytes === undefined ? {} : { maxBodyBytes: options.maxBodyBytes }),
+      ...(options.cardImageDir === undefined ? {} : { cardImageDir: options.cardImageDir }),
     ...(options.host === undefined ? {} : { host: options.host }),
     ...(options.port === undefined ? {} : { port: options.port }),
     rendererDir: options.rendererDir,
