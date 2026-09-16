@@ -26,10 +26,15 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# 分层策略：依赖安装只依赖清单与 packages/，因此改 src/ 下任何文件都不会触发重装。
+# 分层策略：依赖安装只依赖清单、packages/ 与 patches/，因此改 src/ 下任何文件都不会触发重装。
 #   packages/ 必须在安装前就位：根 postinstall 会构建三个 workspace 包。
+#   patches/ 同样必须就位：上游 v0.1.2 起用 package.json 的 pnpm.patchedDependencies
+#   指向 patches/@scope__name@version.patch，pnpm install 阶段就要读这些文件
+#   （原先只有末尾的 COPY . . 才带进来，安装会以 ENOENT 直接失败）。
+#   patches/ 体积很小，单独拷一层不会影响缓存收益。
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages ./packages
+COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 
 # 其余源码（src/ resources/ scripts/ patches/ docker/ …）
@@ -73,6 +78,7 @@ COPY --from=builder --chown=root:root /app/out ./out
 #   2) 若让 COPY 顺手创建父目录，--chmod 会一并套到目录上，目录失去执行位就进不去 → 先显式建目录。
 RUN mkdir -p /app/docker && chmod 755 /app/docker
 COPY --from=builder --chown=root:root --chmod=0644 /app/docker/backup-tenants.mjs ./docker/backup-tenants.mjs
+COPY --from=builder --chown=root:root --chmod=0644 /app/docker/migrate-preset-tool-policy.mjs ./docker/migrate-preset-tool-policy.mjs
 
 USER eleckoi
 
