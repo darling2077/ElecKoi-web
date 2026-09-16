@@ -68,37 +68,83 @@ function createWebGatewayPlugin(gateway: WebGateway): Plugin.Object {
 }
 
 /**
- * 按环境变量装配「导入卡片时自动搬图」。
+ * 按 `ELECKOI_CARD_IMAGE_MODE` 装配「导入卡片时自动搬图」。
  *
- * 需要三个变量同时就位才启用；缺任何一个都返回 undefined（= 不启用，行为与以前一致）：
- *   ELECKOI_IMAGE_PUBLIC_BASE   图床对外地址，如 https://img.kidamita.top:57789
- *   ELECKOI_IMAGE_UPLOAD_API    上传接口地址，通常与上面同源
- *   ELECKOI_IMAGE_UPLOAD_TOKEN  图床后台生成的 API 令牌
+ * 四种做法（用户改 compose.yml / .env 里的一个变量即可切换）：
  *
- * 另外三个可调（都有默认值）：ELECKOI_IMAGE_MAX_PER_IMPORT、ELECKOI_IMAGE_TIME_BUDGET_MS、
- * ELECKOI_IMAGE_MAX_BYTES。
+ *   self-hosted  自建公网图床：图片传进你自己的图床，导出给别人也能取到图。
+ *                需要 ELECKOI_IMAGE_PUBLIC_BASE + UPLOAD_API + UPLOAD_TOKEN，
+ *                并把该域加进 ELECKOI_CARD_IMAGE_ORIGINS。
+ *   local        本地图床：图片落到宿主机目录，由本服务在**卡片源**上以
+ *                /card-images/ 提供。与卡片帧同源，**不需要任何白名单**；
+ *                代价是导出给别人后打不开（别人访问不到你的机器）。
+ *   inline       内联 data: URI：不用图床、不用白名单，导出即自带图；
+ *                代价是图片以 base64 写进卡片数据，只适合小图。
+ *   third-party  只放行第三方图床、不搬运：把对方域填进 ELECKOI_CARD_IMAGE_ORIGINS
+ *                即可显示，但数据会随卡片请求发给对方，且对方删图后卡片就空了。
+ *
+ * 兼容：未设置该变量时沿用旧的推断方式（配了图床三件套就是 self-hosted，否则关闭）。
  */
 export function createImportImageLocalizer(database: SqliteDatabase): CardImageLocalizer | undefined {
-  const publicBase = (process.env.ELECKOI_IMAGE_PUBLIC_BASE ?? '').trim()
-  const uploadApi = (process.env.ELECKOI_IMAGE_UPLOAD_API ?? '').trim()
-  const uploadToken = (process.env.ELECKOI_IMAGE_UPLOAD_TOKEN ?? '').trim()
-  if (publicBase === '' || uploadApi === '' || uploadToken === '') return undefined
+  const read = (name: string): string => (process.env[name] ?? '').trim()
   const number = (raw: string | undefined, fallback: number): number => {
     const value = Number((raw ?? '').trim())
     return Number.isFinite(value) && value > 0 ? value : fallback
   }
-  return createCardImageLocalizer({
+  const publicBase = read('ELECKOI_IMAGE_PUBLIC_BASE')
+  const uploadApi = read('ELECKOI_IMAGE_UPLOAD_API')
+  const uploadToken = read('ELECKOI_IMAGE_UPLOAD_TOKEN')
+
+  const configured = read('ELECKOI_CARD_IMAGE_MODE')
+  // 未显式指定时按老规矩推断：图床三件套齐了就上自建图床，否则不搬运。
+  const mode = configured !== ''
+    ? configured
+    : (publicBase !== '' && uploadApi !== '' && uploadToken !== '' ? 'self-hosted' : 'off')
+
+  const common = {
     database,
-    publicBase,
-    uploadApi,
-    uploadToken,
-    allowLocalAddresses: (process.env.ELECKOI_IMAGE_ALLOW_LOCAL ?? '').trim() === '1',
-    concurrency: number(process.env.ELECKOI_IMAGE_CONCURRENCY, 4),
-    maxImages: number(process.env.ELECKOI_IMAGE_MAX_PER_IMPORT, 2000),
-    maxBytes: number(process.env.ELECKOI_IMAGE_MAX_BYTES, 20 * 1024 * 1024),
-    budgetMs: number(process.env.ELECKOI_IMAGE_TIME_BUDGET_MS, 900_000),
-    log: (message) => console.log(`[card-images]${message}`)
-  })
+    allowLocalAddresses: read('ELECKOI_IMAGE_ALLOW_LOCAL') === '1',
+    concurrency: number(read('ELECKOI_IMAGE_CONCURRENCY'), 4),
+    maxImages: number(read('ELECKOI_IMAGE_MAX_PER_IMPORT'), 2000),
+    maxBytes: number(read('ELECKOI_IMAGE_MAX_BYTES'), 20 * 1024 * 1024),
+    budgetMs: number(read('ELECKOI_IMAGE_TIME_BUDGET_MS'), 900_000),
+    log: (message: string) => console.log(`[card-images]${message}`)
+  }
+
+  if (mode === 'inline') {
+    return createCardImageLocalizer({
+      ...common,
+      target: { kind: 'dataUri', maxInlineBytes: number(read('ELECKOI_IMAGE_INLINE_MAX_BYTES'), 256 * 1024) }
+    })
+  }
+
+  if (mode === 'local') {
+    const directory = read('ELECKOI_IMAGE_LOCAL_DIR') || '/data/card-images'
+    // 图片由卡片源提供，所以对外地址就是卡片源；没配卡片源时退化成同源（本地自用）。
+    const cardOrigin = read('ELECKOI_CARD_ORIGIN')
+    return createCardImageLocalizer({
+      ...common,
+      publicBase: cardOrigin !== '' ? cardOrigin : '',
+      target: { kind: 'localDir', directory }
+    })
+  }
+
+  if (mode === 'self-hosted') {
+    if (publicBase === '' || uploadApi === '' || uploadToken === '') {
+      console.warn('[card-images] 选择了 self-hosted，但 ELECKOI_IMAGE_PUBLIC_BASE / UPLOAD_API / UPLOAD_TOKEN 未配齐，已自动关闭搬运。')
+      return undefined
+    }
+    return createCardImageLocalizer({
+      ...common,
+      publicBase,
+      target: { kind: 'uploadApi', uploadApi, uploadToken }
+    })
+  }
+
+  if (mode !== 'off') {
+    console.warn(`[card-images] 未知的 ELECKOI_CARD_IMAGE_MODE：${mode}（可选 self-hosted / local / inline / third-party / off），已关闭搬运。`)
+  }
+  return undefined
 }
 
 export class WebHost {

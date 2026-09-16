@@ -23,6 +23,17 @@ const appRoot = process.env.ELECKOI_APP_ROOT ?? process.cwd()
 const rendererDir = process.env.ELECKOI_RENDERER_DIR ?? resolve(appRoot, 'out', 'renderer')
 
 /**
+ * 「本地图床」模式的图片目录。
+ *
+ * 只有 ELECKOI_CARD_IMAGE_MODE=local 才需要：图片落到这里，由本服务在卡片源上以
+ * /card-images/ 提供。返回 undefined 时该路由不挂载（其他三种模式都不需要它）。
+ */
+function readCardImageDir(): string | undefined {
+  if ((process.env.ELECKOI_CARD_IMAGE_MODE ?? '').trim() !== 'local') return undefined
+  return (process.env.ELECKOI_IMAGE_LOCAL_DIR ?? '').trim() || '/data/card-images'
+}
+
+/**
  * `POST /api/rpc` 的请求体上限。
  *
  * 导入角色卡是把整张卡的 base64 塞进一次请求的，上游契约单文件允许到 132 MB，
@@ -56,6 +67,7 @@ const stack = await startWebUiStack({
   dataRoot,
   rendererDir,
   maxBodyBytes: readMaxBodyBytes(),
+  ...(readCardImageDir() === undefined ? {} : { cardImageDir: readCardImageDir() as string }),
   masterKeyBase64,
   appVersion: process.env.ELECKOI_VERSION ?? '0.1.0-web',
   host: process.env.ELECKOI_HOST ?? '127.0.0.1',
@@ -98,11 +110,20 @@ if ((process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').trim() !== '') {
   const publicBase = (process.env.ELECKOI_IMAGE_PUBLIC_BASE ?? '').trim()
   const uploadApi = (process.env.ELECKOI_IMAGE_UPLOAD_API ?? '').trim()
   const token = (process.env.ELECKOI_IMAGE_UPLOAD_TOKEN ?? '').trim()
-  if (publicBase !== '' && uploadApi !== '' && token !== '') {
-    const mode = (process.env.ELECKOI_IMAGE_LOCALIZE_MODE ?? '').trim() === 'inline' ? 'inline（导入等到搬完）' : 'background（导入立即返回）'
-    console.log(`导入卡片时自动搬图：已启用 → ${publicBase}，方式 ${mode}\n`)
+  const mode = (process.env.ELECKOI_CARD_IMAGE_MODE ?? '').trim()
+  const when = (process.env.ELECKOI_IMAGE_LOCALIZE_MODE ?? '').trim() === 'background' ? 'background（导入立即返回）' : 'inline（导入等到搬完）'
+  if (mode === 'inline') {
+    console.log(`卡片图片做法：inline —— 导入时内联成 data: URI（不需要图床与白名单，导出即自带图），搬运时机 ${when}\n`)
+  } else if (mode === 'local') {
+    console.log(`卡片图片做法：local —— 导入时存到 ${readCardImageDir()}，由本服务在卡片源 /card-images/ 提供（不需要白名单，导出后别人看不到），搬运时机 ${when}\n`)
+  } else if (mode === 'third-party') {
+    console.log(`卡片图片做法：third-party —— 只放行第三方图床、不搬运。放行清单：${(process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').trim() || '（空！请设 ELECKOI_CARD_IMAGE_ORIGINS）'}\n`)
+  } else if (mode === 'off') {
+    console.log('卡片图片做法：off —— 不搬运，卡片里的外链图片会被 CSP 拦掉（显示为黑块）\n')
+  } else if (publicBase !== '' && uploadApi !== '' && token !== '') {
+    console.log(`卡片图片做法：self-hosted —— 导入时搬到 ${publicBase}，搬运时机 ${when}\n`)
   } else {
-    console.log('导入卡片时自动搬图：未启用（缺 ELECKOI_IMAGE_PUBLIC_BASE / UPLOAD_API / UPLOAD_TOKEN 之一）\n')
+    console.log('卡片图片做法：未配置（未设 ELECKOI_CARD_IMAGE_MODE，且图床三件套不全）——不会搬运\n')
   }
 }
 
