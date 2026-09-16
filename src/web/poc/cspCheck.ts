@@ -134,6 +134,18 @@ async function main(): Promise<void> {
       && withImages.includes("script-src 'unsafe-inline' 'unsafe-eval'"),
       '默认不放开外部图片源；配置后只放宽 img-src/media-src，connect-src 仍为 none、脚本策略不变')
 
+    // 放开档（third-party）：img-src 用 https: 通配，但仍然不许 fetch/XHR 外传。
+    const permissive = cardFrameCsp(['https://ai.example.com'], [], { allowAnyHttps: true })
+    record('CSP-10',
+      permissive.includes("img-src 'self' data: blob: https:")
+      && permissive.includes("media-src 'self' data: blob: https:")
+      && permissive.includes("connect-src 'none'")
+      && !permissive.includes("script-src 'unsafe-inline' 'unsafe-eval' https:"),
+      '放开档：任意 https 图床可显示，connect-src 仍为 none、脚本策略不变')
+    const httpToo = cardFrameCsp([], [], { allowAnyHttps: true, allowAnyHttp: true })
+    record('CSP-11', httpToo.includes('http:') && !permissive.includes('http:'),
+      'http 图床默认不放行，需显式开启')
+
     const rejected: string[] = []
     for (const bad of ['https://img.example.com/a/b', 'https://img.example.com/?x=1', 'https://*.example.com', 'ftp://img.example.com', '不是URL']) {
       try { resolveCardImageOrigins([bad]); rejected.push(`漏放行 ${bad}`) } catch { /* 预期 */ }
