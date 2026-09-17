@@ -35,6 +35,16 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages ./packages
 COPY patches ./patches
+
+# 依赖安装源。默认走官方 registry（可移植），国内网络可换成镜像站大幅提速——
+# 实测同一台机器上：元数据 632 KB/s → 11773 KB/s、包体 2465 KB/s → 5763 KB/s。
+# 用法：docker/.env 里设 NPM_REGISTRY=https://registry.npmmirror.com（compose 会作为 build arg 传进来）。
+# 锁定完整性由 pnpm-lock.yaml 里的 integrity 保证，换源不会改变包内容。
+ARG NPM_REGISTRY=https://registry.npmjs.org
+# COREPACK_NPM_REGISTRY 也要给：corepack 下载 pnpm 自身**不看** NPM_CONFIG_REGISTRY。
+# 实测官方源下这步能卡十几分钟（甚至超时），走镜像站 28 秒。
+ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY \
+    COREPACK_NPM_REGISTRY=$NPM_REGISTRY
 RUN pnpm install --frozen-lockfile
 
 # 其余源码（src/ resources/ scripts/ patches/ docker/ …）
