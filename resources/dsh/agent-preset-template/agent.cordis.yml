@@ -99,6 +99,6 @@ __ELECKOI_SUBAGENT_OPTIONS__
       name: '@deepseek-ai/dsh-compaction-basic'
       config:
         thresholdRatio: __ELECKOI_COMPACTION_THRESHOLD_RATIO__
-        retainRatio: 0.16
+        __ELECKOI_COMPACTION_RETENTION__
         maxTokens: 8192
         compactionRetries: 1

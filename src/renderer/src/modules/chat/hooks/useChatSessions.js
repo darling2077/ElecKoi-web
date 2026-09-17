@@ -35,7 +35,7 @@ import { useAuthorFrontendActions } from "./useAuthorFrontendActions.js";
 import { useChatInputImages } from "./useChatInputImages.js";
 import { getErrorMessage, isAbortError, runChatMessageSend, throwIfAborted, upsertProcess } from "./chatMessageSend.js";
 
-export function useChatSessions({ persona, characters, modelConfigs, language, setStatus, setActiveSectionState }) {
+export function useChatSessions({ persona, characters, modelConfigs, language, setStatus, setActiveSectionState, notify }) {
   const [sessions, setSessions] = useState([]);
   const [sessionId, setSessionId] = useState("");
   const [input, setInput] = useState("");
@@ -327,7 +327,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
       requestRef, setIsSending, sessionId, chatCharacter, setSessionId, replaceChatMessages,
       setChatCharacter, normalizeLatestChatCharacter, refreshSessionsOnly, setInput, clearInputImages,
       setMessages, updatePendingReply, requestScrollToEnd,
-      reconcileChatMessages, commitPendingError,
+      reconcileChatMessages, commitPendingError, notify,
     });
   }
 
@@ -431,6 +431,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
         const message = getErrorMessage(error, "重新生成失败");
         commitPendingError(assistantId);
         setStatus(message);
+        notify?.("error", message);
       }
     } finally {
       activeRequest.unlisten?.();

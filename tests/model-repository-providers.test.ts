@@ -90,6 +90,32 @@ describe('model repository providers', () => {
     expect(repository.resolve(selection, 'system')).toMatchObject({ temperature: 0, topP: 0 })
   })
 
+  it('keeps the official DeepSeek context window and absolute compaction threshold in the same token unit', () => {
+    const repository = createRepository()
+    repository.save({
+      id: 'deepseek-default',
+      provider: 'deepseek',
+      api_key: 'deepseek-key',
+      base_url: 'https://api.deepseek.com',
+      model: 'deepseek-flash',
+      model_options: [{
+        id: 'deepseek-flash',
+        name: 'deepseek-flash',
+        autoCompactTokenLimit: 200_000
+      }],
+      api_format: 'responses'
+    })
+
+    expect(repository.resolve({
+      capability: 'chat',
+      config_id: 'deepseek-default',
+      model: 'deepseek-flash'
+    }, 'system')).toMatchObject({
+      contextWindow: 1_000_000,
+      autoCompactTokenLimit: 200_000
+    })
+  })
+
   it('deletes every configuration owned by an optional provider in one transaction', () => {
     const repository = createRepository()
     repository.ensureDefault()

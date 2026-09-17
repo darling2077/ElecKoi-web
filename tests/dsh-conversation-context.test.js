@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
   createConversationSeed,
-  projectPreStepMessages,
+  projectProductHistory,
+  projectModelMessages,
   renderRuntimeContext,
   settingInjections
 } from '../resources/dsh/conversation-context.mjs'
@@ -51,7 +52,7 @@ describe('DSH conversation context', () => {
       content: [{ type: 'text', text: '最新用户输入' }],
       source: { kind: 'user' }
     })
-    const projected = projectPreStepMessages([latest], context([
+    const projected = projectModelMessages([latest], context([
       setting('before-latest', '输入前', 'insert_point_3', 1),
       setting('after-latest', '输入后', 'insert_point_4', 1),
       setting('after-tools', '工具后', 'insert_point_5', 1)
@@ -59,6 +60,69 @@ describe('DSH conversation context', () => {
 
     expect(projected.map(text)).toEqual(['输入前', '最新用户输入', '输入后', '工具后'])
     expect([projected[0], projected[2], projected[3]].every((message) => message.source?.plugin === 'eleckoi-conversation-context')).toBe(true)
+  })
+
+  it('replaces provider-native history before the current input', () => {
+    const native = [
+      {
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: 'call-google-1', name: 'lookup', arguments: '{}' }],
+        source: { kind: 'model', provider: 'google', model: 'gemini', replayState: { responseId: 'google-response' } }
+      },
+      {
+        role: 'user',
+        content: [{ type: 'tool-result', toolCallId: 'call-google-1', content: [] }],
+        source: { kind: 'tool', callId: 'call-google-1' }
+      },
+      {
+        role: 'assistant',
+        content: [{ type: 'text', text: '<FINAL>上一答</FINAL>' }],
+        source: { kind: 'model', provider: 'google', model: 'gemini' }
+      },
+      createUserMessage({
+        content: [{ type: 'text', text: '最新用户输入' }],
+        source: { kind: 'user' }
+      })
+    ]
+    const projected = projectProductHistory(native, {
+      history: [
+        { role: 'user', content: '上一问' },
+        { role: 'assistant', content: '上一答' }
+      ]
+    })
+
+    expect(projected.map((message) => [message.role, text(message)])).toEqual([
+      ['user', '上一问'],
+      ['assistant', '上一答'],
+      ['user', '最新用户输入']
+    ])
+    expect(JSON.stringify(projected)).not.toContain('call-google-1')
+    expect(JSON.stringify(projected)).not.toContain('google-response')
+    expect(projected[1].source).toEqual({ kind: 'plugin', plugin: 'eleckoi-product-history' })
+  })
+
+  it('preserves a matching compaction checkpoint and replaces its native tail', () => {
+    const checkpoint = createUserMessage({
+      content: [{ type: 'text', text: '<compacted-summary>较早历史摘要</compacted-summary>' }],
+      source: { kind: 'plugin', plugin: 'compaction' }
+    })
+    const projected = projectProductHistory([
+      checkpoint,
+      { role: 'assistant', content: [{ type: 'text', text: '<FINAL>上一答</FINAL>' }], source: { kind: 'model', provider: 'google', model: 'gemini' } },
+      createUserMessage({ content: [{ type: 'text', text: '最新输入' }], source: { kind: 'user' } })
+    ], {
+      history: [
+        { role: 'user', content: '很早的问题' },
+        { role: 'assistant', content: '上一答' }
+      ]
+    })
+
+    expect(projected[0]).toBe(checkpoint)
+    expect(projected.map(text)).toEqual([
+      '<compacted-summary>较早历史摘要</compacted-summary>',
+      '上一答',
+      '最新输入'
+    ])
   })
 
   it('keeps the stable prefix and cache region in DSH runtime context', () => {

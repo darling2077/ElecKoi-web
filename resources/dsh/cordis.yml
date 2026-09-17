@@ -25,6 +25,11 @@
   config:
     providers: !!js JSON.parse(process.env.ELECKOI_DSH_PROVIDERS ?? '{}')
 
+# Product history is projected only at the provider boundary. It must never be
+# appended to DSH's durable event log as if it happened again in this session.
+- id: request-context
+  name: './request-context.mjs'
+
 # Web search is one DSH capability seam with an explicit provider per runtime.
 - id: web
   name: '@deepseek-ai/dsh-web'

@@ -71,10 +71,7 @@ export function createConversationSeed(snapshot, modelSelection) {
   return events
 }
 
-/**
- * Install only agent-scoped, logged DSH prompt contributions. Model-visible
- * history is never rewritten at llm/stream: DSH owns it after the initial seed.
- */
+/** Install product-owned prompt contributions for every root turn. */
 export function installConversationContext(agentCtx, snapshotRoot, sourceSessionId) {
   const read = () => readSessionSnapshot(snapshotRoot, sourceSessionId)
   const disposeInstructions = agentCtx.systemPrompt.section({
@@ -95,28 +92,107 @@ export function installConversationContext(agentCtx, snapshotRoot, sourceSession
     order: 10,
     text: () => renderRuntimeContext(read().conversationContext)
   })
-  const disposePreStep = agentCtx.on('agent/pre-step', async ({ step }, next) => {
-    const decision = await next()
-    if (decision.kind === 'reject' || step !== 1) return decision
-    return {
-      kind: 'enter',
-      messages: projectPreStepMessages(decision.messages, read().conversationContext)
-    }
-  }, { prepend: true })
   return () => {
-    disposePreStep()
     disposeContext()
     disposeInstructions()
   }
 }
 
-/** Prefix entries that belong before the latest user input on the first step. */
-export function projectPreStepMessages(messages, context) {
+/** Project product history and prompt positions into one transient model request. */
+export function projectModelMessages(messages, context) {
+  const projectedHistory = projectProductHistory(messages, context)
   const injections = settingInjections(context)
   const before = injections.filter((entry) => entry.anchor === 'insert_point_3')
   const after = injections.filter((entry) => entry.anchor === 'insert_point_4' || entry.anchor === 'insert_point_5')
-  if (before.length === 0 && after.length === 0) return messages
-  return [...before.map(contextMessage), ...messages, ...after.map(contextMessage)]
+  if (before.length === 0 && after.length === 0) return projectedHistory
+  const currentUserIndex = findCurrentUserIndex(projectedHistory)
+  if (currentUserIndex < 0) return projectedHistory
+  return [
+    ...projectedHistory.slice(0, currentUserIndex),
+    ...before.map(contextMessage),
+    projectedHistory[currentUserIndex],
+    ...after.map(contextMessage),
+    ...projectedHistory.slice(currentUserIndex + 1)
+  ]
+}
+
+/**
+ * Replace previous native provider turns with the active product branch.
+ * Current-turn tool messages remain untouched because this runs only at step 1.
+ */
+export function projectProductHistory(messages, context) {
+  const currentUserIndex = findCurrentUserIndex(messages)
+  if (currentUserIndex < 0) return messages
+  const firstDialogue = messages.findIndex((message, index) => (
+    index <= currentUserIndex && isDialogueMessage(message)
+  ))
+  const replaceFrom = firstDialogue < 0 ? currentUserIndex : firstDialogue
+  const nativeHistory = messages.slice(replaceFrom, currentUserIndex)
+  const productHistory = (Array.isArray(context?.history) ? context.history : [])
+    .map(productHistoryMessage)
+    .filter(Boolean)
+  const authoritative = compactedProjection(productHistory, nativeHistory) ?? productHistory
+  return [
+    ...messages.slice(0, replaceFrom),
+    ...authoritative,
+    ...messages.slice(currentUserIndex)
+  ]
+}
+
+function productHistoryMessage(item, index) {
+  if (!item || (item.role !== 'user' && item.role !== 'assistant')) return null
+  const value = String(item.content ?? '')
+  if (!value.trim()) return null
+  return {
+    id: `eleckoi-product-history-${index}`,
+    role: item.role,
+    content: [{ type: 'text', text: value }],
+    source: { kind: 'plugin', plugin: 'eleckoi-product-history' }
+  }
+}
+
+function compactedProjection(productHistory, nativeHistory) {
+  const checkpointIndex = nativeHistory.findLastIndex(isCompactionCheckpoint)
+  if (checkpointIndex < 0) return null
+  const checkpoint = nativeHistory[checkpointIndex]
+  const nativeTail = nativeHistory.slice(checkpointIndex + 1).filter(isDialogueMessage)
+  if (nativeTail.length > productHistory.length) return null
+  const productTail = nativeTail.length === 0 ? [] : productHistory.slice(-nativeTail.length)
+  if (!productTail.every((product, index) => messagesMatch(product, nativeTail[index]))) return null
+  return [checkpoint, ...productTail]
+}
+
+function findCurrentUserIndex(messages) {
+  return messages.findLastIndex((message) => message?.role === 'user' && message?.source?.kind === 'user')
+}
+
+function isDialogueMessage(message) {
+  return (message?.role === 'user' || message?.role === 'assistant') && message?.source?.kind !== 'tool'
+}
+
+function isCompactionCheckpoint(message) {
+  return message?.role === 'user' && messageText(message).includes('<compacted-summary>')
+}
+
+function messagesMatch(left, right) {
+  if (left?.role !== right?.role) return false
+  return normalizedDialogueText(messageText(left), left.role) === normalizedDialogueText(messageText(right), right.role)
+}
+
+function messageText(message) {
+  return Array.isArray(message?.content)
+    ? message.content.filter((part) => part?.type === 'text').map((part) => String(part.text ?? '')).join('\n')
+    : ''
+}
+
+function normalizedDialogueText(value, role) {
+  const trimmed = value.trim()
+  if (role !== 'assistant') return trimmed
+  const start = trimmed.indexOf('<FINAL>')
+  if (start < 0) return trimmed
+  const bodyStart = start + '<FINAL>'.length
+  const end = trimmed.lastIndexOf('</FINAL>')
+  return trimmed.slice(bodyStart, end >= bodyStart ? end : undefined).trim()
 }
 
 /**

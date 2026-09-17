@@ -558,17 +558,15 @@ export class DshRuntime {
     const directory = join(root, mountedPresetId)
     mkdirSync(directory, { recursive: true })
     const pluginRoot = join(dirname(this.options.presetTemplatePath), '..')
+    const compaction = resolveCompactionPolicy(mainSettings)
     let composition = readFileSync(this.options.presetTemplatePath, 'utf8')
       .replace('__ELECKOI_SETTING_LIBRARY_TOOLS_PLUGIN__', JSON.stringify(join(pluginRoot, 'setting-library-tools.mjs')))
       .replace('__ELECKOI_VARIABLE_TOOLS_PLUGIN__', JSON.stringify(join(pluginRoot, 'variable-tools.mjs')))
       .replace('__ELECKOI_ROLEPLAY_PLAN_TOOL_PLUGIN__', JSON.stringify(join(pluginRoot, 'roleplay-plan-tool.mjs')))
       .replace('__ELECKOI_ROLEPLAY_PLAN_STEPS__', JSON.stringify(preset.roleplayPlan.steps))
       .replace('__ELECKOI_WEB_SEARCH_MAX_RESULTS__', String(webSearch.maxResults))
-      .replace('__ELECKOI_COMPACTION_THRESHOLD_RATIO__', String(
-        mainSettings?.autoCompactTokenLimit === undefined
-          ? 0.8
-          : mainSettings.autoCompactTokenLimit / mainSettings.contextWindow
-      ))
+      .replace('__ELECKOI_COMPACTION_THRESHOLD_RATIO__', compaction.thresholdRatio)
+      .replace('__ELECKOI_COMPACTION_RETENTION__', compaction.retention)
       .replaceAll('__ELECKOI_SUBAGENT_OPTIONS__', subagentSettings ? [
         '    agentOptions:',
         `      provider: ${JSON.stringify(subagentProvider ?? 'custom')}`,
@@ -672,6 +670,7 @@ function runtimePresetId(
   webSearch: DshWebSearchSettings,
   mainSettings: DshModelSettings | undefined
 ): string {
+  const compaction = resolveCompactionPolicy(mainSettings)
   const fingerprint = createHash('sha256').update(JSON.stringify({
     preset,
     disabledToolGroupIds: [...(toolPolicy?.disabledGroupIds ?? [])].sort(),
@@ -681,12 +680,31 @@ function runtimePresetId(
       maxTokens: subagentSettings.maxTokens
     },
     webSearchMaxResults: webSearch.maxResults,
-    compactionRatio: mainSettings?.autoCompactTokenLimit === undefined
-      ? 0.8
-      : mainSettings.autoCompactTokenLimit / mainSettings.contextWindow
+    compaction
   })).digest('hex').slice(0, 16)
   const prefix = preset.id.replace(/[^a-z0-9-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'preset'
   return `${prefix}-${fingerprint}`
+}
+
+function resolveCompactionPolicy(mainSettings: DshModelSettings | undefined): {
+  thresholdRatio: string
+  retention: string
+} {
+  if (mainSettings?.autoCompactTokenLimit === undefined) {
+    return { thresholdRatio: '0.8', retention: 'retainRatio: 0.16' }
+  }
+  const { autoCompactTokenLimit, contextWindow } = mainSettings
+  if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
+    throw new Error('自动压缩阈值缺少有效的模型上下文窗口。')
+  }
+  if (!Number.isInteger(autoCompactTokenLimit) || autoCompactTokenLimit <= 0 || autoCompactTokenLimit > contextWindow) {
+    throw new Error('自动压缩阈值必须大于 0 且不能超过模型上下文窗口。')
+  }
+  return {
+    thresholdRatio: String(autoCompactTokenLimit / contextWindow),
+    // 绝对触发阈值不推导另一套固定保留比例，交给 DSH 选择平衡切点。
+    retention: 'retainTokens: 0'
+  }
 }
 
 function writeSessionSnapshot(root: string, runtimeThreadId: string, value: Record<string, unknown>): void {

@@ -58,7 +58,15 @@ export function useChatClient() {
     deleteCharacterIds: deletePersonaCharacterIds,
     updateUserProfile,
   } = usePersonaCharacters({ setStatus, setActiveSectionState });
-  const chatSessions = useChatSessions({ persona, characters, modelConfigs: chatModelConfigs, language, setStatus, setActiveSectionState });
+  const chatSessions = useChatSessions({
+    persona,
+    characters,
+    modelConfigs: chatModelConfigs,
+    language,
+    setStatus,
+    setActiveSectionState,
+    notify,
+  });
   const latestChatCharacter = useMemo(
     () => (characters.items || []).find((item) => item.id === chatSessions.chatCharacter?.character_id) || null,
     [characters.items, chatSessions.chatCharacter?.character_id],

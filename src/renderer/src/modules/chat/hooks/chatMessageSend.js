@@ -12,7 +12,7 @@ export async function runChatMessageSend(options) {
     requestRef, setIsSending, sessionId, chatCharacter, setSessionId, replaceChatMessages,
     setChatCharacter, normalizeLatestChatCharacter, refreshSessionsOnly, setInput, clearInputImages,
     setMessages, updatePendingReply, requestScrollToEnd,
-    reconcileChatMessages, commitPendingError,
+    reconcileChatMessages, commitPendingError, notify,
   } = options;
   event.preventDefault();
   const text = input.trim();
@@ -106,7 +106,9 @@ export async function runChatMessageSend(options) {
   } catch (error) {
     if (requestRef.current === activeRequest && !isAbortError(error)) {
       commitPendingError(assistantId);
-      setStatus(getErrorMessage(error, "发送失败"));
+      const message = getErrorMessage(error, "发送失败");
+      setStatus(message);
+      notify?.("error", message);
     }
   } finally {
     activeRequest.unlisten?.();

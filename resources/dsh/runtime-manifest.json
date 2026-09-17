@@ -10,6 +10,7 @@
   "composition": "cordis.yml",
   "localPlugins": [
     "./agent-preset-bridge.mjs",
+    "./request-context.mjs",
     "./tavily-web-search.mjs"
   ],
   "localModules": [

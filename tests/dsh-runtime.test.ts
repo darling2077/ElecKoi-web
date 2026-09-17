@@ -7,6 +7,90 @@ import { DshRuntime } from '@eleckoi/dsh-runtime'
 import { describe, expect, it, vi } from 'vitest'
 
 describe('packaged DSH runtime composition', () => {
+  it('preserves the DSH default retention when no absolute compaction threshold is configured', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-default-compaction-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'),
+      runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath
+    })
+    const materialize = (runtime as unknown as {
+      materializeAgentPreset(
+        preset: { id: string; versionId: string; name: string; roleplayPlan: { steps: string[] } }
+      ): string
+    }).materializeAgentPreset.bind(runtime)
+
+    try {
+      const mountedPresetId = materialize({
+        id: 'agent-preset-standard', versionId: 'test-default-v1', name: '测试预设', roleplayPlan: { steps: [] }
+      })
+      const composition = await readFile(
+        join(root, 'runtime', 'home', '.agent-presets', mountedPresetId, 'agent.cordis.yml'),
+        'utf8'
+      )
+
+      expect(composition).toContain('thresholdRatio: 0.8')
+      expect(composition).toContain('retainRatio: 0.16')
+      expect(composition).not.toContain('retainTokens')
+    } finally {
+      await runtime.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('materializes an absolute compaction threshold without a conflicting fixed retention ratio', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-compaction-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'),
+      runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath
+    })
+    const materialize = (runtime as unknown as {
+      materializeAgentPreset(
+        preset: { id: string; versionId: string; name: string; roleplayPlan: { steps: string[] } },
+        toolPolicy: undefined,
+        subagentSettings: undefined,
+        subagentProvider: undefined,
+        webSearch: undefined,
+        mainSettings: {
+          configId: string; apiKey: string; baseUrl: string; model: string; systemPrompt: string
+          apiFormat: 'openai-responses'; customHeaders: Record<string, string>; contextWindow: number
+          autoCompactTokenLimit: number; supportsImageInput: boolean
+        }
+      ): string
+    }).materializeAgentPreset.bind(runtime)
+
+    try {
+      const mountedPresetId = materialize(
+        { id: 'agent-preset-standard', versionId: 'test-v1', name: '测试预设', roleplayPlan: { steps: [] } },
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          configId: 'deepseek-default', apiKey: 'test-key', baseUrl: 'https://api.deepseek.com',
+          model: 'deepseek-flash', systemPrompt: '', apiFormat: 'openai-responses', customHeaders: {},
+          contextWindow: 1_000_000, autoCompactTokenLimit: 200_000, supportsImageInput: false
+        }
+      )
+      const composition = await readFile(
+        join(root, 'runtime', 'home', '.agent-presets', mountedPresetId, 'agent.cordis.yml'),
+        'utf8'
+      )
+
+      expect(composition).toContain('thresholdRatio: 0.2')
+      expect(composition).toContain('retainTokens: 0')
+      expect(composition).not.toContain('retainRatio: 0.16')
+    } finally {
+      await runtime.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it('disposes one conversation session and clears its in-memory trajectory state', async () => {
     const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-dispose-'))
     const runtime = new DshRuntime({
