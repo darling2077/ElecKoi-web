@@ -38,13 +38,30 @@ function tinyPng(): Buffer {
   )
 }
 
+/** 按路径造一份内容不同、但仍是合法 PNG 的小图。 */
+function distinctPng(seed: string): Buffer {
+  const base = tinyPng()
+  // 在文件尾部追加一个 tEXt 块承载 seed：PNG 解析器会忽略未知文本块，但内容哈希不同。
+  const chunk = Buffer.concat([
+    Buffer.from([0, 0, 0, 0]),
+    Buffer.from('tEXt'),
+    Buffer.from(`seed\0${seed}`, 'latin1'),
+    Buffer.from([0, 0, 0, 0])
+  ])
+  const length = Buffer.alloc(4)
+  length.writeUInt32BE(chunk.length - 12, 0)
+  chunk.copy(length, 0)
+  return Buffer.concat([base, chunk])
+}
+
 interface FakeHost {
   servers: Server[]
   /** 别家的图床：卡片里的"外链原图"从这里来（必须与自己的图床**不同源**）。 */
   sourceOrigin: string
   /** 自己的图床：上传接口与搬好后的地址。 */
   hostOrigin: string
-  uploads: number
+  /** 实时上传次数（必须是函数——早先存成静态数字，断言永远读到 0）。 */
+  uploads(): number
 }
 
 /**
@@ -69,8 +86,11 @@ async function startFakeHost(): Promise<FakeHost> {
   const source = await listen((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     if (req.method === 'GET' && url.pathname.startsWith('/img/')) {
-      res.writeHead(200, { 'content-type': 'image/png', 'content-length': String(png.length) })
-      res.end(png)
+      // 每个路径给一份**内容不同**的图：卡片里的 12 张图必须是 12 份不同内容，
+      // 否则测出来的是"同一张图重复 12 次"，与真实场景不符。
+      const body = distinctPng(url.pathname)
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': String(body.length) })
+      res.end(body)
       return
     }
     res.writeHead(404).end()
@@ -79,7 +99,7 @@ async function startFakeHost(): Promise<FakeHost> {
   const host = await listen((req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
     // 上传完成后能按返回的地址取回原图（真实图床就是这个行为）
-    if (req.method === 'GET' && url.pathname.startsWith('/u/')) {
+    if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith('/u/')) {
       res.writeHead(200, { 'content-type': 'image/png', 'content-length': String(png.length) })
       res.end(png)
       return
@@ -104,7 +124,7 @@ async function startFakeHost(): Promise<FakeHost> {
     servers: [source.server, host.server],
     sourceOrigin: source.origin,
     hostOrigin: host.origin,
-    uploads: 0
+    uploads: () => state.uploads
   }
 }
 
@@ -280,6 +300,78 @@ async function checkMode(
   }
 }
 
+
+/**
+ * 跨租户去重：两个用户各导入**同一张卡**，图床只该收到一份。
+ *
+ * 这是多租户下最常见的浪费：同一张卡被两个人导入，如果不去重就传两份、存两份。
+ * 判据用假图床的上传计数（服务端事实），不看实现细节。
+ */
+async function checkDedupe(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'eleckoi-dedupe-'))
+  const fake = await startFakeHost()
+  const indexFile = join(root, 'image-index.json')
+  const uploadsBefore = fake.uploads()
+  const urls: string[] = []
+
+  for (const who of ['甲', '乙']) {
+    for (const key of Object.keys(process.env)) {
+      if (key.startsWith('ELECKOI_IMAGE_') || key === 'ELECKOI_CARD_IMAGE_MODE') delete process.env[key]
+    }
+    process.env.ELECKOI_CARD_IMAGE_MODE = 'self-hosted'
+    process.env.ELECKOI_IMAGE_PUBLIC_BASE = fake.hostOrigin
+    process.env.ELECKOI_IMAGE_UPLOAD_API = fake.hostOrigin
+    process.env.ELECKOI_IMAGE_UPLOAD_TOKEN = 'test-token'
+    process.env.ELECKOI_IMAGE_LOCALIZE_MODE = 'inline'
+    process.env.ELECKOI_IMAGE_ALLOW_LOCAL = '1'
+    // 两个租户共用同一份索引 —— 正是线上数据根下的那一份
+    process.env.ELECKOI_IMAGE_INDEX_FILE = indexFile
+
+    const tenantRoot = join(root, `tenant-${who}`)
+    const tenant = await WebHost.mountTenant({
+      tenantId: `tenant-dedupe-${who}`,
+      tenantRoot,
+      masterKeyBase64: randomBytes(32).toString('base64'),
+      appVersion: '0.1.0-web-cardimages'
+    })
+    try {
+      const card = cardWithImages(fake.sourceOrigin, '同一张卡')
+      const prepared = await fetch('http://placeholder/api/rpc').catch(() => undefined)
+      void prepared
+      const dispatch = async <T>(name: string, input: unknown): Promise<T> =>
+        tenant.gateway.dispatch({ name, input }, { senderId: 1, windowId: undefined }) as Promise<T>
+      const preview = await dispatch<{ token: string }>('command.characters.import.prepare', {
+        source: 'sillytavern',
+        files: [{ displayName: 'same.json', mimeType: 'application/json', base64: Buffer.from(card, 'utf8').toString('base64') }]
+      })
+      await dispatch('command.characters.import.commit', { token: preview.token })
+      await tenant.gateway.importImageHook?.waitForIdle()
+      const database = new Database(join(tenantRoot, 'db', 'eleckoi-common.sqlite3'), { readonly: true })
+      const rows = database.prepare('SELECT content FROM character_text_contents').all() as Array<{ content: string }>
+      database.close()
+      const text = rows.map((row) => row.content).join('\n')
+      const found = text.match(new RegExp(`${fake.hostOrigin}/u/[^"'\\s)]+`, 'g')) ?? []
+      // 并发搬运下出现顺序不定，比集合而不是比第一个
+      urls.push([...new Set(found)].sort().join(','))
+    } finally {
+      await tenant.dispose()
+    }
+  }
+
+  const uploads = fake.uploads() - uploadsBefore
+  for (const server of fake.servers) server.close()
+  await rm(root, { recursive: true, force: true })
+
+  record('DEDUPE-1', uploads === IMAGE_COUNT,
+    `两个人各导入同一张卡（${IMAGE_COUNT} 张图），图床只收到 ${uploads} 次上传（无去重会是 ${IMAGE_COUNT * 2} 次）`)
+  const first = urls[0] ?? ''
+  const second = urls[1] ?? ''
+  record('DEDUPE-2', first !== '' && first === second,
+    first === second
+      ? `两个租户的卡片指向完全相同的一组图（${first.split(',').length} 张）`
+      : `两个租户的地址不同：甲 ${first.split(',').length} 张、乙 ${second.split(',').length} 张`)
+}
+
 async function main(): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'eleckoi-cardimages-'))
   const fake = await startFakeHost()
@@ -292,6 +384,8 @@ async function main(): Promise<void> {
   // 假图床就在本机，而生产默认会跳过本机地址（卡作者写死的 localhost 开发地址）。
   process.env.ELECKOI_IMAGE_ALLOW_LOCAL = '1'
 
+  // 索引必须落在本次运行的临时目录里：放 /tmp 会被上一次运行的结果污染
+  process.env.ELECKOI_IMAGE_INDEX_FILE = join(root, 'image-index.json')
   const tenant = await WebHost.mountTenant({
     tenantId: 'tenant-card-images',
     tenantRoot: join(root, 'tenant'),
@@ -444,6 +538,9 @@ async function main(): Promise<void> {
     fetchable: false,
     label: 'inline：内联成 data URI'
   }).catch((error) => record('MODE-inline', false, String(error)))
+
+  // ── 跨租户去重 ──
+  await checkDedupe().catch((error) => record('DEDUPE-1', false, String(error)))
 
   const failed = outcomes.filter((outcome) => !outcome.ok)
   console.log(`\n== 结果：${outcomes.length - failed.length}/${outcomes.length} 通过 ==`)
