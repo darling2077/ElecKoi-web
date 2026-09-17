@@ -106,6 +106,8 @@ services:
       ELECKOI_IMAGE_INLINE_MAX_BYTES: "${ELECKOI_IMAGE_INLINE_MAX_BYTES:-262144}"
       # 是否允许搬运本机地址（默认否：卡里写死的 localhost 多半是作者的开发地址）
       ELECKOI_IMAGE_ALLOW_LOCAL: "${ELECKOI_IMAGE_ALLOW_LOCAL:-0}"
+      # 内容去重：同一张图被多个用户导入时只上传一次、共用同一地址（跨租户共享索引）
+      ELECKOI_IMAGE_DEDUPE: "${ELECKOI_IMAGE_DEDUPE:-1}"
       # AGPL-3.0 §13：以网络提供服务时须向使用者提供对应源码。
       # 未配置时服务会打印警告，并在登录页省略该入口。
       ELECKOI_SOURCE_URL: "${ELECKOI_SOURCE_URL:-}"
