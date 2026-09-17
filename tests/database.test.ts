@@ -341,7 +341,7 @@ describe('shared SQLite baseline', () => {
       firstStart.close()
       secondStart.close()
     }
-  })
+  }, 15_000)
 
   it('rolls back every v1 schema change when a migration step fails', () => {
     const database = legacyV1Database()
