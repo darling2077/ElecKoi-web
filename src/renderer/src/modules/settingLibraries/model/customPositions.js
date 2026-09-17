@@ -4,35 +4,43 @@ const ANCHOR_ORDER = new Map(SETTING_LIBRARY_POSITION_OPTIONS.map((option, index
 
 const MANAGEMENT_FIXED_ROWS = [
   { type: 'instructions', key: 'fixed:instructions', label: '系统指令' },
-  { type: 'anchor', key: 'anchor:after-instructions', label: '系统指令之后', anchor: 'after_instructions' },
-  { type: 'context', key: 'fixed-group:history', label: '聊天记录', before: 'before_history', after: 'after_history' },
-  { type: 'context', key: 'fixed-group:latest-user-input', label: '用户最新输入', before: 'before_latest_user_input', after: 'after_latest_user_input' },
-  { type: 'context', key: 'fixed-group:tool-flow', label: '工具调用流程', before: 'before_tool_flow', after: 'after_tool_flow' },
+  { type: 'slot', key: 'slot:insert_point_1', label: '设定插入点 1', anchor: 'insert_point_1' },
+  { type: 'context', key: 'fixed-group:cache', label: '缓存设定区', before: 'insert_point_1', after: 'insert_point_2' },
+  { type: 'slot', key: 'slot:insert_point_2', label: '设定插入点 2', anchor: 'insert_point_2' },
+  { type: 'context', key: 'fixed-group:history', label: '聊天记录', before: 'insert_point_2', after: 'insert_point_3' },
+  { type: 'slot', key: 'slot:insert_point_3', label: '设定插入点 3', anchor: 'insert_point_3' },
+  { type: 'context', key: 'fixed-group:latest-user-input', label: '用户最新输入', before: 'insert_point_3', after: 'insert_point_4' },
+  { type: 'slot', key: 'slot:insert_point_4', label: '设定插入点 4', anchor: 'insert_point_4' },
+  { type: 'context', key: 'fixed-group:tool-flow', label: '工具调用流程', before: 'insert_point_4', after: 'insert_point_5' },
+  { type: 'slot', key: 'slot:insert_point_5', label: '设定插入点 5', anchor: 'insert_point_5' },
 ];
 
 export function normalizeCustomPositions(positions) {
   const ordered = [...positions].sort((left, right) => (
     (ANCHOR_ORDER.get(left.anchor) ?? Number.MAX_SAFE_INTEGER) - (ANCHOR_ORDER.get(right.anchor) ?? Number.MAX_SAFE_INTEGER)
+    || left.side.localeCompare(right.side)
     || left.order - right.order
     || left.id.localeCompare(right.id)
   ));
   const counts = new Map();
   return ordered.map((position) => {
-    const order = (counts.get(position.anchor) || 0) + 1;
-    counts.set(position.anchor, order);
+    const key = `${position.anchor}:${position.side}`;
+    const order = (counts.get(key) || 0) + 1;
+    counts.set(key, order);
     return position.order === order ? position : { ...position, order };
   });
 }
 
-export function createPositionDraft(positions, position = null, anchor = 'after_instructions') {
+export function createPositionDraft(positions, position = null, anchor = 'insert_point_1') {
   if (position) return { ...position };
   const timestamp = new Date().toISOString();
-  const safeAnchor = ANCHOR_ORDER.has(anchor) && anchor !== 'instructions' ? anchor : 'after_instructions';
+  const safeAnchor = ANCHOR_ORDER.has(anchor) && anchor !== 'instructions' ? anchor : 'insert_point_1';
   return {
     id: createId('prompt-position'),
     name: '',
     anchor: safeAnchor,
-    order: positions.filter((item) => item.anchor === safeAnchor).length + 1,
+    side: 'before_setting_position',
+    order: positions.filter((item) => item.anchor === safeAnchor && item.side === 'before_setting_position').length + 1,
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -66,31 +74,37 @@ export function removeCustomPosition(positions, entries, position) {
 
 export function positionPickerRows(positions) {
   return SETTING_LIBRARY_PLACEMENT_ROWS.flatMap((row) => [row, ...positions
-    .filter((position) => row.type === 'position' && position.anchor === row.value)
+    .filter((position) => row.type === 'position' && position.anchor === row.value && position.side === 'after_setting_position')
     .sort((a, b) => a.order - b.order)
-    .map((position) => ({ type: 'custom', value: position.anchor, position }))]);
+    .map((position) => ({ type: 'custom', value: position.anchor, position }))])
+    .flatMap((row) => row.type !== 'position' ? [row] : [
+      ...positions.filter((position) => position.anchor === row.value && position.side === 'before_setting_position')
+        .sort((a, b) => a.order - b.order)
+        .map((position) => ({ type: 'custom', value: position.anchor, position })),
+      row,
+    ]);
 }
 
 export function positionManagementRows(positions) {
-  const byAnchor = new Map();
+  const byPlacement = new Map();
   for (const position of normalizeCustomPositions(positions)) {
-    const group = byAnchor.get(position.anchor) || [];
+    const key = `${position.anchor}:${position.side}`;
+    const group = byPlacement.get(key) || [];
     group.push({ type: 'custom', key: `custom:${position.id}`, position });
-    byAnchor.set(position.anchor, group);
+    byPlacement.set(key, group);
   }
   const rows = [];
-  const appendCustom = (anchor) => rows.push(...(byAnchor.get(anchor) || []));
-  rows.push(MANAGEMENT_FIXED_ROWS[0], MANAGEMENT_FIXED_ROWS[1]);
-  appendCustom('after_instructions');
-  appendCustom('before_history');
-  rows.push(MANAGEMENT_FIXED_ROWS[2]);
-  appendCustom('after_history');
-  appendCustom('before_latest_user_input');
-  rows.push(MANAGEMENT_FIXED_ROWS[3]);
-  appendCustom('after_latest_user_input');
-  appendCustom('before_tool_flow');
-  rows.push(MANAGEMENT_FIXED_ROWS[4]);
-  appendCustom('after_tool_flow');
+  const appendCustom = (anchor, side) => rows.push(...(byPlacement.get(`${anchor}:${side}`) || []));
+  rows.push(MANAGEMENT_FIXED_ROWS[0]);
+  for (const row of MANAGEMENT_FIXED_ROWS.slice(1)) {
+    if (row.type === 'slot') {
+      appendCustom(row.anchor, 'before_setting_position');
+      rows.push(row);
+      appendCustom(row.anchor, 'after_setting_position');
+    } else {
+      rows.push(row);
+    }
+  }
   return rows;
 }
 
@@ -99,14 +113,24 @@ export function moveCustomPosition(positions, entries, movingId, targetKey, movi
   const target = positionManagementRows(positions).find((row) => row.key === targetKey);
   if (!moving || !target || target.key === `custom:${movingId}`) return { positions, entries };
 
-  let targetAnchor = 'after_instructions';
-  if (target.type === 'custom') targetAnchor = target.position.anchor;
-  else if (target.type === 'context') targetAnchor = movingDown ? target.after : target.before;
-  else if (target.type === 'anchor') targetAnchor = target.anchor;
+  let targetAnchor = 'insert_point_1';
+  let targetSide = 'before_setting_position';
+  if (target.type === 'custom') {
+    targetAnchor = target.position.anchor;
+    targetSide = target.position.side;
+  } else if (target.type === 'context') {
+    targetAnchor = movingDown ? target.after : target.before;
+    targetSide = movingDown ? 'before_setting_position' : 'after_setting_position';
+  } else if (target.type === 'slot') {
+    targetAnchor = target.anchor;
+    targetSide = movingDown ? 'after_setting_position' : 'before_setting_position';
+  } else if (target.type === 'instructions') {
+    targetAnchor = 'insert_point_1';
+  }
 
   const without = positions.filter((position) => position.id !== movingId);
   const sameAnchor = without
-    .filter((position) => position.anchor === targetAnchor)
+    .filter((position) => position.anchor === targetAnchor && position.side === targetSide)
     .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
   let targetIndex = movingDown ? sameAnchor.length : 0;
   if (target.type === 'custom') {
@@ -116,11 +140,12 @@ export function moveCustomPosition(positions, entries, movingId, targetKey, movi
   sameAnchor.splice(Math.max(0, Math.min(targetIndex, sameAnchor.length)), 0, {
     ...moving,
     anchor: targetAnchor,
+    side: targetSide,
     updatedAt: new Date().toISOString(),
   });
   const replaced = new Set(sameAnchor.map((position) => position.id));
   const nextPositions = normalizeCustomPositions([...without.filter((position) => !replaced.has(position.id)), ...sameAnchor]);
-  const placementKey = (items) => normalizeCustomPositions(items).map((position) => `${position.id}:${position.anchor}:${position.order}`).join('|');
+  const placementKey = (items) => normalizeCustomPositions(items).map((position) => `${position.id}:${position.anchor}:${position.side}:${position.order}`).join('|');
   if (placementKey(nextPositions) === placementKey(positions)) return { positions, entries };
   return {
     positions: nextPositions,

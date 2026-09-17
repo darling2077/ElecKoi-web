@@ -131,9 +131,9 @@ export interface AuthorSettingLibraryEntry {
   keywordIgnoreCase: boolean
   keywordWholeWord: boolean
   keywordRecursionDepth: number
-  triggerMode: 'always' | 'agent_tool' | null
+  triggerMode: 'always' | 'agent_tool' | 'cache' | null
   enabled: boolean
-  position: 'instructions' | 'after_instructions' | 'before_history' | 'after_history' | 'before_latest_user_input' | 'after_latest_user_input' | 'before_tool_flow' | 'after_tool_flow' | null
+  position: 'instructions' | 'insert_point_1' | 'insert_point_2' | 'insert_point_3' | 'insert_point_4' | 'insert_point_5' | null
   promptPositionId: string
   insertRole: 'system' | 'user' | 'assistant'
   order: number
@@ -153,6 +153,7 @@ export interface AuthorSettingLibrary {
     id: string
     name: string
     anchor: NonNullable<AuthorSettingLibraryEntry['position']>
+    side: 'before_setting_position' | 'after_setting_position'
     order: number
     createdAt: string
     updatedAt: string

@@ -520,55 +520,93 @@
   position: sticky;
   z-index: 4;
   top: -6px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 3px;
-  padding: 5px;
-  background: color-mix(in srgb, var(--list) 72%, var(--chat));
-  border-radius: 9px;
+  display: flex;
+  align-items: flex-start;
+  padding: 6px 28px 14px;
+  background: var(--chat);
 }
 
 .setting-library-entry-tabs button {
+  position: relative;
   display: flex;
-  min-width: 0;
-  height: 30px;
+  flex: 0 0 24px;
+  width: 24px;
+  min-width: 24px;
+  height: 48px;
+  overflow: visible;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 0 6px;
+  gap: 6px;
+  padding: 0;
   color: var(--muted);
-  border-radius: 6px;
-  font-size: 12px;
+  font-size: 11.5px;
   white-space: nowrap;
 }
 
-.setting-library-entry-tabs button span {
+.setting-library-entry-tabs .setting-library-entry-tab-node {
   display: grid;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
   place-items: center;
-  color: var(--soft-text);
-  border: 1px solid color-mix(in srgb, var(--text) 14%, transparent);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--soft-text) 22%, transparent);
   border-radius: 50%;
-  font-size: 9px;
+  font-size: 10px;
+  font-weight: 550;
   line-height: 1;
+  transition: color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+
+.setting-library-entry-tabs .setting-library-entry-tab-label {
+  width: max-content;
+  color: inherit;
+  line-height: 18px;
 }
 
 .setting-library-entry-tabs button:hover {
   color: var(--text);
 }
 
+.setting-library-entry-tabs button:hover .setting-library-entry-tab-node {
+  background: color-mix(in srgb, var(--soft-text) 32%, transparent);
+}
+
+.setting-library-entry-tabs button:focus-visible {
+  outline: none;
+}
+
+.setting-library-entry-tabs button:focus-visible .setting-library-entry-tab-node {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 20%, transparent);
+}
+
 .setting-library-entry-tabs button[aria-current="step"] {
   color: var(--text);
-  background: var(--chat);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--shadow-color) 12%, transparent);
   font-weight: 600;
 }
 
-.setting-library-entry-tabs button[aria-current="step"] span {
+.setting-library-entry-tabs button[aria-current="step"] .setting-library-entry-tab-node {
   color: #fff;
   background: var(--blue);
-  border-color: var(--blue);
+  box-shadow: 0 2px 7px color-mix(in srgb, var(--blue) 24%, transparent);
+}
+
+.setting-library-entry-tabs button.is-complete .setting-library-entry-tab-node {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+}
+
+.setting-library-entry-tab-connector {
+  height: 2px;
+  flex: 1 1 auto;
+  min-width: 12px;
+  margin-top: 11px;
+  background: color-mix(in srgb, var(--soft-text) 25%, transparent);
+  transition: background 120ms ease;
+}
+
+.setting-library-entry-tab-connector.is-complete {
+  background: color-mix(in srgb, var(--blue) 35%, transparent);
 }
 
 .setting-library-field-card,

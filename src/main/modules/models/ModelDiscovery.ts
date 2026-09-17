@@ -14,7 +14,7 @@ export async function discoverModels(config: ModelConfig): Promise<ModelOption[]
   if (!config.api_key.trim()) throw new Error('请先填写 API Key。')
 
   const format = normalizeApiFormat(config.api_format)
-  const endpoint = modelListEndpoint(baseUrl, format, config.api_key)
+  const endpoint = modelListEndpoint(baseUrl, format)
   const headers = requestHeaders(config, format)
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
@@ -37,6 +37,8 @@ export async function discoverModels(config: ModelConfig): Promise<ModelOption[]
     for (const raw of rawItems) {
       if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) continue
       const item = raw as Record<string, unknown>
+      if (format === 'google' && Array.isArray(item.supportedGenerationMethods)
+        && !item.supportedGenerationMethods.some((method) => String(method).toLocaleLowerCase() === 'generatecontent')) continue
       const id = String(item.id || item.name || '').trim()
       if (!id) continue
       const saved = previous.get(id)
@@ -44,8 +46,8 @@ export async function discoverModels(config: ModelConfig): Promise<ModelOption[]
         ...saved,
         id,
         name: String(item.display_name || item.displayName || item.name || saved?.name || id).trim() || id,
-        contextWindowTokens: positiveInteger(item.context_window ?? item.context_length) ?? saved?.contextWindowTokens,
-        maxOutputTokens: positiveInteger(item.max_output_tokens ?? item.max_tokens) ?? saved?.maxOutputTokens,
+        contextWindowTokens: positiveInteger(item.inputTokenLimit ?? item.context_window ?? item.context_length) ?? saved?.contextWindowTokens,
+        maxOutputTokens: positiveInteger(item.outputTokenLimit ?? item.max_output_tokens ?? item.max_tokens) ?? saved?.maxOutputTokens,
         isUserAdded: saved?.isUserAdded === true,
         supportsImageInput: saved?.supportsImageInput === true
       })
@@ -201,7 +203,7 @@ async function testAnthropicTools(config: ModelConfig, baseUrl: string, model: s
 }
 
 async function testGoogleTools(config: ModelConfig, baseUrl: string, model: string): Promise<void> {
-  const endpoint = googleGenerationEndpoint(baseUrl, model, config.api_key)
+  const endpoint = googleGenerationEndpoint(baseUrl, model)
   const functionDeclaration = {
     name: PROBE_TOOL_NAME,
     description: 'Return the exact protocol probe value.',
@@ -277,12 +279,11 @@ function operationEndpoint(baseUrl: string, operation: string): string {
   return url.toString()
 }
 
-function googleGenerationEndpoint(baseUrl: string, model: string, apiKey: string): string {
+function googleGenerationEndpoint(baseUrl: string, model: string): string {
   const url = new URL(baseUrl)
-  const path = url.pathname.replace(/\/+$/, '')
-  const root = path.endsWith('/v1beta') ? path : `${path}/v1beta`
-  url.pathname = `${root}/models/${encodeURIComponent(model)}:generateContent`.replace(/\/+/g, '/')
-  url.searchParams.set('key', apiKey.trim())
+  const path = googleApiRootPath(url.pathname)
+  const root = `${path}/v1beta`
+  url.pathname = `${root}/models/${encodeURIComponent(model.replace(/^models\//i, ''))}:generateContent`.replace(/\/+/g, '/')
   return url.toString()
 }
 
@@ -364,12 +365,12 @@ function normalizeApiFormat(value: string | undefined): 'openai' | 'anthropic' |
   throw new Error(`未知模型接口格式：${value || '(空)'}`)
 }
 
-function modelListEndpoint(baseUrl: string, format: 'openai' | 'anthropic' | 'google', apiKey: string): string {
+function modelListEndpoint(baseUrl: string, format: 'openai' | 'anthropic' | 'google'): string {
   const url = new URL(baseUrl)
   const path = url.pathname.replace(/\/+$/, '')
   if (format === 'google') {
-    url.pathname = `${path.endsWith('/v1beta') ? path : `${path}/v1beta`}/models`.replace(/\/+/g, '/')
-    url.searchParams.set('key', apiKey.trim())
+    url.pathname = `${googleApiRootPath(path)}/v1beta/models`.replace(/\/+/g, '/')
+    url.searchParams.set('pageSize', '1000')
   } else if (format === 'anthropic') {
     url.pathname = `${path.endsWith('/v1') ? path : `${path}/v1`}/models`.replace(/\/+/g, '/')
   } else {
@@ -385,11 +386,21 @@ function requestHeaders(config: ModelConfig, format: 'openai' | 'anthropic' | 'g
     headers['anthropic-version'] = '2023-06-01'
   } else if (format === 'openai') {
     headers.authorization = `Bearer ${config.api_key.trim()}`
+  } else {
+    headers['x-goog-api-key'] = config.api_key.trim()
+    delete headers.authorization
   }
   for (const [name, value] of Object.entries(config.custom_headers ?? {})) {
     if (/^[A-Za-z0-9!#$%&'*+._`|~^-]+$/.test(name.trim())) headers[name.trim()] = value.trim()
   }
   return headers
+}
+
+function googleApiRootPath(pathname: string): string {
+  return pathname.replace(/\/+$/, '')
+    .replace(/\/v1beta\/openai$/i, '')
+    .replace(/\/v1beta$/i, '')
+    .replace(/\/v1$/i, '')
 }
 
 function positiveInteger(value: unknown): number | undefined {

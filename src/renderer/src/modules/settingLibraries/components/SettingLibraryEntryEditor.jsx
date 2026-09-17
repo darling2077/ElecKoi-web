@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   BookOpenText,
   CaretDown,
@@ -6,6 +6,7 @@ import {
   Check,
   ClockCounterClockwise,
   Cube,
+  Database,
   Heart,
   Key,
   LinkSimple,
@@ -18,7 +19,7 @@ import {
   UserCircle,
   UsersThree,
 } from "@phosphor-icons/react";
-import { ElecKoiPromptMarkerIcon, ElecKoiSettingEntryIcon } from "../../../ui/icons/elecKoiPromptIcons.jsx";
+import { ElecKoiSettingEntryIcon } from "../../../ui/icons/elecKoiPromptIcons.jsx";
 import { MarkdownTextareaField } from "./MarkdownTextareaField.jsx";
 import {
   FIXED_ENTRY_IDS,
@@ -27,7 +28,7 @@ import {
   positionOrderScope,
 } from "../model/settingLibraryEditing.js";
 import { commitKeywordDraft, splitKeywordDraft } from "../model/settingLibraryKeywords.js";
-import { CustomPositionManager } from './CustomPositionManager.jsx';
+import { CustomPositionManager, FixedPositionIcon } from './CustomPositionManager.jsx';
 import { positionPickerRows } from '../model/customPositions.js';
 
 const EDITOR_SECTIONS = [
@@ -68,6 +69,7 @@ const ICON_OPTIONS = [
   { id: "power", label: "能力", Icon: Sparkle },
   { id: "danger", label: "危险", Icon: Skull },
   { id: "note", label: "笔记", Icon: NoteBlank },
+  { id: "database", label: "缓存", Icon: Database },
 ];
 
 const POSITION_LABEL = new Map(SETTING_LIBRARY_POSITION_OPTIONS.map((option) => [option.value, option.label]));
@@ -346,13 +348,13 @@ function ContentSection({ entry, entries, onChange, onOpenEntry }) {
       <MarkdownTextareaField
         label={label}
         value={entry.content}
-        placeholder={entry.dynamicMode === "ejs_controller" ? "使用 <% … %> 编写判断；可通过 getvar 读取变量、getwi 读取已开启的引用条目" : "写入世界观、人物背景、地点规则、隐藏信息等"}
+        placeholder={entry.dynamicMode === "ejs_controller" ? "使用 <% … %> 编写判断；可通过 getvar 读取变量、getwi 读取已开启的 EJS引用设定" : "写入世界观、人物背景、地点规则、隐藏信息等"}
         preview={entry.dynamicMode !== "ejs_controller"}
         onChange={(content) => onChange({ ...entry, content })}
       />
       {references.length ? (
         <section className="setting-library-reference-list">
-          <div className="setting-library-reference-heading"><LinkSimple size={16} aria-hidden="true" /><strong>引用条目（{references.length}）</strong></div>
+          <div className="setting-library-reference-heading"><LinkSimple size={16} aria-hidden="true" /><strong>EJS引用设定（{references.length}）</strong></div>
           {references.map((reference) => <button type="button" key={reference.id} onClick={() => onOpenEntry(reference.id)}>
             <LinkSimple size={17} aria-hidden="true" />
             <span>{reference.title}</span>
@@ -365,7 +367,7 @@ function ContentSection({ entry, entries, onChange, onOpenEntry }) {
   );
 }
 
-function VisualPositionPicker({ entry, entries, promptPositions, onChange, onEntriesChange, onManagePositions }) {
+export function VisualPositionPicker({ entry, entries, promptPositions, allowCustomPromptPositions = false, onChange, onEntriesChange, onManagePositions }) {
   const scope = useMemo(() => entry.position ? positionOrderScope(entries, entry.position, entry.promptPositionId) : [], [entries, entry.position, entry.promptPositionId]);
 
   function setOrder(order) {
@@ -378,19 +380,19 @@ function VisualPositionPicker({ entry, entries, promptPositions, onChange, onEnt
   return (
     <>
       <section className="setting-library-placement-card">
-        <div className="setting-library-placement-heading"><strong>上下文位置</strong><button type="button" className="setting-library-position-manage" onClick={onManagePositions}><SlidersHorizontal size={14} />管理位置</button></div>
+        <div className="setting-library-placement-heading"><strong>插入位置</strong>{allowCustomPromptPositions ? <button type="button" className="setting-library-position-manage" onClick={onManagePositions}><SlidersHorizontal size={14} />管理位置</button> : null}</div>
         <div className="setting-library-placement-rail">
-          {positionPickerRows(promptPositions).map((row, index) => {
+          {positionPickerRows(allowCustomPromptPositions ? promptPositions : []).map((row, index) => {
             if (row.type === 'custom') {
               const position = row.position;
               const selected = entry.promptPositionId === position.id;
-              return <button type="button" className={`setting-library-placement-row is-custom${selected ? ' is-selected' : ''}`} key={position.id} aria-pressed={selected}
+              return <button type="button" className={`setting-library-placement-row is-custom is-card${selected ? ' is-selected' : ''}`} key={position.id} aria-pressed={selected}
                 onClick={() => onEntriesChange(moveEntryToPosition(entries, entry.id, position.anchor, position.id))}>
-                <i>{selected ? <Check size={11} weight="bold" /> : null}</i><span className="setting-library-placement-choice"><span>{position.name || '未命名位置'}</span></span>
+                <i>{selected ? <Check size={11} weight="bold" /> : null}</i><span className="setting-library-placement-choice"><FixedPositionIcon id="custom" size={16} /><span>{position.name || '未命名位置'}</span></span>
               </button>;
             }
             const selected = entry.position === row.value && !entry.promptPositionId;
-            if (row.type === "context") return <div className="setting-library-placement-row is-context" key={`context-${row.id}`}><i /><span><ElecKoiPromptMarkerIcon />{row.label}</span></div>;
+            if (row.type === "context") return <div className="setting-library-placement-row is-context" key={`context-${row.id}`}><i /><span><FixedPositionIcon id={row.id} size={16} />{row.label}</span></div>;
             return (
               <button
                 type="button"
@@ -401,7 +403,7 @@ function VisualPositionPicker({ entry, entries, promptPositions, onChange, onEnt
               >
                 <i>{selected ? <Check size={11} weight="bold" /> : null}</i>
                 <span className="setting-library-placement-choice">
-                  {row.card ? <ElecKoiPromptMarkerIcon /> : null}
+                  {row.card ? <FixedPositionIcon id={row.value} size={16} /> : null}
                   <span>{POSITION_LABEL.get(row.value)}</span>
                 </span>
               </button>
@@ -426,24 +428,42 @@ function VisualPositionPicker({ entry, entries, promptPositions, onChange, onEnt
   );
 }
 
-function InsertSection({ entry, entries, promptPositions, onChange, onEntriesChange, onManagePositions }) {
+export function CachedEntryInsertSection({ entry, onChange }) {
+  return <div className="setting-library-entry-section">
+      <section className="setting-library-placement-card">
+        <div className="setting-library-placement-heading"><strong>插入位置</strong></div>
+        <div className="setting-library-placement-rail">
+          <div className="setting-library-placement-row is-context"><i /><span><Database size={16} />缓存设定区</span></div>
+        </div>
+      </section>
+      <section className="setting-library-order-card">
+        <NumberField label="位置内部排序" description="数字越小越靠前" value={entry.order} min={1} max={9999} onChange={(order) => onChange({ ...entry, order })} />
+      </section>
+    </div>;
+}
+
+function InsertSection({ entry, entries, promptPositions, allowCustomPromptPositions, onChange, onEntriesChange, onManagePositions }) {
   if (entry.triggerMode === "agent_tool") {
     return <p className="setting-library-agent-insert-note">AI 读取后，正文直接作为工具结果返回，无需配置插入位置。</p>;
   }
+  if (entry.triggerMode === "cache") {
+    return <CachedEntryInsertSection entry={entry} onChange={onChange} />;
+  }
   return (
     <div className="setting-library-entry-section">
-      <VisualPositionPicker entry={entry} entries={entries} promptPositions={promptPositions} onChange={onChange} onEntriesChange={onEntriesChange} onManagePositions={onManagePositions} />
+      <VisualPositionPicker entry={entry} entries={entries} promptPositions={promptPositions} allowCustomPromptPositions={allowCustomPromptPositions} onChange={onChange} onEntriesChange={onEntriesChange} onManagePositions={onManagePositions} />
     </div>
   );
 }
 
-export function SettingLibraryEntryEditor({ entry, entries, groups, promptPositions = [], nameInputRef, onChange, onEntriesChange, onOpenEntry, onPromptPositionsChange = () => {} }) {
+export function SettingLibraryEntryEditor({ entry, entries, groups, promptPositions = [], allowCustomPromptPositions = false, nameInputRef, onChange, onEntriesChange, onOpenEntry, onPromptPositionsChange = () => {} }) {
   const [section, setSection] = useState("base");
   const [managingPositions, setManagingPositions] = useState(false);
   const editorRef = useRef(null);
   const scrollTopRef = useRef(0);
   useEffect(() => { setSection("base"); setManagingPositions(false); }, [entry.id]);
   function openPositionManager() {
+    if (!allowCustomPromptPositions) return;
     const scroller = editorRef.current?.closest('.setting-library-inspector-body');
     scrollTopRef.current = scroller?.scrollTop || 0;
     if (scroller) scroller.scrollTop = 0;
@@ -458,20 +478,28 @@ export function SettingLibraryEntryEditor({ entry, entries, groups, promptPositi
       editorRef.current?.querySelector('.setting-library-position-manage')?.focus({ preventScroll: true });
     });
   }
-  if (managingPositions) return <div ref={editorRef} className="setting-library-normal-entry-editor is-position-manager"><CustomPositionManager entry={entry} positions={promptPositions} entries={entries} onChange={onPromptPositionsChange} onBack={closePositionManager} /></div>;
+  if (allowCustomPromptPositions && managingPositions) return <div ref={editorRef} className="setting-library-normal-entry-editor is-position-manager"><CustomPositionManager entry={entry} positions={promptPositions} entries={entries} onChange={onPromptPositionsChange} onBack={closePositionManager} /></div>;
+  const editorSections = EDITOR_SECTIONS.filter((item) => entry.triggerMode !== "cache" || item.id !== "trigger");
+  const activeSection = editorSections.some((item) => item.id === section) ? section : editorSections[0].id;
+  const activeSectionIndex = editorSections.findIndex((item) => item.id === activeSection);
   return (
     <div ref={editorRef} className="setting-library-normal-entry-editor">
       <nav className="setting-library-entry-tabs" aria-label="设定编辑区域">
-        {EDITOR_SECTIONS.map((item, index) => (
-          <button key={item.id} type="button" aria-current={section === item.id ? "step" : undefined} onClick={() => setSection(item.id)}>
-            <span>{index + 1}</span>{item.id === "content" && entry.dynamicMode === "ejs_controller" ? "EJS 代码" : item.label}
-          </button>
-        ))}
+        {editorSections.map((item, index) => {
+          const completed = index < activeSectionIndex;
+          return <Fragment key={item.id}>
+            <button type="button" className={completed ? "is-complete" : undefined} aria-current={activeSection === item.id ? "step" : undefined} onClick={() => setSection(item.id)}>
+              <span className="setting-library-entry-tab-node">{completed ? <Check size={12} weight="bold" /> : index + 1}</span>
+              <span className="setting-library-entry-tab-label">{item.id === "content" && entry.dynamicMode === "ejs_controller" ? "EJS 代码" : item.label}</span>
+            </button>
+            {index < editorSections.length - 1 ? <i className={`setting-library-entry-tab-connector${completed ? " is-complete" : ""}`} aria-hidden="true" /> : null}
+          </Fragment>;
+        })}
       </nav>
-      {section === "base" ? <BasicSection entry={entry} nameInputRef={nameInputRef} onChange={onChange} /> : null}
-      {section === "trigger" ? <TriggerSection entry={entry} entries={entries} groups={groups} onChange={onChange} /> : null}
-      {section === "content" ? <ContentSection entry={entry} entries={entries} onChange={onChange} onOpenEntry={onOpenEntry} /> : null}
-      {section === "insert" ? <InsertSection entry={entry} entries={entries} promptPositions={promptPositions} onChange={onChange} onEntriesChange={onEntriesChange} onManagePositions={openPositionManager} /> : null}
+      {activeSection === "base" ? <BasicSection entry={entry} nameInputRef={nameInputRef} onChange={onChange} /> : null}
+      {activeSection === "trigger" ? <TriggerSection entry={entry} entries={entries} groups={groups} onChange={onChange} /> : null}
+      {activeSection === "content" ? <ContentSection entry={entry} entries={entries} onChange={onChange} onOpenEntry={onOpenEntry} /> : null}
+      {activeSection === "insert" ? <InsertSection entry={entry} entries={entries} promptPositions={promptPositions} allowCustomPromptPositions={allowCustomPromptPositions} onChange={onChange} onEntriesChange={onEntriesChange} onManagePositions={openPositionManager} /> : null}
     </div>
   );
 }

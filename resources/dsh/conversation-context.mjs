@@ -112,13 +112,11 @@ export function installConversationContext(agentCtx, snapshotRoot, sourceSession
 
 /** Prefix entries that belong before the latest user input on the first step. */
 export function projectPreStepMessages(messages, context) {
-  const before = settingInjections(context).filter((entry) => (
-    entry.anchor === 'after_instructions'
-    || entry.anchor === 'before_history'
-    || entry.anchor === 'before_latest_user_input'
-  ))
-  if (before.length === 0) return messages
-  return [...before.map(contextMessage), ...messages]
+  const injections = settingInjections(context)
+  const before = injections.filter((entry) => entry.anchor === 'insert_point_3')
+  const after = injections.filter((entry) => entry.anchor === 'insert_point_4' || entry.anchor === 'insert_point_5')
+  if (before.length === 0 && after.length === 0) return messages
+  return [...before.map(contextMessage), ...messages, ...after.map(contextMessage)]
 }
 
 /**
@@ -128,12 +126,7 @@ export function projectPreStepMessages(messages, context) {
  */
 export function renderRuntimeContext(context) {
   return settingInjections(context)
-    .filter((entry) => (
-      entry.anchor === 'after_history'
-      || entry.anchor === 'after_latest_user_input'
-      || entry.anchor === 'before_tool_flow'
-      || entry.anchor === 'after_tool_flow'
-    ))
+    .filter((entry) => entry.anchor === 'insert_point_1' || entry.anchor === 'insert_point_2')
     .map((entry) => entry.content)
     .join('\n\n')
 }
@@ -148,18 +141,33 @@ export function settingInjections(context) {
       && entry.content.trim()
       && entry.kind !== 'opening'
       && entry.kind !== 'history_compaction'
-      && entry.triggerMode === 'always')
+      && (entry.triggerMode === 'cache' || (entry.triggerMode === 'always' && entry.position)))
     .map((entry) => {
       const custom = promptPositions.get(entry.promptPositionId)
+      const anchor = entry.triggerMode === 'cache' ? 'insert_point_1' : custom?.anchor || entry.position || 'insert_point_1'
+      const title = String(entry.title || '').trim() || '未命名设定'
       return {
         id: String(entry.id || '').slice(0, 128),
-        anchor: custom?.anchor || entry.position || 'after_instructions',
+        anchor,
+        role: anchor === 'instructions' ? 'system' : entry.insertRole === 'assistant' ? 'assistant' : 'user',
         content: entry.content.slice(0, 40_000),
-        positionOrder: custom?.order ?? Number.MIN_SAFE_INTEGER,
-        order: Number.isInteger(entry.order) ? entry.order : 1
+        placementRank: entry.triggerMode === 'cache'
+          ? 3
+          : custom?.side === 'before_setting_position' ? 0 : custom?.side === 'after_setting_position' ? 2 : 1,
+        positionOrder: custom?.order ?? 0,
+        order: Number.isInteger(entry.order) ? entry.order : 1,
+        traceTitle: entry.triggerMode === 'cache'
+          ? `缓存设定 · ${title}`
+          : entry.kind === 'hidden_tool_timeline'
+            ? `预设固定条目 · ${title}`
+            : String(entry.id || '').startsWith('agent-preset:')
+              ? `预设条目 · ${title}`
+              : `设定 · ${title}`,
+        traceSource: String(custom?.name || '').trim() || positionLabel(anchor)
       }
     })
     .sort((left, right) => anchorOrder(left.anchor) - anchorOrder(right.anchor)
+      || left.placementRank - right.placementRank
       || left.positionOrder - right.positionOrder
       || left.order - right.order
       || left.id.localeCompare(right.id))
@@ -173,7 +181,8 @@ function contextMessage(entry) {
       kind: 'plugin',
       plugin: name,
       form: 'snapshot',
-      sections: [{ name: entry.id || name, text: entry.content }]
+      label: entry.traceSource,
+      sections: [{ name: entry.traceTitle || entry.id || name, text: entry.content }]
     }
   })
 }
@@ -181,13 +190,22 @@ function contextMessage(entry) {
 function anchorOrder(anchor) {
   const index = [
     'instructions',
-    'after_instructions',
-    'before_history',
-    'before_latest_user_input',
-    'after_history',
-    'after_latest_user_input',
-    'before_tool_flow',
-    'after_tool_flow'
+    'insert_point_1',
+    'insert_point_2',
+    'insert_point_3',
+    'insert_point_4',
+    'insert_point_5'
   ].indexOf(anchor)
   return index < 0 ? Number.MAX_SAFE_INTEGER : index
+}
+
+function positionLabel(anchor) {
+  return ({
+    instructions: '系统指令',
+    insert_point_1: '设定插入点 1',
+    insert_point_2: '设定插入点 2',
+    insert_point_3: '设定插入点 3',
+    insert_point_4: '设定插入点 4',
+    insert_point_5: '设定插入点 5'
+  })[anchor] || '设定位置'
 }

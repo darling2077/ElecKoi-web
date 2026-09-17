@@ -10,6 +10,7 @@ function EntryEditor({
   entries,
   groups,
   promptPositions,
+  allowCustomPromptPositions,
   nameInputRef,
   onChange,
   onEntriesChange,
@@ -30,6 +31,7 @@ function EntryEditor({
         entries={entries}
         groups={groups}
         promptPositions={promptPositions}
+        allowCustomPromptPositions={allowCustomPromptPositions}
         nameInputRef={nameInputRef}
         onChange={onChange}
         onEntriesChange={onEntriesChange}
@@ -43,12 +45,12 @@ function EntryEditor({
     <div className="setting-library-entry-editor">
       {isReference ? (
         <label className="setting-library-title-field">
-          <span>引用名称</span>
+          <span>EJS引用名称</span>
           <input ref={nameInputRef} value={entry.title} maxLength={60} placeholder="供 getwi 按名称读取" onChange={(event) => onChange({ ...entry, title: event.target.value })} />
         </label>
       ) : null}
       <MarkdownTextareaField
-        label={isReference ? "引用正文" : fixedEntryContentLabel(entry)}
+        label={isReference ? "EJS引用正文" : fixedEntryContentLabel(entry)}
         value={entry.content}
         placeholder={isReference ? "填写供 EJS 控制器读取的内容" : fixedEntryContentPlaceholder(entry)}
         onChange={(content) => onChange({ ...entry, content })}
@@ -78,6 +80,7 @@ export function SettingLibraryInspector({
   onOpenEntry,
   onRequestDeleteOpening,
   onPromptPositionsChange,
+  allowCustomPromptPositions = false,
 }) {
   if (!selected.value) return null;
   return (
@@ -87,7 +90,7 @@ export function SettingLibraryInspector({
           {selected.kind === "entry" && !FIXED_ENTRY_IDS.has(selected.value.id) && !["ejs_controller", "ejs_reference"].includes(selected.value.dynamicMode)
             ? <SettingEntryGlyph iconId={selected.value.iconId} size={19} aria-hidden="true" />
             : selected.kind === "group" ? <DshFolderClosedIcon size={19} aria-hidden="true" /> : <SelectedIcon size={19} aria-hidden="true" />}
-          <strong>{selected.kind === "group" ? "文件夹" : selected.value.dynamicMode === "ejs_reference" ? "引用条目" : selected.value.title}</strong>
+          <strong>{selected.kind === "group" ? "文件夹" : selected.value.dynamicMode === "ejs_reference" ? "EJS引用设定" : selected.value.title}</strong>
         </div>
         <button type="button" aria-label="关闭编辑器" onClick={onClose}><X size={17} /></button>
       </header>
@@ -103,6 +106,7 @@ export function SettingLibraryInspector({
             entries={library.entries}
             groups={library.groups}
             promptPositions={library.promptPositions}
+            allowCustomPromptPositions={allowCustomPromptPositions}
             nameInputRef={nameInputRef}
             onChange={onUpdateEntry}
             onEntriesChange={onEntriesChange}

@@ -23,6 +23,11 @@ import { UserSettingsStore } from '../src/main/modules/settings/UserSettingsStor
 import { DEFAULT_CHAT_DISPLAY_PREFERENCES } from '../src/shared/contracts/settings/schemas'
 import { SettingLibraryRepository } from '../src/main/modules/settingLibraries/SettingLibraryRepository'
 import { emptyEntry } from '../src/main/modules/settingLibraries/settingLibraryNormalization'
+import { writeEntry } from '../src/main/modules/settingLibraries/settingLibraryCodec'
+import { AgentPresetRepository } from '../src/main/modules/agentPresets/AgentPresetRepository'
+import { DEFAULT_AGENT_TOOL_GROUP_IDS } from '../src/main/modules/agentTools'
+import { defaultRoleplayPlanSettings } from '../src/shared/contracts/presets/roleplayPlan'
+import { settingLibraryEntrySchema, settingLibraryPromptPositionSchema } from '../src/shared/contracts/settingLibrary/schemas'
 import { VariableConfigRepository } from '../src/main/modules/variables/VariableConfigRepository'
 import { VariableStateRepository } from '../src/main/modules/variables/VariableStateRepository'
 import { VARIABLE_INITIALIZATION_OBJECT_ID } from '../src/shared/contracts/variables/schemas'
@@ -53,6 +58,25 @@ function card(id = 'card-a') {
 }
 function schemaObjects(db: Database.Database) {
   return db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'desktop_%' ORDER BY type,name").all()
+}
+
+function insertSyntheticCharacter(database: Database.Database, id = 'synthetic-character'): void {
+  database.prepare(`INSERT INTO characters(
+    id,name,avatar,squareImage,coverImage,groupName,orderIndex,groupViewOrder,folder,
+    frontendBeautyEnabled,assistantName,assistantAvatar,profileAge,profileSex,profileHeight,
+    profileBirthday,profileLike,showOpening,chatBackground,chatBackgroundOpacity,
+    chatBackgroundBlur,chatBackgroundScrim
+  ) VALUES (?,?,'','','','',0,0,'',0,?,'','','','','','',1,'',1,0,0)`)
+    .run(id, '合成角色', '合成助手')
+}
+
+function registerDesktopV2(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE desktop_schema (id INTEGER PRIMARY KEY CHECK(id = 1), baseline TEXT NOT NULL);
+    CREATE TABLE desktop_preferences (key TEXT PRIMARY KEY, valueJson TEXT NOT NULL, updatedAt TEXT NOT NULL);
+    INSERT INTO desktop_schema VALUES (1, 'eleckoi-common');
+    PRAGMA user_version = 2;
+  `)
 }
 
 function legacyV1Database(path = ':memory:'): Database.Database {
@@ -223,7 +247,7 @@ describe('shared SQLite baseline', () => {
     expect(path).toContain('eleckoi.sqlite3')
   })
 
-  it('migrates v1 to the final v2 atomically, preserves product data and removes only retired storage', () => {
+  it('migrates v1 through the complete chain atomically, preserves product data and removes only retired storage', () => {
     const database = legacyV1Database()
     try {
       database.exec(`
@@ -282,7 +306,7 @@ describe('shared SQLite baseline', () => {
     }
   })
 
-  it('opens an on-disk v1 database as v2 and opens it again after an app restart', () => {
+  it('opens an on-disk v1 database through the complete chain and opens it again after an app restart', () => {
     const directory = mkdtempSync(join(tmpdir(), 'eleckoi-v1-reopen-test-'))
     directories.push(directory)
     const path = join(directory, 'eleckoi-common.sqlite3')
@@ -298,7 +322,7 @@ describe('shared SQLite baseline', () => {
     const secondStart = new SqliteDatabase(path)
     try {
       firstStart.open()
-      expect(firstStart.native.pragma('user_version', { simple: true })).toBe(2)
+      expect(firstStart.native.pragma('user_version', { simple: true })).toBe(CURRENT_SCHEMA_VERSION)
       expect(firstStart.native.prepare('SELECT title, historySummary FROM chat_sessions WHERE id = ?').get('chat-reopen'))
         .toEqual({ title: '迁移后保留', historySummary: '历史摘要' })
       expect(firstStart.native.prepare('SELECT valueJson FROM desktop_preferences WHERE key = ?').get('appearance.mode'))
@@ -306,7 +330,7 @@ describe('shared SQLite baseline', () => {
       firstStart.close()
 
       secondStart.open()
-      expect(secondStart.native.pragma('user_version', { simple: true })).toBe(2)
+      expect(secondStart.native.pragma('user_version', { simple: true })).toBe(CURRENT_SCHEMA_VERSION)
       expect(secondStart.native.prepare('SELECT baseline FROM desktop_schema WHERE id = 1').get())
         .toEqual({ baseline: BASELINE_ID })
       expect(secondStart.native.prepare('SELECT title FROM chat_sessions WHERE id = ?').get('chat-reopen'))
@@ -343,36 +367,16 @@ describe('shared SQLite baseline', () => {
           VALUES ('preset-v2','预设','general','[]','','preset-v2:1','','',0,'[]','保留说明');
         INSERT INTO agent_preset_versions(presetId,versionId,versionNumber,name,createdAtEpochMs,expandedGroupIdsJson)
           VALUES ('preset-v2','preset-v2:1',1,'预设',1,'[]');
-        INSERT INTO agent_preset_contents(presetId,kind,content)
-          VALUES ('preset-v2','tool_policy','{"version":2,"includedGroupIds":["builtin:variables","retired:tool"],"enabledGroupIds":["builtin:variables"]}');
-        INSERT INTO agent_preset_version_contents(presetId,versionId,kind,content)
-          VALUES ('preset-v2','preset-v2:1','tool_policy','{"version":2,"includedGroupIds":["builtin:variables"],"enabledGroupIds":["builtin:variables"]}');
-        INSERT INTO agent_preset_entries(presetId,entryId,sortIndex,payloadJson)
-          VALUES ('preset-v2','fixed-roleplay-plan',0,'{"kind":"roleplay_plan","content":"读取设定\\n输出正文"}');
-        INSERT INTO agent_preset_version_entries(presetId,versionId,entryId,sortIndex,payloadJson)
-          VALUES ('preset-v2','preset-v2:1','fixed-roleplay-plan',0,'{"kind":"roleplay_plan","content":"读取版本设定\\n输出版本正文"}');
       `)
 
       installSchema(database)
 
-      expect(database.pragma('user_version', { simple: true })).toBe(2)
+      expect(database.pragma('user_version', { simple: true })).toBe(CURRENT_SCHEMA_VERSION)
       expect(database.prepare('SELECT baseline FROM desktop_schema WHERE id=1').get()).toEqual({ baseline: BASELINE_ID })
       expect(database.prepare('SELECT mode,maxResults,tavilyApiKey,updatedAt FROM web_search_settings').get())
         .toEqual({ mode: 'tavily', maxResults: 3, tavilyApiKey: 'ciphertext', updatedAt: 'saved-at' })
       expect(database.prepare("SELECT content FROM agent_preset_contents WHERE presetId='preset-v2' AND kind='usage_instructions'").get())
         .toEqual({ content: '保留说明' })
-      expect(JSON.parse((database.prepare("SELECT content FROM agent_preset_contents WHERE presetId='preset-v2' AND kind='tool_configuration'").get() as { content: string }).content))
-        .toEqual({
-          version: 4,
-          includedGroupIds: ['builtin:variables'],
-          enabledGroupIds: ['builtin:variables'],
-          subagentModelSelection: { configId: '', model: '' },
-          roleplayPlan: { steps: ['读取设定', '输出正文'] }
-        })
-      expect(JSON.parse((database.prepare("SELECT content FROM agent_preset_version_contents WHERE presetId='preset-v2' AND versionId='preset-v2:1' AND kind='tool_configuration'").get() as { content: string }).content).roleplayPlan)
-        .toEqual({ steps: ['读取版本设定', '输出版本正文'] })
-      expect(database.prepare("SELECT kind FROM agent_preset_contents WHERE kind='tool_policy'").all()).toEqual([])
-      expect(database.prepare("SELECT entryId FROM agent_preset_entries WHERE entryId='fixed-roleplay-plan'").all()).toEqual([])
       expect(database.pragma('foreign_key_check')).toEqual([])
       expect(database.pragma('integrity_check', { simple: true })).toBe('ok')
     } finally {
@@ -380,14 +384,14 @@ describe('shared SQLite baseline', () => {
     }
   })
 
-  it('normalizes obsolete preset storage inside an otherwise current v2 database', () => {
+  it('normalizes obsolete preset storage in v2 before continuing to the current schema', () => {
     const database = currentV2Database()
     try {
       database.exec(`
         INSERT INTO agent_presets(id,name,modelFamily,modelTagsJson,libraryGroupId,activeVersionId,authorName,authorAvatarPath,sortIndex,expandedGroupIdsJson)
-          VALUES ('preset-current-v2','预设','general','[]','','preset-current-v2:1','','',0,'[]');
+          VALUES ('preset-current-v2','通用预设','general','[]','','preset-current-v2:1','','',0,'[]');
         INSERT INTO agent_preset_versions(presetId,versionId,versionNumber,name,createdAtEpochMs,expandedGroupIdsJson)
-          VALUES ('preset-current-v2','preset-current-v2:1',1,'预设',1,'[]');
+          VALUES ('preset-current-v2','preset-current-v2:1',1,'通用预设',1,'[]');
         INSERT INTO agent_preset_contents(presetId,kind,content)
           VALUES ('preset-current-v2','tool_policy','{"version":2,"enabledGroupIds":["builtin:variables"]}');
         INSERT INTO agent_preset_entries(presetId,entryId,sortIndex,payloadJson)
@@ -407,7 +411,7 @@ describe('shared SQLite baseline', () => {
       })
       expect(database.prepare("SELECT kind FROM agent_preset_contents WHERE kind='tool_policy'").all()).toEqual([])
       expect(database.prepare("SELECT entryId FROM agent_preset_entries WHERE entryId='fixed-roleplay-plan'").all()).toEqual([])
-      expect(database.pragma('user_version', { simple: true })).toBe(2)
+      expect(database.pragma('user_version', { simple: true })).toBe(CURRENT_SCHEMA_VERSION)
       expect(database.pragma('foreign_key_check')).toEqual([])
       expect(database.pragma('integrity_check', { simple: true })).toBe('ok')
     } finally {
@@ -427,6 +431,214 @@ describe('shared SQLite baseline', () => {
         .toEqual({ name: 'global_tool_config' })
       expect(database.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='web_search_settings'").get())
         .toBeUndefined()
+      expect(database.pragma('integrity_check', { simple: true })).toBe('ok')
+    } finally {
+      database.close()
+    }
+  })
+
+  it('migrates a closed v2 file to v3 and reopens every persisted setting placement', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'eleckoi-v2-placement-test-'))
+    directories.push(directory)
+    const path = join(directory, 'eleckoi.sqlite3')
+    const timestamp = '2026-01-01T00:00:00.000Z'
+    const baseEntry = emptyEntry('setting-entry', timestamp)
+    const snakeEntry = JSON.parse(writeEntry({ ...baseEntry, position: 'insert_point_1' })) as Record<string, unknown>
+    snakeEntry.position = 'after_instructions'
+    const presetEntry = { ...baseEntry, id: 'preset-entry', position: 'before_latest_user_input' }
+    const presetVersionEntry = { ...baseEntry, id: 'preset-version-entry', position: 'after_tool_flow' }
+    const hiddenEntry = {
+      ...baseEntry,
+      id: 'built-in-hidden-tool-timeline',
+      kind: 'hidden_tool_timeline',
+      position: 'after_tool_flow',
+      promptPositionId: ''
+    }
+    const conversationEntry = { ...baseEntry, id: 'conversation-entry', position: 'after_history' }
+    const snapshotEntry = { ...baseEntry, id: 'snapshot-entry', position: 'before_tool_flow' }
+    const toolConfiguration = JSON.stringify({
+      version: 4,
+      includedGroupIds: [...DEFAULT_AGENT_TOOL_GROUP_IDS],
+      enabledGroupIds: [...DEFAULT_AGENT_TOOL_GROUP_IDS],
+      subagentModelSelection: { configId: '', model: '' },
+      roleplayPlan: defaultRoleplayPlanSettings()
+    })
+
+    let database = new Database(path)
+    try {
+      database.exec(commonSchemaSql)
+      registerDesktopV2(database)
+      insertSyntheticCharacter(database)
+      database.prepare(`INSERT INTO setting_libraries(
+        characterId,name,activeVersionId,listAllExpanded,expandedGroupIdsJson,promptPositionsJson,updatedAt
+      ) VALUES (?,?,?,1,'[]',?,?)`).run('synthetic-character', '合成设定', 'setting-version', JSON.stringify([{
+        id: 'setting-position', name: '位置一', anchor: 'before_history', order: 1,
+        created_at: timestamp, updated_at: timestamp
+      }]), timestamp)
+      database.prepare(`INSERT INTO setting_library_versions(
+        characterId,versionId,sortIndex,name,listAllExpanded,expandedGroupIdsJson,promptPositionsJson,createdAt,updatedAt
+      ) VALUES (?, ?, 0, ?, 1, '[]', ?, ?, ?)`).run(
+        'synthetic-character', 'setting-version', '初始版本', JSON.stringify([{
+          id: 'setting-version-position', name: '位置二', anchor: 'after_latest_user_input', order: 1,
+          created_at: timestamp, updated_at: timestamp
+        }]), timestamp, timestamp
+      )
+      database.prepare('INSERT INTO setting_entry_contents VALUES (?,?,?,?)')
+        .run('synthetic-character', 'setting-entry', 'revision-1', JSON.stringify(snakeEntry))
+      database.prepare('INSERT INTO setting_library_entry_links VALUES (?,?,0,?)')
+        .run('synthetic-character', 'setting-entry', 'revision-1')
+      database.prepare('INSERT INTO setting_library_version_entry_links VALUES (?,?,?,0,?)')
+        .run('synthetic-character', 'setting-version', 'setting-entry', 'revision-1')
+
+      database.prepare(`INSERT INTO chat_sessions(
+        id,title,characterId,characterName,characterAvatar,historySummary,historyMessageCount,
+        historyUserMessageCount,createdAt,updatedAt
+      ) VALUES (?,'合成会话','synthetic-character','合成角色','','',0,0,?,?)`)
+        .run('synthetic-session', timestamp, timestamp)
+      database.prepare('INSERT INTO conversation_setting_changes VALUES (?,?,?,?,?,?)').run(
+        'synthetic-session', 'entry', 'conversation-entry', 'upsert', JSON.stringify(conversationEntry), timestamp
+      )
+
+      database.prepare(`INSERT INTO agent_presets(
+        id,name,modelFamily,modelTagsJson,libraryGroupId,activeVersionId,authorName,
+        authorAvatarPath,sortIndex,expandedGroupIdsJson
+      ) VALUES (?,'合成预设','general','[]','',?,'','',0,'[]')`).run('synthetic-preset', 'preset-version')
+      database.prepare(`INSERT INTO agent_preset_versions(
+        presetId,versionId,versionNumber,name,createdAtEpochMs,expandedGroupIdsJson
+      ) VALUES (?,?,1,'合成版本',1,'[]')`).run('synthetic-preset', 'preset-version')
+      database.prepare('INSERT INTO agent_preset_state VALUES (1,?)').run('synthetic-preset')
+      database.prepare('INSERT INTO agent_preset_entries VALUES (?,?,0,?)')
+        .run('synthetic-preset', 'preset-entry', JSON.stringify(presetEntry))
+      database.prepare('INSERT INTO agent_preset_entries VALUES (?,?,1,?)')
+        .run('synthetic-preset', 'built-in-hidden-tool-timeline', JSON.stringify(hiddenEntry))
+      database.prepare('INSERT INTO agent_preset_version_entries VALUES (?,?,?,0,?)')
+        .run('synthetic-preset', 'preset-version', 'preset-version-entry', JSON.stringify(presetVersionEntry))
+      database.prepare('INSERT INTO agent_preset_version_entries VALUES (?,?,?,1,?)')
+        .run('synthetic-preset', 'preset-version', 'built-in-hidden-tool-timeline', JSON.stringify(hiddenEntry))
+      database.prepare('INSERT INTO agent_preset_contents VALUES (?,?,?)').run(
+        'synthetic-preset', 'prompt_positions', JSON.stringify([{
+          id: 'preset-position', name: '位置三', anchor: 'after_history', order: 1,
+          createdAt: timestamp, updatedAt: timestamp
+        }])
+      )
+      database.prepare('INSERT INTO agent_preset_contents VALUES (?,?,?)')
+        .run('synthetic-preset', 'tool_configuration', toolConfiguration)
+      database.prepare('INSERT INTO agent_preset_version_contents VALUES (?,?,?,?)').run(
+        'synthetic-preset', 'preset-version', 'prompt_positions', JSON.stringify([{
+          id: 'preset-version-position', name: '位置四', anchor: 'before_tool_flow', order: 1,
+          createdAt: timestamp, updatedAt: timestamp
+        }])
+      )
+      database.prepare('INSERT INTO agent_preset_version_contents VALUES (?,?,?,?)')
+        .run('synthetic-preset', 'preset-version', 'tool_configuration', toolConfiguration)
+
+      database.prepare('INSERT INTO agent_conversations VALUES (?,?)').run('synthetic-session', '')
+      const snapshot = JSON.stringify([{
+        targetType: 'entry', targetId: 'snapshot-entry', operation: 'upsert',
+        payloadJson: JSON.stringify(snapshotEntry), updatedAt: timestamp
+      }])
+      database.prepare(`INSERT INTO agent_content_parts(
+        conversationId,ownerType,ownerId,partIndex,kind,text,payloadJson,chunkIndex
+      ) VALUES (?,'turn','synthetic-owner',1,'setting_library_state','',?,0)`)
+        .run('synthetic-session', snapshot)
+    } finally {
+      database.close()
+    }
+
+    const reopened = new SqliteDatabase(path)
+    reopened.open()
+    try {
+      expect(reopened.native.pragma('user_version', { simple: true })).toBe(3)
+      expect(reopened.native.prepare('SELECT baseline FROM desktop_schema WHERE id=1').get()).toEqual({ baseline: BASELINE_ID })
+
+      const library = new SettingLibraryRepository(reopened).get('synthetic-character')
+      expect(library.entries[0]?.position).toBe('insert_point_1')
+      expect(library.promptPositions).toEqual([expect.objectContaining({ anchor: 'insert_point_2', side: 'before_setting_position' })])
+      expect(library.versions[0]?.promptPositions).toEqual([
+        expect.objectContaining({ anchor: 'insert_point_4', side: 'before_setting_position' })
+      ])
+
+      const preset = new AgentPresetRepository(reopened).get('synthetic-preset')
+      expect(preset.entries.find((entry) => entry.id === 'preset-entry')?.position).toBe('insert_point_3')
+      expect(preset.entries.find((entry) => entry.id === 'built-in-hidden-tool-timeline')).toMatchObject({
+        position: 'insert_point_4', promptPositionId: 'hidden-tool-timeline'
+      })
+      expect(preset.promptPositions).toContainEqual(expect.objectContaining({
+        id: 'preset-position', anchor: 'insert_point_3', side: 'before_setting_position'
+      }))
+      expect(preset.promptPositions).toContainEqual(expect.objectContaining({
+        id: 'hidden-tool-timeline', anchor: 'insert_point_4', side: 'before_setting_position'
+      }))
+
+      const conversation = reopened.native.prepare(`SELECT payloadJson FROM conversation_setting_changes
+        WHERE sessionId='synthetic-session' AND targetType='entry'`).get() as { payloadJson: string }
+      expect(settingLibraryEntrySchema.parse(JSON.parse(conversation.payloadJson)).position).toBe('insert_point_3')
+      const snapshotRow = reopened.native.prepare(`SELECT payloadJson FROM agent_content_parts
+        WHERE kind='setting_library_state'`).get() as { payloadJson: string }
+      const snapshotValue = JSON.parse(snapshotRow.payloadJson) as Array<{ payloadJson: string }>
+      expect(settingLibraryEntrySchema.parse(JSON.parse(snapshotValue[0]!.payloadJson)).position).toBe('insert_point_4')
+
+      const storedVersionEntry = reopened.native.prepare(`SELECT payloadJson FROM agent_preset_version_entries
+        WHERE entryId='preset-version-entry'`).get() as { payloadJson: string }
+      expect(settingLibraryEntrySchema.parse(JSON.parse(storedVersionEntry.payloadJson)).position).toBe('insert_point_5')
+      const storedVersionPositions = reopened.native.prepare(`SELECT content FROM agent_preset_version_contents
+        WHERE kind='prompt_positions'`).get() as { content: string }
+      expect((JSON.parse(storedVersionPositions.content) as unknown[]).map((item) => settingLibraryPromptPositionSchema.parse(item)))
+        .toContainEqual(expect.objectContaining({ anchor: 'insert_point_4', side: 'after_setting_position' }))
+      expect(reopened.native.pragma('foreign_key_check')).toEqual([])
+      expect(reopened.native.pragma('integrity_check', { simple: true })).toBe('ok')
+    } finally {
+      reopened.close()
+    }
+
+    const secondReopen = new SqliteDatabase(path)
+    secondReopen.open()
+    try {
+      expect(secondReopen.native.pragma('user_version', { simple: true })).toBe(CURRENT_SCHEMA_VERSION)
+      expect(new AgentPresetRepository(secondReopen).get('synthetic-preset').entries)
+        .toContainEqual(expect.objectContaining({ id: 'preset-entry', position: 'insert_point_3' }))
+    } finally {
+      secondReopen.close()
+    }
+  })
+
+  it('keeps a v2 file unchanged when the placement migration encounters damaged JSON', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'eleckoi-v2-placement-rollback-'))
+    directories.push(directory)
+    const path = join(directory, 'eleckoi.sqlite3')
+    let database = new Database(path)
+    try {
+      database.exec(commonSchemaSql)
+      registerDesktopV2(database)
+      insertSyntheticCharacter(database)
+      database.prepare(`INSERT INTO setting_libraries(
+        characterId,name,activeVersionId,listAllExpanded,expandedGroupIdsJson,promptPositionsJson,updatedAt
+      ) VALUES (?,'合成设定','version-1',1,'[]','{','2026-01-01T00:00:00.000Z')`)
+        .run('synthetic-character')
+      const oldEntry = JSON.parse(writeEntry({
+        ...emptyEntry('setting-entry', '2026-01-01T00:00:00.000Z'),
+        position: 'insert_point_1'
+      })) as Record<string, unknown>
+      oldEntry.position = 'after_instructions'
+      database.prepare('INSERT INTO setting_entry_contents VALUES (?,?,?,?)')
+        .run('synthetic-character', 'setting-entry', 'revision-1', JSON.stringify(oldEntry))
+    } finally {
+      database.close()
+    }
+
+    database = new Database(path)
+    try {
+      expect(() => installSchema(database)).toThrow('数据库 JSON 已损坏')
+    } finally {
+      database.close()
+    }
+
+    database = new Database(path)
+    try {
+      expect(database.pragma('user_version', { simple: true })).toBe(2)
+      const row = database.prepare('SELECT payloadJson FROM setting_entry_contents').get() as { payloadJson: string }
+      expect((JSON.parse(row.payloadJson) as Record<string, unknown>).position).toBe('after_instructions')
+      expect(database.prepare('SELECT baseline FROM desktop_schema WHERE id=1').get()).toEqual({ baseline: BASELINE_ID })
       expect(database.pragma('integrity_check', { simple: true })).toBe('ok')
     } finally {
       database.close()
@@ -599,7 +811,7 @@ describe('shared SQLite baseline', () => {
       agentReadCondition: '', dynamicMode: 'single_condition' as const, keywords: [], keywordScanDepth: 1,
       conditionKeywords: [], keywordCondition: 'none' as const, keywordUseRegex: false, keywordIgnoreCase: true,
       keywordWholeWord: false, keywordRecursionDepth: 0, triggerMode: 'always' as const, enabled: true,
-      position: 'before_latest_user_input' as const, promptPositionId: '', insertRole: 'user' as const, order: 1,
+      position: 'insert_point_3' as const, promptPositionId: '', insertRole: 'user' as const, order: 1,
       viewOrder: 0, groupViewOrder: 0, treeViewOrder: 1, createdAt: timestamp, updatedAt: timestamp
     }
     const opening = {
@@ -632,7 +844,7 @@ describe('shared SQLite baseline', () => {
       id: 'capital',
       groupId: 'world',
       content: '群山之间的城市。',
-      position: 'before_latest_user_input'
+      position: 'insert_point_3'
     }))
     expect(saved.entries.find((candidate) => candidate.id === 'fixed-opening-assistant')).toMatchObject({
       content: '主开场',
@@ -667,7 +879,7 @@ describe('shared SQLite baseline', () => {
       dynamicMode: 'single_condition' as const, keywords: [], keywordScanDepth: 1,
       conditionKeywords: [], keywordCondition: 'none' as const, keywordUseRegex: false,
       keywordIgnoreCase: true, keywordWholeWord: false, keywordRecursionDepth: 0,
-      triggerMode: 'agent_tool' as const, enabled: true, position: 'after_instructions' as const,
+      triggerMode: 'agent_tool' as const, enabled: true, position: 'insert_point_1' as const,
       promptPositionId: '', insertRole: 'user' as const, order: 1, viewOrder: 1,
       groupViewOrder: 0, treeViewOrder: 1, createdAt: timestamp, updatedAt: timestamp
     }
@@ -705,7 +917,7 @@ describe('shared SQLite baseline', () => {
 
     const latestProjected = structuredClone(latestSource)
     latestProjected.entries = latestProjected.entries.map((candidate) => candidate.id === entry.id
-      ? { ...candidate, content: '最新设定：米米' }
+      ? { ...candidate, content: '最新设定：测试角色' }
       : candidate)
     const agentResult = structuredClone(latestProjected)
     agentResult.entries = agentResult.entries.map((candidate) => candidate.id === entry.id

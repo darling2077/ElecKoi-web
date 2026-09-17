@@ -1,6 +1,8 @@
 import {
   settingLibraryEntrySchema,
   settingLibraryGroupSchema,
+  settingLibraryPositionSchema,
+  settingLibraryPromptPositionSideSchema,
   settingLibraryPromptPositionSchema,
   type SettingLibraryEntry,
   type SettingLibraryGroup,
@@ -67,7 +69,7 @@ export function readEntry(payloadJson: string): SettingLibraryEntry {
     keywordRecursionDepth: number(value.keyword_recursion_depth),
     triggerMode: string(value.trigger_mode) || null,
     enabled: boolean(value.enabled, true),
-    position: string(value.position) || null,
+    position: string(value.position) ? settingLibraryPositionSchema.parse(value.position) : null,
     promptPositionId: string(value.prompt_position_id),
     insertRole: string(value.insert_role) || 'user',
     order: number(value.order, 1),
@@ -143,7 +145,9 @@ export function readPromptPositions(payloadJson: string): SettingLibraryPromptPo
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error('设定库提示词位置格式不正确。')
     const value = item as JsonObject
     return settingLibraryPromptPositionSchema.parse({
-      id: string(value.id), name: string(value.name), anchor: string(value.anchor) || 'after_instructions',
+      id: string(value.id), name: string(value.name),
+      anchor: settingLibraryPositionSchema.parse(value.anchor),
+      side: settingLibraryPromptPositionSideSchema.parse(value.side),
       order: number(value.order, 1), createdAt: string(value.created_at), updatedAt: string(value.updated_at)
     })
   })
@@ -151,7 +155,7 @@ export function readPromptPositions(payloadJson: string): SettingLibraryPromptPo
 
 export function writePromptPositions(positions: SettingLibraryPromptPosition[]): string {
   return JSON.stringify(positions.map((position) => ({
-    id: position.id, name: position.name, anchor: position.anchor, order: position.order,
+    id: position.id, name: position.name, anchor: position.anchor, side: position.side, order: position.order,
     created_at: position.createdAt, updated_at: position.updatedAt
   })))
 }

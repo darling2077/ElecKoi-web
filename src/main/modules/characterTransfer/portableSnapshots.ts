@@ -18,11 +18,10 @@ import { normalizeSettingLibrary } from '@main/modules/settingLibraries'
 import { normalizeVariableConfig } from '@main/modules/variables'
 
 type JsonObject = Record<string, unknown>
-
-const POSITIONS = new Set([
-  'instructions', 'after_instructions', 'before_history', 'after_history',
-  'before_latest_user_input', 'after_latest_user_input', 'before_tool_flow', 'after_tool_flow'
-])
+const settingPositions = [
+  'instructions', 'insert_point_1', 'insert_point_2', 'insert_point_3', 'insert_point_4', 'insert_point_5'
+] as const
+const promptPositionSides = ['before_setting_position', 'after_setting_position'] as const
 
 export function encodeSettingLibrarySnapshot(library: SettingLibrary): string {
   return JSON.stringify({
@@ -106,7 +105,7 @@ function settingVersion(value: JsonObject, index: number): SettingLibraryVersion
 
 function settingEntry(value: JsonObject, index: number): SettingLibraryEntry {
   const kind = requiredEnumValue(value.kind, ['normal', 'opening', 'history_compaction', 'hidden_tool_timeline'], '角色卡设定类型')
-  const triggerMode = enumValue(value.trigger_mode, ['always', 'agent_tool'], null)
+  const triggerMode = enumValue(value.trigger_mode, ['always', 'agent_tool', 'cache'], null)
   return {
     id: string(value.id) || `setting-${randomUUID()}`,
     title: string(value.title).slice(0, 120),
@@ -135,7 +134,7 @@ function settingEntry(value: JsonObject, index: number): SettingLibraryEntry {
     keywordRecursionDepth: Math.max(0, integer(value.keyword_recursion_depth)),
     triggerMode,
     enabled: boolean(value.enabled, true),
-    position: POSITIONS.has(string(value.position)) ? string(value.position) as SettingLibraryEntry['position'] : null,
+    position: enumValue(value.position, settingPositions, null),
     promptPositionId: string(value.prompt_position_id),
     insertRole: enumValue(value.insert_role, ['system', 'user', 'assistant'], 'user'),
     order: Math.max(1, integer(value.order, index + 1)),
@@ -163,7 +162,8 @@ function promptPosition(value: JsonObject, index: number): SettingLibraryPromptP
   return {
     id: string(value.id) || `prompt-position-${randomUUID()}`,
     name: string(value.name).slice(0, 60),
-    anchor: POSITIONS.has(string(value.anchor)) ? string(value.anchor) as SettingLibraryPromptPosition['anchor'] : 'after_instructions',
+    anchor: enumValue(value.anchor, settingPositions, 'insert_point_1'),
+    side: enumValue(value.side, promptPositionSides, 'before_setting_position'),
     order: Math.max(1, integer(value.order, index + 1)),
     createdAt: string(value.created_at),
     updatedAt: string(value.updated_at)
@@ -295,6 +295,7 @@ function promptPositionJson(position: SettingLibraryPromptPosition): JsonObject 
     id: position.id,
     name: position.name,
     anchor: position.anchor,
+    side: position.side,
     order: position.order,
     created_at: position.createdAt,
     updated_at: position.updatedAt

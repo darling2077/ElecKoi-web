@@ -179,7 +179,7 @@ function convertWorldBookEntries(worldBook: JsonObject | undefined, timestamp: s
     }
     if (materialIds.has(id)) return {
       ...emptyEntry(id, timestamp), title, groupId: 'tavern-world-book', content,
-      agentSelectionHint: '供 EJS 控制器通过 getwi 读取的引用条目',
+      agentSelectionHint: '供 EJS 控制器通过 getwi 读取的 EJS引用设定',
       agentReadStrategy: 'variable_condition', dynamicMode: 'ejs_reference', triggerMode: 'agent_tool',
       enabled: true, order: index + 1, treeViewOrder: index + 1
     }

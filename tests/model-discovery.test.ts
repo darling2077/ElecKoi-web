@@ -71,6 +71,56 @@ describe('model discovery', () => {
     }])
   })
 
+  it('uses the native Gemini model list and API-key header', async () => {
+    const requests: Array<{
+      url: string | undefined
+      apiKey: string | undefined
+      authorization: string | undefined
+    }> = []
+    const server = createServer((request, response) => {
+      requests.push({
+        url: request.url,
+        apiKey: request.headers['x-goog-api-key'] as string | undefined,
+        authorization: request.headers.authorization
+      })
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ models: [
+        {
+          name: 'models/gemini-test',
+          displayName: 'Gemini Test',
+          inputTokenLimit: 1_048_576,
+          outputTokenLimit: 8_192,
+          supportedGenerationMethods: ['generateContent']
+        },
+        {
+          name: 'models/embedding-test',
+          supportedGenerationMethods: ['embedContent']
+        }
+      ] }))
+    })
+    servers.add(server)
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address() as AddressInfo
+
+    const config = modelConfig(`http://127.0.0.1:${address.port}/v1beta/openai`, 'google_gemini')
+    config.api_key = 'gemini-test-key'
+
+    await expect(discoverModels(config)).resolves.toEqual([{
+      id: 'models/gemini-test',
+      name: 'Gemini Test',
+      contextWindowTokens: 1_048_576,
+      maxOutputTokens: 8_192,
+      isUserAdded: false,
+      supportsImageInput: false
+    }])
+    expect(requests).toEqual([{
+      url: '/v1beta/models?pageSize=1000',
+      apiKey: 'gemini-test-key',
+      authorization: undefined
+    }])
+  })
+
   it('validates a Responses API tool call and its result round trip', async () => {
     const bodies: Record<string, unknown>[] = []
     const server = createServer(async (request, response) => {

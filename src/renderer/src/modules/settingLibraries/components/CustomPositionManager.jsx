@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ChatCircleDots,
+  Database,
   DotsSixVertical,
   DotsThree,
   NotePencil,
@@ -20,12 +21,18 @@ import {
 } from '../model/customPositions.js';
 import '../styles/custom-positions.css';
 
-const fixedIcons = {
+const FIXED_POSITION_ICONS = {
   instructions: PushPin,
+  cache: Database,
   history: ChatCircleDots,
   'latest-user-input': UserCircle,
   'tool-flow': Wrench,
 };
+
+export function FixedPositionIcon({ id, size = 17 }) {
+  const Icon = FIXED_POSITION_ICONS[id] || PushPin;
+  return <Icon size={size} weight={id === 'instructions' ? 'fill' : 'regular'} />;
+}
 
 function PositionNameDialog({ draft, existing, onChange, onCancel, onSave }) {
   const inputRef = useRef(null);
@@ -156,7 +163,6 @@ export function CustomPositionManager({ entry, positions, entries, onChange, onB
           </article>;
         }
         const key = row.key.split(':').pop();
-        const Icon = fixedIcons[key] || PushPin;
         return <div
           className={'setting-position-guide-row is-fixed is-' + row.type}
           key={row.key}
@@ -164,7 +170,7 @@ export function CustomPositionManager({ entry, positions, entries, onChange, onB
           onDragOver={(event) => event.preventDefault()}
         >
           <span className="setting-position-guide-track" aria-hidden="true"><i className={topConnected ? 'is-connected' : ''} /><b /><i className={bottomConnected ? 'is-connected' : ''} /></span>
-          <span className="setting-position-fixed-card"><Icon size={17} weight={row.type === 'instructions' ? 'fill' : 'regular'} /><strong>{row.label}</strong></span>
+          <span className="setting-position-fixed-card"><FixedPositionIcon id={key} /><strong>{row.label}</strong></span>
         </div>;
       })}
     </div>

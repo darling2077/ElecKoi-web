@@ -37,10 +37,11 @@ export function createEntryDraft(groupId, order, entries, draftKind = "standard"
   const siblingNames = new Set(entries.filter((entry) => entry.groupId === groupId).map((entry) => entry.title));
   const isReference = draftKind === "reference";
   const isPrompt = draftKind === "prompt";
+  const isCache = draftKind === "cache";
   return {
     id: createId("setting"),
-    title: uniqueName("新建设定", siblingNames),
-    iconId: isReference ? "link" : "",
+    title: uniqueName(isCache ? "新建缓存设定" : "新建设定", siblingNames),
+    iconId: isReference ? "link" : isCache ? "database" : "",
     kind: "normal",
     groupId,
     content: "",
@@ -58,9 +59,9 @@ export function createEntryDraft(groupId, order, entries, draftKind = "standard"
     keywordIgnoreCase: true,
     keywordWholeWord: false,
     keywordRecursionDepth: 0,
-    triggerMode: isPrompt ? "always" : "agent_tool",
-    enabled: isReference,
-    position: isPrompt ? "after_instructions" : null,
+    triggerMode: isCache ? "cache" : isPrompt ? "always" : "agent_tool",
+    enabled: isReference || isCache,
+    position: isPrompt ? "insert_point_1" : null,
     promptPositionId: "",
     insertRole: "user",
     order: 1,
@@ -229,27 +230,24 @@ export function deleteOpening(entry, messageId) {
 
 export const SETTING_LIBRARY_POSITION_OPTIONS = [
   { value: "instructions", label: "系统指令" },
-  { value: "after_instructions", label: "系统指令之后" },
-  { value: "before_history", label: "聊天记录之前" },
-  { value: "after_history", label: "聊天记录之后" },
-  { value: "before_latest_user_input", label: "用户最新输入之前" },
-  { value: "after_latest_user_input", label: "用户最新输入之后" },
-  { value: "before_tool_flow", label: "工具调用流程之前" },
-  { value: "after_tool_flow", label: "工具调用流程之后" },
+  { value: "insert_point_1", label: "设定插入点 1" },
+  { value: "insert_point_2", label: "设定插入点 2" },
+  { value: "insert_point_3", label: "设定插入点 3" },
+  { value: "insert_point_4", label: "设定插入点 4" },
+  { value: "insert_point_5", label: "设定插入点 5" },
 ];
 
 export const SETTING_LIBRARY_PLACEMENT_ROWS = [
   { type: "position", value: "instructions", card: true },
-  { type: "position", value: "after_instructions" },
-  { type: "position", value: "before_history" },
+  { type: "position", value: "insert_point_1", card: true },
+  { type: "context", id: "cache", label: "缓存设定区" },
+  { type: "position", value: "insert_point_2", card: true },
   { type: "context", id: "history", label: "聊天记录" },
-  { type: "position", value: "after_history" },
-  { type: "position", value: "before_latest_user_input" },
+  { type: "position", value: "insert_point_3", card: true },
   { type: "context", id: "latest-user-input", label: "用户最新输入" },
-  { type: "position", value: "after_latest_user_input" },
-  { type: "position", value: "before_tool_flow" },
+  { type: "position", value: "insert_point_4", card: true },
   { type: "context", id: "tool-flow", label: "工具调用流程" },
-  { type: "position", value: "after_tool_flow" },
+  { type: "position", value: "insert_point_5", card: true },
 ];
 
 export function positionOrderScope(entries, position, promptPositionId = "") {

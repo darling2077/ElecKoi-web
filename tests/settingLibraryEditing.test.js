@@ -34,7 +34,9 @@ describe('setting-library editor model', () => {
     const prompt = createEntryDraft('', 3, [standard, reference], 'prompt')
     expect(standard).toMatchObject({ title: '新建设定', enabled: false, triggerMode: 'agent_tool', agentReadStrategy: 'normal', dynamicMode: 'single_condition', position: null })
     expect(reference).toMatchObject({ title: '新建设定 2', enabled: true, triggerMode: 'agent_tool', agentReadStrategy: 'variable_condition', dynamicMode: 'ejs_reference' })
-    expect(prompt).toMatchObject({ title: '新建设定 3', enabled: false, triggerMode: 'always', position: 'after_instructions' })
+    expect(prompt).toMatchObject({ title: '新建设定 3', enabled: false, triggerMode: 'always', position: 'insert_point_1' })
+    const cache = createEntryDraft('', 4, [standard, reference, prompt], 'cache')
+    expect(cache).toMatchObject({ title: '新建缓存设定', iconId: 'database', enabled: true, triggerMode: 'cache', position: null })
     vi.unstubAllGlobals()
   })
 
@@ -63,63 +65,60 @@ describe('setting-library editor model', () => {
 
   it('moves persistent entries through the visual position model and normalizes both scopes', () => {
     const entries = [
-      { id: 'source-first', title: '前置', kind: 'normal', triggerMode: 'always', position: 'after_history', promptPositionId: '', insertRole: 'user', order: 1, enabled: true },
-      { id: 'moving', title: '移动项', kind: 'normal', triggerMode: 'always', position: 'after_history', promptPositionId: '', insertRole: 'assistant', order: 2, enabled: true },
+      { id: 'source-first', title: '前置', kind: 'normal', triggerMode: 'always', position: 'insert_point_3', promptPositionId: '', insertRole: 'user', order: 1, enabled: true },
+      { id: 'moving', title: '移动项', kind: 'normal', triggerMode: 'always', position: 'insert_point_3', promptPositionId: '', insertRole: 'assistant', order: 2, enabled: true },
       { id: 'target-first', title: '系统项', kind: 'normal', triggerMode: 'always', position: 'instructions', promptPositionId: '', insertRole: 'system', order: 1, enabled: true }
     ]
 
     const moved = moveEntryToPosition(entries, 'moving', 'instructions')
     expect(moved.find((entry) => entry.id === 'moving')).toMatchObject({ position: 'instructions', promptPositionId: '', insertRole: 'system', order: 2 })
-    expect(positionOrderScope(moved, 'after_history').map((entry) => [entry.id, entry.order])).toEqual([['source-first', 1]])
+    expect(positionOrderScope(moved, 'insert_point_3').map((entry) => [entry.id, entry.order])).toEqual([['source-first', 1]])
     expect(positionOrderScope(moved, 'instructions').map((entry) => [entry.id, entry.order])).toEqual([['target-first', 1], ['moving', 2]])
 
-    const movedBack = moveEntryToPosition(moved, 'moving', 'before_history')
-    expect(movedBack.find((entry) => entry.id === 'moving')).toMatchObject({ position: 'before_history', insertRole: 'user', order: 1 })
+    const movedBack = moveEntryToPosition(moved, 'moving', 'insert_point_2')
+    expect(movedBack.find((entry) => entry.id === 'moving')).toMatchObject({ position: 'insert_point_2', insertRole: 'user', order: 1 })
   })
 
   it('keeps latest user input as its own core with two independent position buckets', () => {
     expect(SETTING_LIBRARY_POSITION_OPTIONS.map((option) => option.value)).toEqual([
       'instructions',
-      'after_instructions',
-      'before_history',
-      'after_history',
-      'before_latest_user_input',
-      'after_latest_user_input',
-      'before_tool_flow',
-      'after_tool_flow'
+      'insert_point_1',
+      'insert_point_2',
+      'insert_point_3',
+      'insert_point_4',
+      'insert_point_5'
     ])
     expect(SETTING_LIBRARY_PLACEMENT_ROWS.map((row) => row.type === 'context' ? `context:${row.id}` : row.value)).toEqual([
       'instructions',
-      'after_instructions',
-      'before_history',
+      'insert_point_1',
+      'context:cache',
+      'insert_point_2',
       'context:history',
-      'after_history',
-      'before_latest_user_input',
+      'insert_point_3',
       'context:latest-user-input',
-      'after_latest_user_input',
-      'before_tool_flow',
+      'insert_point_4',
       'context:tool-flow',
-      'after_tool_flow'
+      'insert_point_5'
     ])
 
     const entries = [
-      { id: 'moving', title: '移动项', kind: 'normal', triggerMode: 'always', position: 'after_history', promptPositionId: '', insertRole: 'user', order: 1, enabled: true },
-      { id: 'latest-input-prefix', title: '输入前', kind: 'normal', triggerMode: 'always', position: 'before_latest_user_input', promptPositionId: '', insertRole: 'user', order: 1, enabled: true }
+      { id: 'moving', title: '移动项', kind: 'normal', triggerMode: 'always', position: 'insert_point_2', promptPositionId: '', insertRole: 'user', order: 1, enabled: true },
+      { id: 'latest-input-prefix', title: '输入前', kind: 'normal', triggerMode: 'always', position: 'insert_point_3', promptPositionId: '', insertRole: 'user', order: 1, enabled: true }
     ]
-    const beforeLatestInput = moveEntryToPosition(entries, 'moving', 'before_latest_user_input')
-    expect(beforeLatestInput.find((entry) => entry.id === 'moving')).toMatchObject({ position: 'before_latest_user_input', order: 2 })
-    const afterLatestInput = moveEntryToPosition(beforeLatestInput, 'moving', 'after_latest_user_input')
-    expect(afterLatestInput.find((entry) => entry.id === 'moving')).toMatchObject({ position: 'after_latest_user_input', order: 1 })
-    expect(afterLatestInput.find((entry) => entry.id === 'latest-input-prefix')).toMatchObject({ position: 'before_latest_user_input', order: 1 })
+    const beforeLatestInput = moveEntryToPosition(entries, 'moving', 'insert_point_3')
+    expect(beforeLatestInput.find((entry) => entry.id === 'moving')).toMatchObject({ position: 'insert_point_3', order: 2 })
+    const afterLatestInput = moveEntryToPosition(beforeLatestInput, 'moving', 'insert_point_4')
+    expect(afterLatestInput.find((entry) => entry.id === 'moving')).toMatchObject({ position: 'insert_point_4', order: 1 })
+    expect(afterLatestInput.find((entry) => entry.id === 'latest-input-prefix')).toMatchObject({ position: 'insert_point_3', order: 1 })
   })
 
   it('lets a fixed-position click replace a preset-only custom position', () => {
     const entries = [
-      { id: 'moving', title: '移动项', kind: 'normal', triggerMode: 'always', position: 'before_history', promptPositionId: 'preset-position', insertRole: 'assistant', order: 1, enabled: true }
+      { id: 'moving', title: '移动项', kind: 'normal', triggerMode: 'always', position: 'insert_point_2', promptPositionId: 'preset-position', insertRole: 'assistant', order: 1, enabled: true }
     ]
 
-    const moved = moveEntryToPosition(entries, 'moving', 'after_history')
-    expect(moved[0]).toMatchObject({ position: 'after_history', promptPositionId: '', insertRole: 'assistant', order: 1 })
+    const moved = moveEntryToPosition(entries, 'moving', 'insert_point_3')
+    expect(moved[0]).toMatchObject({ position: 'insert_point_3', promptPositionId: '', insertRole: 'assistant', order: 1 })
   })
 
   it('moves tree entries between folders and normalizes both sibling lists', () => {

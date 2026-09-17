@@ -1,10 +1,37 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 import {
   AUTHOR_LIBRARY_VERSIONS,
   prepareAuthorRuntimeLibraries,
 } from '../src/renderer/src/modules/authorFrontend/model/authorRuntimeLibraries.js';
 
+const packageJson = JSON.parse(
+  readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+);
+
+const buildTimeAuthorPackages = [
+  '@fortawesome/fontawesome-free',
+  '@tailwindcss/browser',
+  'jquery',
+  'jquery-ui-dist',
+  'jquery-ui-touch-punch',
+  'lodash',
+  'pixi.js',
+  'showdown',
+  'toastr',
+  'vue',
+  'vue-router',
+];
+
 describe('author runtime libraries', () => {
+  it('keeps browser bundles out of packaged production dependencies', () => {
+    for (const packageName of buildTimeAuthorPackages) {
+      expect(packageJson.dependencies?.[packageName]).toBeUndefined();
+      expect(packageJson.devDependencies?.[packageName]).toBeTypeOf('string');
+    }
+  });
+
   it('publishes every bundled author dependency with a pinned version', () => {
     expect(AUTHOR_LIBRARY_VERSIONS).toEqual({
       fontAwesome: '7.3.1',

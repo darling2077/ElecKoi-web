@@ -2,24 +2,25 @@ import { z } from 'zod'
 
 export const settingLibraryPositionSchema = z.enum([
   'instructions',
-  'after_instructions',
-  'before_history',
-  'after_history',
-  'before_latest_user_input',
-  'after_latest_user_input',
-  'before_tool_flow',
-  'after_tool_flow'
+  'insert_point_1',
+  'insert_point_2',
+  'insert_point_3',
+  'insert_point_4',
+  'insert_point_5'
 ])
 
 export const settingLibraryInsertRoleSchema = z.enum(['system', 'user', 'assistant'])
-export const settingLibraryTriggerModeSchema = z.enum(['always', 'agent_tool'])
+export const settingLibraryTriggerModeSchema = z.enum(['always', 'agent_tool', 'cache'])
+export const settingLibraryPromptPositionSideSchema = z.enum([
+  'before_setting_position',
+  'after_setting_position'
+])
 export const settingLibraryAgentReadStrategySchema = z.enum(['required', 'keyword', 'normal', 'variable_condition'])
 export const settingLibraryDynamicModeSchema = z.enum(['single_condition', 'ejs_controller', 'ejs_reference'])
 export const settingLibraryKeywordConditionSchema = z.enum(['none', 'any', 'all', 'not_any'])
 export const settingLibraryEntryKindSchema = z.enum([
   'normal',
   'opening',
-  'roleplay_plan',
   'history_compaction',
   'hidden_tool_timeline'
 ])
@@ -79,6 +80,7 @@ export const settingLibraryPromptPositionSchema = z.object({
   id: z.string().min(1),
   name: z.string().max(60),
   anchor: settingLibraryPositionSchema,
+  side: settingLibraryPromptPositionSideSchema,
   order: z.number().int().min(1),
   createdAt: z.string(),
   updatedAt: z.string()

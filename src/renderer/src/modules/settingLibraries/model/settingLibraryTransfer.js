@@ -5,13 +5,11 @@ export const SETTING_LIBRARY_EXPORT_VERSION = 3;
 
 const POSITIONS = new Set([
   "instructions",
-  "after_instructions",
-  "before_history",
-  "after_history",
-  "before_latest_user_input",
-  "after_latest_user_input",
-  "before_tool_flow",
-  "after_tool_flow",
+  "insert_point_1",
+  "insert_point_2",
+  "insert_point_3",
+  "insert_point_4",
+  "insert_point_5",
 ]);
 
 function clone(value) {
@@ -38,20 +36,12 @@ function objectList(value) {
   return Array.isArray(value) ? value.filter((item) => item && typeof item === "object" && !Array.isArray(item)) : [];
 }
 
-function isLegacyRoleplayPlanEntry(entry) {
-  return entry?.id === "fixed-roleplay-plan" || entry?.kind === "roleplay_plan";
-}
-
-function currentEntries(entries) {
-  return entries.filter((entry) => !isLegacyRoleplayPlanEntry(entry));
-}
-
 function activeSnapshot(library) {
   const previous = library.versions.find((version) => version.id === library.activeVersionId);
   return {
     id: library.activeVersionId,
     name: library.name,
-    entries: clone(currentEntries(library.entries)),
+    entries: clone(library.entries),
     groups: clone(library.groups),
     promptPositions: clone(library.promptPositions),
     listAllExpanded: library.listAllExpanded,
@@ -78,7 +68,7 @@ function applyVersion(library, version) {
   return {
     ...library,
     name: version.name,
-    entries: clone(currentEntries(version.entries)),
+    entries: clone(version.entries),
     groups: clone(version.groups),
     promptPositions: clone(version.promptPositions),
     activeVersionId: version.id,
@@ -110,11 +100,10 @@ function blankFixedEntries(library) {
 }
 
 function ensureFixedEntries(library, entries) {
-  const sanitized = currentEntries(entries);
-  const byId = new Map(sanitized.map((entry) => [entry.id, entry]));
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
   return [
     ...blankFixedEntries(library).map((entry) => byId.get(entry.id) || entry),
-    ...sanitized.filter((entry) => !PINNED_ENTRY_IDS.has(entry.id)),
+    ...entries.filter((entry) => !PINNED_ENTRY_IDS.has(entry.id)),
   ];
 }
 
@@ -189,7 +178,7 @@ function entryFromJson(value, index) {
     id: text(value.id) || createId("setting"),
     title: text(value.title).slice(0, 120),
     iconId: text(value.icon_id),
-    kind: ["normal", "opening", "roleplay_plan", "history_compaction", "hidden_tool_timeline"].includes(value.kind) ? value.kind : "normal",
+    kind: ["normal", "opening", "history_compaction", "hidden_tool_timeline"].includes(value.kind) ? value.kind : "normal",
     groupId: text(value.group_id),
     content: text(value.content),
     openingMessages: objectList(value.opening_messages).map(openingMessageFromJson),
@@ -206,9 +195,9 @@ function entryFromJson(value, index) {
     keywordIgnoreCase: bool(value.keyword_ignore_case, true),
     keywordWholeWord: bool(value.keyword_whole_word),
     keywordRecursionDepth: Math.max(0, integer(value.keyword_recursion_depth)),
-    triggerMode: ["always", "agent_tool"].includes(triggerMode) ? triggerMode : null,
+    triggerMode: ["always", "agent_tool", "cache"].includes(triggerMode) ? triggerMode : null,
     enabled: bool(value.enabled, true),
-    position: POSITIONS.has(rawPosition) ? rawPosition : null,
+    position: currentPosition(rawPosition),
     promptPositionId: text(value.prompt_position_id),
     insertRole: ["system", "user", "assistant"].includes(value.insert_role) ? value.insert_role : "user",
     order: Math.max(1, integer(value.order, 1)),
@@ -234,10 +223,11 @@ function groupFromJson(value, index) {
 
 function promptPositionFromJson(value, index) {
   const anchor = text(value.anchor);
+  const placement = promptPlacement(anchor, text(value.side));
   return {
     id: text(value.id) || createId("prompt-position"),
     name: text(value.name).slice(0, 60),
-    anchor: POSITIONS.has(anchor) ? anchor : "after_instructions",
+    ...placement,
     order: Math.max(1, integer(value.order, index + 1)),
     createdAt: text(value.created_at),
     updatedAt: text(value.updated_at),
@@ -251,7 +241,7 @@ function parseElecKoiExport(source) {
   return {
     id: createId("import"),
     name: text(source.name, "导入版本"),
-    entries: currentEntries(objectList(source.entries).map(entryFromJson)),
+    entries: objectList(source.entries).map(entryFromJson),
     groups: objectList(source.groups).map(groupFromJson),
     promptPositions: objectList(source.prompt_positions).map(promptPositionFromJson),
     listAllExpanded: bool(source.list_all_expanded, true),
@@ -345,7 +335,7 @@ function parseSillyTavernExport(source) {
       keywordRecursionDepth: 0,
       triggerMode: "agent_tool",
       enabled: Object.hasOwn(item, "enabled") ? bool(item.enabled, true) : !bool(item.disable),
-      position: "after_instructions",
+      position: "insert_point_1",
       promptPositionId: "",
       insertRole: "user",
       order: index + 1,
@@ -371,7 +361,7 @@ function parseSillyTavernExport(source) {
     };
     if (dynamicReferences || referencedTitles.has(rawTitle)) return {
       ...entry,
-      agentSelectionHint: "供 EJS 控制器通过 getwi 读取的引用条目",
+      agentSelectionHint: "供 EJS 控制器通过 getwi 读取的 EJS引用设定",
       agentReadStrategy: "variable_condition",
       dynamicMode: "ejs_reference",
       keywords: [],
@@ -433,16 +423,28 @@ export function serializeSettingLibrary(library) {
     name: current.name,
     list_all_expanded: current.listAllExpanded,
     expanded_group_ids: current.expandedGroupIds,
-    entries: currentEntries(current.entries).map(entryToJson),
+    entries: current.entries.map(entryToJson),
     groups: current.groups.map((group) => ({
       id: group.id, name: group.name, parent_id: group.parentId, order: group.order,
       tree_view_order: group.treeViewOrder, created_at: group.createdAt, updated_at: group.updatedAt,
     })),
     prompt_positions: current.promptPositions.map((position) => ({
-      id: position.id, name: position.name, anchor: position.anchor, order: position.order,
+      id: position.id, name: position.name, anchor: position.anchor, side: position.side, order: position.order,
       created_at: position.createdAt, updated_at: position.updatedAt,
     })),
   }, null, 2);
+}
+
+function currentPosition(value) {
+  return POSITIONS.has(value) ? value : null;
+}
+
+function promptPlacement(anchor, side) {
+  if (POSITIONS.has(anchor)) return {
+    anchor,
+    side: side === "after_setting_position" ? "after_setting_position" : "before_setting_position",
+  };
+  return { anchor: "insert_point_1", side: "before_setting_position" };
 }
 
 function requiredGroupIds(sourceEntries, sourceGroups, selectedEntryIds) {

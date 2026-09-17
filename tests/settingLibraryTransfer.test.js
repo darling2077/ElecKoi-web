@@ -16,7 +16,7 @@ function entry(id, title, groupId = "", order = 1) {
     agentReadCondition: "", dynamicMode: "single_condition", keywords: [], keywordScanDepth: 1,
     conditionKeywords: [], keywordCondition: "none", keywordUseRegex: false, keywordIgnoreCase: true,
     keywordWholeWord: false, keywordRecursionDepth: 0, triggerMode: "always", enabled: true,
-    position: "after_instructions", promptPositionId: "", insertRole: "user", order,
+    position: "insert_point_1", promptPositionId: "", insertRole: "user", order,
     viewOrder: order, groupViewOrder: order, treeViewOrder: order, createdAt: "", updatedAt: "",
   };
 }
@@ -32,7 +32,6 @@ function version(id, name, entries, groups = []) {
 function library() {
   const fixedEntries = [
     fixed("fixed-opening-assistant", "opening", "AI角色开场白"),
-    fixed("fixed-roleplay-plan", "roleplay_plan", "角色扮演任务计划"),
   ];
   const first = version("v1", "第一版", [...fixedEntries, entry("a", "旧设定")]);
   const second = version("v2", "第二版", [...fixedEntries, entry("b", "第二版设定")]);

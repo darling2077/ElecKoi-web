@@ -189,6 +189,6 @@ CREATE VIEW `setting_library_version_entries` AS SELECT link.characterId, link.v
         JOIN setting_entry_contents AS content ON content.characterId = link.characterId
           AND content.entryId = link.entryId AND content.revisionId = link.revisionId;
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 
 COMMIT;

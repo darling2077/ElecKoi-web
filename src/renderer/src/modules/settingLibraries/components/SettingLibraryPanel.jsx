@@ -5,9 +5,8 @@ import {
   ChatCircleDots,
   Code,
   Copy,
-  FilePlus,
+  Database,
   FileText,
-  FolderPlus,
   LinkSimple,
   MagnifyingGlass,
   PencilSimple,
@@ -16,6 +15,7 @@ import {
 } from "@phosphor-icons/react";
 import { getSettingLibrary, saveSettingLibrary, saveSettingLibraryViewState } from "../api/settingLibraryApi.js";
 import { DshFolderClosedIcon } from "../../../ui/icons/dshTreeIcons.jsx";
+import { SETTING_LIBRARY_CREATE_ICONS } from "../../../ui/icons/settingLibraryCreateIcons.jsx";
 import { SettingLibraryManager } from "./SettingLibraryManager.jsx";
 import { ConfirmationDialog, SaveControl } from "./SettingLibraryControls.jsx";
 import { SettingLibraryInspector } from "./SettingLibraryInspector.jsx";
@@ -38,10 +38,16 @@ import {
   treeNodes,
 } from "../model/settingLibraryTree.js";
 
+const CreateFolderIcon = SETTING_LIBRARY_CREATE_ICONS.group;
+const CreateEntryIcon = SETTING_LIBRARY_CREATE_ICONS.entry;
+const CreateReferenceIcon = SETTING_LIBRARY_CREATE_ICONS.reference;
+const CreateCacheIcon = SETTING_LIBRARY_CREATE_ICONS.cache;
+
 function nodeIcon(entry) {
   if (entry?.kind === "opening") return ChatCircleDots;
   if (entry?.dynamicMode === "ejs_controller") return Code;
   if (entry?.dynamicMode === "ejs_reference") return LinkSimple;
+  if (entry?.triggerMode === "cache") return Database;
   return FileText;
 }
 
@@ -252,7 +258,7 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
       nextLibrary = { ...sourceLibrary, groups: [...sourceLibrary.groups, group] };
       nextKey = nodeKey("group", group.id);
     } else {
-      const entry = createEntryDraft(parentId, order, sourceLibrary.entries, kind === "reference" ? "reference" : "standard");
+      const entry = createEntryDraft(parentId, order, sourceLibrary.entries, kind === "reference" ? "reference" : kind === "cache" ? "cache" : "standard");
       nextLibrary = { ...sourceLibrary, entries: [...sourceLibrary.entries, entry] };
       nextKey = nodeKey("entry", entry.id);
     }
@@ -276,10 +282,10 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
     setDeleteTarget({
       kind,
       id,
-      title: kind === "group" ? `删除“${name}”？` : isReference ? "删除这条引用条目？" : `删除“${name || "未命名设定"}”？`,
+      title: kind === "group" ? `删除“${name}”？` : isReference ? "删除这条 EJS引用设定？" : `删除“${name || "未命名设定"}”？`,
       message: kind === "group"
         ? "文件夹内的设定也会一起删除。"
-        : isReference ? `使用它的控制器将无法再通过 getwi 读取“${name || "未命名引用条目"}”。` : "此操作会在保存后生效。",
+        : isReference ? `使用它的控制器将无法再通过 getwi 读取“${name || "未命名 EJS引用设定"}”。` : "此操作会在保存后生效。",
     });
     setContextMenu(null);
   }
@@ -440,9 +446,10 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
             <button type="button" className="setting-library-create-button" aria-label="新建" aria-expanded={menuOpen} onClick={() => setMenuOpen((open) => !open)}><Plus size={16} />新建</button>
             {menuOpen ? (
               <div className="setting-library-popover" role="menu">
-                <button type="button" role="menuitem" onClick={() => requestAddNode("group")}><FolderPlus size={16} />文件夹</button>
-                <button type="button" role="menuitem" onClick={() => requestAddNode("entry")}><FilePlus size={16} />设定</button>
-                <button type="button" role="menuitem" onClick={() => requestAddNode("reference")}><LinkSimple size={16} />引用条目</button>
+                <button type="button" role="menuitem" onClick={() => requestAddNode("group")}><CreateFolderIcon size={16} />文件夹</button>
+                <button type="button" role="menuitem" onClick={() => requestAddNode("entry")}><CreateEntryIcon size={16} />设定</button>
+                <button type="button" role="menuitem" onClick={() => requestAddNode("reference")}><CreateReferenceIcon size={16} />EJS引用设定</button>
+                <button type="button" role="menuitem" onClick={() => requestAddNode("cache")}><CreateCacheIcon size={16} />缓存设定</button>
               </div>
             ) : null}
           </div>
@@ -498,6 +505,7 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
         <SettingLibraryInspector
           selected={selected}
           library={library}
+          allowCustomPromptPositions={false}
           nameInputRef={nameInputRef}
           SelectedIcon={SelectedIcon}
           onClose={requestCloseInspector}
@@ -515,9 +523,10 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
         <div className="setting-library-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onMouseDown={(event) => event.stopPropagation()}>
           {contextMenu.kind === "background" || contextMenu.kind === "group" ? (
             <>
-              <button type="button" role="menuitem" onClick={() => requestAddNode("group", contextMenu.parentId)}><FolderPlus size={15} />新建文件夹</button>
-              <button type="button" role="menuitem" onClick={() => requestAddNode("entry", contextMenu.parentId)}><FilePlus size={15} />新建设定</button>
-              <button type="button" role="menuitem" onClick={() => requestAddNode("reference", contextMenu.parentId)}><LinkSimple size={15} />新建引用条目</button>
+              <button type="button" role="menuitem" onClick={() => requestAddNode("group", contextMenu.parentId)}><CreateFolderIcon size={15} />新建文件夹</button>
+              <button type="button" role="menuitem" onClick={() => requestAddNode("entry", contextMenu.parentId)}><CreateEntryIcon size={15} />新建设定</button>
+              <button type="button" role="menuitem" onClick={() => requestAddNode("reference", contextMenu.parentId)}><CreateReferenceIcon size={15} />新建 EJS引用设定</button>
+              <button type="button" role="menuitem" onClick={() => requestAddNode("cache", contextMenu.parentId)}><CreateCacheIcon size={15} />新建缓存设定</button>
             </>
           ) : null}
           {contextMenu.kind === "entry" ? <button type="button" role="menuitem" onClick={() => duplicateEntry(contextMenu.id)}><Copy size={15} />复制</button> : null}

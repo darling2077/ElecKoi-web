@@ -62,24 +62,24 @@ describe('DSH trajectory projection', () => {
     ], { createdAt: 990 })
 
     expect(result.records.map((record) => record.kind)).toEqual([
-      'system', 'user', 'context', 'assistant', 'tool'
+      'user', 'context', 'assistant', 'tool'
     ])
-    expect(result.records.map((record) => record.index)).toEqual([1, 2, 3, 4, 5])
-    expect(result.records[0]).toMatchObject({ title: '初始系统提示词', turn: 1, step: 1 })
-    expect(result.records[2]).toMatchObject({ title: 'Agent 指令', source: 'agent-instructions' })
-    expect(result.records[3]).toMatchObject({
+    expect(result.records.map((record) => record.index)).toEqual([1, 2, 3, 4])
+    expect(result.records[1]).toMatchObject({ title: 'Agent 指令', source: 'agent-instructions' })
+    expect(result.records[2]).toMatchObject({
       durationMillis: 190,
       output: '我来查看',
       requests: [{ number: 1, seq: 1, provider: 'deepseek-official', model: 'deepseek-chat' }]
     })
-    expect(result.records[4]).toMatchObject({
+    expect(result.records[3]).toMatchObject({
       title: 'read',
       input: '{\n  "path": "README.md"\n}',
       output: '文件内容',
       durationMillis: 50,
       status: 'complete'
     })
-    expect(JSON.parse(result.records[4]?.rawJson ?? '[]')).toHaveLength(2)
+    expect(JSON.parse(result.records[3]?.rawJson ?? '[]')).toHaveLength(2)
+    expect(JSON.stringify(result)).not.toContain('系统提示词')
     expect(result).toMatchObject({ startedAtMillis: 990, completedAtMillis: 1_270 })
   })
 
@@ -103,14 +103,14 @@ describe('DSH trajectory projection', () => {
 
     const latest = readDshTrajectory(root, runtimeThreadId, { limit: 2 })
     expect(latest.records.map((record) => record.kind)).toEqual(['tool', 'assistant'])
-    expect(latest).toMatchObject({ totalRecords: 4, hasMore: true, beforeIndex: 3 })
+    expect(latest).toMatchObject({ totalRecords: 3, hasMore: true, beforeIndex: 2 })
 
     const older = readDshTrajectory(root, runtimeThreadId, { beforeIndex: latest.beforeIndex ?? undefined, limit: 2 })
-    expect(older.records.map((record) => record.kind)).toEqual(['system', 'user'])
-    expect(older).toMatchObject({ totalRecords: 4, hasMore: false, beforeIndex: 1 })
+    expect(older.records.map((record) => record.kind)).toEqual(['user'])
+    expect(older).toMatchObject({ totalRecords: 3, hasMore: false, beforeIndex: 1 })
   })
 
-  it('numbers every model request while emitting the system row only when the prompt changes', () => {
+  it('numbers every model request while omitting DSH internal system prompts', () => {
     const result = projectDshTrajectory([
       event(0, 'turn/start', { turn: 1 }, 1_000),
       event(1, 'step/start', { turn: 1, step: 1 }, 1_010),
@@ -135,9 +135,11 @@ describe('DSH trajectory projection', () => {
       }, 1_060)
     ])
 
-    expect(result.records.map((record) => record.kind)).toEqual(['system', 'assistant', 'assistant'])
+    expect(result.records.map((record) => record.kind)).toEqual(['assistant', 'assistant'])
     expect(result.records.flatMap((record) => record.requests.map((request) => request.number))).toEqual([1, 2])
+    expect(JSON.stringify(result)).not.toContain('系统提示词')
   })
+
 })
 
 function event(seq: number, type: string, data: Record<string, unknown>, time: number) {

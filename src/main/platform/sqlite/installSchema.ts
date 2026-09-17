@@ -6,12 +6,14 @@ import {
   migration0002,
   normalizeAgentPresetStorage
 } from './migrations/0002RuntimeClean'
+import { migration0003 } from './migrations/0003SettingPlacements'
 import { commonSchemaSql } from './migrations/commonSchemaSql'
 
 export const BASELINE_ID = 'eleckoi-common'
-export const CURRENT_SCHEMA_VERSION = 2
+export const CURRENT_SCHEMA_VERSION = 3
+const PRE_RELEASE_V2_SCHEMA_VERSION = 2
 const PRE_RELEASE_V2_BASELINES = [BASELINE_ID, 'eleckoi-common-v1-2026-09-14-runtime-clean'] as const
-const migrations = [migration0002] as const
+const migrations = [migration0002, migration0003] as const
 const desktopSql = `
   CREATE TABLE desktop_schema (id INTEGER PRIMARY KEY CHECK(id = 1), baseline TEXT NOT NULL);
   CREATE TABLE desktop_preferences (key TEXT PRIMARY KEY, valueJson TEXT NOT NULL, updatedAt TEXT NOT NULL);
@@ -68,7 +70,7 @@ function migrate(database: Database.Database, baseline: string, version: number)
 function normalizePreReleaseV2(database: Database.Database, baseline: string, version: number): void {
   const oldStorage = isLegacyDevelopmentV2Storage(database)
   const oldPresetStorage = !oldStorage && hasPreReleaseV2PresetStorage(database)
-  if (version !== CURRENT_SCHEMA_VERSION || (baseline === BASELINE_ID && !oldStorage && !oldPresetStorage)) return
+  if (version !== PRE_RELEASE_V2_SCHEMA_VERSION || (baseline === BASELINE_ID && !oldStorage && !oldPresetStorage)) return
   if (!(PRE_RELEASE_V2_BASELINES as readonly string[]).includes(baseline)) {
     throw new Error('无法识别开发数据库 v2 的结构标识，拒绝猜测或删除数据。')
   }

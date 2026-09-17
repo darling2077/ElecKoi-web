@@ -1,7 +1,8 @@
-import type { SettingLibraryEntry } from '../settingLibrary/schemas'
+import type { SettingLibraryEntry, SettingLibraryPromptPosition } from '../settingLibrary/schemas'
 
 export const HIDDEN_TOOL_TIMELINE_ENTRY_ID = 'built-in-hidden-tool-timeline'
 export const HIDDEN_TOOL_TIMELINE_ENTRY_TITLE = '隐藏工具时间线'
+export const HIDDEN_TOOL_TIMELINE_PROMPT_POSITION_ID = 'hidden-tool-timeline'
 export const HISTORY_COMPACTION_ENTRY_ID = 'built-in-roleplay-history-compaction'
 export const HISTORY_COMPACTION_ENTRY_TITLE = '自动压缩摘要模板'
 
@@ -54,6 +55,45 @@ export function withRequiredAgentPresetEntries(entries: SettingLibraryEntry[]): 
   ))]
 }
 
+export function withRequiredAgentPresetPromptPositions(
+  positions: SettingLibraryPromptPosition[]
+): SettingLibraryPromptPosition[] {
+  const timestamp = new Date().toISOString()
+  const required = {
+    id: HIDDEN_TOOL_TIMELINE_PROMPT_POSITION_ID,
+    name: HIDDEN_TOOL_TIMELINE_ENTRY_TITLE,
+    anchor: 'insert_point_4' as const,
+    side: 'before_setting_position' as const,
+    order: 1,
+    createdAt: timestamp,
+    updatedAt: timestamp
+  }
+  const next = positions.some((position) => position.id === required.id)
+    ? positions
+    : [...positions, required]
+  return normalizePromptPositions(next)
+}
+
+export function normalizeAgentPresetPrompts(
+  entries: SettingLibraryEntry[],
+  positions: SettingLibraryPromptPosition[]
+): { entries: SettingLibraryEntry[]; promptPositions: SettingLibraryPromptPosition[] } {
+  const requiredEntries = withRequiredAgentPresetEntries(entries)
+  const promptPositions = withRequiredAgentPresetPromptPositions(positions)
+  const positionsById = new Map(promptPositions.map((position) => [position.id, position]))
+  const normalizedEntries = requiredEntries.map((entry) => {
+    const customPosition = positionsById.get(entry.promptPositionId)
+    if (isHiddenToolTimelineEntry(entry)) {
+      return customPosition === undefined ? entry : { ...entry, position: customPosition.anchor }
+    }
+    if (isHistoryCompactionEntry(entry) || entry.triggerMode !== 'always') return entry
+    if (customPosition !== undefined) return { ...entry, position: customPosition.anchor }
+    if (entry.position === 'instructions') return { ...entry, promptPositionId: '' }
+    return { ...entry, position: null, promptPositionId: '', enabled: false }
+  })
+  return { entries: normalizedEntries, promptPositions }
+}
+
 export function presetHistoryCompactionInstructions(entries: SettingLibraryEntry[]): string | undefined {
   const entry = entries.find(isHistoryCompactionEntry)
   if (!entry?.enabled) return undefined
@@ -67,7 +107,8 @@ function hiddenToolTimelineEntry(existing?: SettingLibraryEntry): SettingLibrary
     kind: 'hidden_tool_timeline' as const,
     content: DEFAULT_HIDDEN_TOOL_TIMELINE_CONTENT,
     triggerMode: 'always' as const,
-    position: 'after_tool_flow' as const,
+    position: 'insert_point_4' as const,
+    promptPositionId: HIDDEN_TOOL_TIMELINE_PROMPT_POSITION_ID,
     insertRole: 'user' as const
   }
   return {
@@ -77,6 +118,24 @@ function hiddenToolTimelineEntry(existing?: SettingLibraryEntry): SettingLibrary
     groupId: '',
     treeViewOrder: Number.MIN_SAFE_INTEGER
   }
+}
+
+function normalizePromptPositions(
+  positions: SettingLibraryPromptPosition[]
+): SettingLibraryPromptPosition[] {
+  const anchorOrder = new Map(['instructions', 'insert_point_1', 'insert_point_2', 'insert_point_3', 'insert_point_4', 'insert_point_5'].map((value, index) => [value, index]))
+  const ordered = [...positions].sort((left, right) =>
+    (anchorOrder.get(left.anchor) ?? Number.MAX_SAFE_INTEGER) - (anchorOrder.get(right.anchor) ?? Number.MAX_SAFE_INTEGER)
+    || left.side.localeCompare(right.side)
+    || left.order - right.order
+    || left.id.localeCompare(right.id))
+  const counts = new Map<string, number>()
+  return ordered.map((position) => {
+    const key = `${position.anchor}:${position.side}`
+    const order = (counts.get(key) ?? 0) + 1
+    counts.set(key, order)
+    return { ...position, order }
+  })
 }
 
 function historyCompactionEntry(existing?: SettingLibraryEntry): SettingLibraryEntry {

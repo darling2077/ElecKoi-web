@@ -10,6 +10,7 @@ import { buildPresetListSections, PresetListRow, presetListContextActions, shoul
 import { createEntryDraft } from '../src/renderer/src/modules/settingLibraries/model/settingLibraryEditing.js';
 import { SettingLibraryInspector } from '../src/renderer/src/modules/settingLibraries/components/SettingLibraryInspector.jsx';
 import { TrashIcon } from '../src/renderer/src/ui/icons/index.jsx';
+import { SETTING_LIBRARY_CREATE_ICONS } from '../src/renderer/src/ui/icons/settingLibraryCreateIcons.jsx';
 
 vi.mock('../src/renderer/src/modules/settingLibraries/index.js', async () => {
   const drafts = await import('../src/renderer/src/modules/settingLibraries/model/settingLibraryEditing.js');
@@ -23,6 +24,22 @@ const preset = { id: 'test', name: '测试', groups: [], entries: [], regexRules
 const props = { preset, onChange: () => {}, saveAction: null };
 
 describe('preset list consistency', () => {
+  it('shares Android-aligned create icons between preset prompts and setting libraries', () => {
+    const FolderIcon = SETTING_LIBRARY_CREATE_ICONS.group;
+    const EntryIcon = SETTING_LIBRARY_CREATE_ICONS.entry;
+    expect(renderToStaticMarkup(<FolderIcon size={17} />)).toContain('data-icon="dsh-project-add"');
+    expect(renderToStaticMarkup(<EntryIcon size={17} />)).toContain('data-icon="setting-library-entry"');
+
+    for (const file of [
+      '../src/renderer/src/modules/presets/components/PresetPromptEditor.jsx',
+      '../src/renderer/src/modules/settingLibraries/components/SettingLibraryPanel.jsx',
+    ]) {
+      const source = readFileSync(new URL(file, import.meta.url), 'utf8');
+      expect(source).toContain('SETTING_LIBRARY_CREATE_ICONS');
+      expect(source).not.toMatch(/\b(?:FolderPlus|FilePlus)\b/);
+    }
+  });
+
   it('uses the Agent preset title in the sidebar', () => {
     const source = readFileSync(new URL('../src/renderer/src/modules/presets/components/PresetPanel.jsx', import.meta.url), 'utf8');
     expect(source).toContain('<h2>Agent预设</h2>');
@@ -143,7 +160,7 @@ describe('preset list consistency', () => {
       title: '隐藏工具时间线',
       iconId: 'timeline',
       kind: 'hidden_tool_timeline',
-      position: 'after_tool_flow',
+      position: 'insert_point_4',
     };
     const html = renderToStaticMarkup(<SettingLibraryInspector
       selected={{ kind: 'entry', value: hidden }}
@@ -186,8 +203,8 @@ describe('preset list consistency', () => {
 
   it('shows only tool groups included by the preset and uses add instead of new', () => {
     const toolGroups = [
-      { id: 'builtin:variables', name: '剧情变量', description: '读取剧情变量', source: 'built_in', enabled: true, members: [{ name: 'read_variables', description: '' }] },
-      { id: 'builtin:web', name: '联网搜索', description: '搜索最新信息', source: 'built_in', enabled: false, members: [{ name: 'web_search', description: '' }] },
+      { id: 'builtin:variables', name: '剧情变量', description: '读取剧情变量', source: 'built_in', included: true, enabled: true, members: [{ name: 'read_variables', description: '' }] },
+      { id: 'builtin:web', name: '联网搜索', description: '搜索最新信息', source: 'built_in', included: false, enabled: false, members: [{ name: 'web_search', description: '' }] },
     ];
     const html = renderToStaticMarkup(<PresetToolsEditor {...props} preset={{ ...preset, toolGroups }} />);
     expect(html).toContain('placeholder="搜索工具"');

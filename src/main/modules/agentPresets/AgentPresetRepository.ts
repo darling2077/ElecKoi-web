@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { and, asc, eq } from 'drizzle-orm'
 import { z } from 'zod'
@@ -22,6 +22,7 @@ import {
   agentPresetVersions
 } from '@main/platform/sqlite/schema/common'
 import type { AgentToolGroup } from '@shared/contracts/agent/tools'
+import { DESKTOP_ERROR_CODES, DesktopError } from '@shared/contracts/gateway/DesktopError'
 import { regexRuleSchema } from '@shared/contracts/regex/schemas'
 import type {
   SettingLibraryEntry,
@@ -35,7 +36,7 @@ import {
 import {
   isHistoryCompactionEntry,
   isHiddenToolTimelineEntry,
-  withRequiredAgentPresetEntries
+  normalizeAgentPresetPrompts
 } from '@shared/contracts/presets/builtIns'
 import type {
   AgentPreset,
@@ -76,8 +77,15 @@ import {
   projectAgentPresetRuntimeSelection
 } from './AgentPresetRuntime'
 
+const currentEntrySchema = settingLibraryEntrySchema
+const currentPromptPositionSchema = settingLibraryPromptPositionSchema
+
 export const DEFAULT_AGENT_PRESET_ID = 'agent-preset-standard'
 const DEFAULT_AGENT_PRESET_VERSION_ID = 'agent-preset-standard-v1'
+
+function regexRulesRevision(rules: AgentPreset['regexRules']): string {
+  return createHash('sha256').update(JSON.stringify(rules)).digest('hex')
+}
 const CONTENT_TIMELINE = 'timeline'
 const CONTENT_USAGE_INSTRUCTIONS = 'usage_instructions'
 const CONTENT_PROMPT_POSITIONS = 'prompt_positions'
@@ -193,10 +201,14 @@ export class AgentPresetRepository {
       : undefined
     const entries = this.store.db.select().from(agentPresetEntries).where(eq(agentPresetEntries.presetId, row.id))
       .orderBy(asc(agentPresetEntries.sortIndex)).all()
-      .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设提示词')))
+      .map((item) => currentEntrySchema.parse(parseObject(item.payloadJson, '预设提示词')))
     const groups = this.store.db.select().from(agentPresetGroups).where(eq(agentPresetGroups.presetId, row.id))
       .orderBy(asc(agentPresetGroups.sortIndex)).all()
       .map((item) => settingLibraryGroupSchema.parse(parseObject(item.payloadJson, '预设提示词分组')))
+    const prompts = normalizeAgentPresetPrompts(
+      entries,
+      parseList(contents.get(CONTENT_PROMPT_POSITIONS) ?? '[]', currentPromptPositionSchema, '预设提示词位置')
+    )
     const toolConfiguration = this.readToolConfiguration(contents.get(CONTENT_TOOL_CONFIGURATION))
     return agentPresetSchema.parse({
       id: row.id,
@@ -212,9 +224,9 @@ export class AgentPresetRepository {
         usageInstructions: contents.get(CONTENT_USAGE_INSTRUCTIONS) ?? '',
         timeline: parseList(contents.get(CONTENT_TIMELINE) ?? '[]', agentPresetTimelineItemSchema, '预设更新时间线')
       },
-      entries,
+      entries: prompts.entries,
       groups,
-      promptPositions: parseList(contents.get(CONTENT_PROMPT_POSITIONS) ?? '[]', settingLibraryPromptPositionSchema, '预设提示词位置'),
+      promptPositions: prompts.promptPositions,
       toolGroups: toolConfiguration.toolGroups,
       subagentModelSelection: toolConfiguration.subagentModelSelection,
       roleplayPlan: toolConfiguration.roleplayPlan,
@@ -223,9 +235,18 @@ export class AgentPresetRepository {
     })
   }
 
-  save(input: AgentPreset): AgentPreset {
+  save(input: AgentPreset, expectedRegexRules?: AgentPreset['regexRules']): AgentPreset {
     const normalized = normalizePreset(input)
     if (!this.exists(normalized.id)) throw new Error('找不到要保存的预设。')
+    if (expectedRegexRules) {
+      const expected = expectedRegexRules.map((rule, order) => regexRuleSchema.parse({ ...rule, order }))
+      if (regexRulesRevision(this.get(normalized.id).regexRules) !== regexRulesRevision(expected)) {
+        throw new DesktopError(
+          DESKTOP_ERROR_CODES.CONFLICT,
+          '当前预设正则已在其他窗口更新，请重新打开后再保存。'
+        )
+      }
+    }
     this.store.withWriteTx((db) => {
       db.update(agentPresets).set({
         name: normalized.name,
@@ -480,6 +501,7 @@ export class AgentPresetRepository {
     presetId: string
     presetName: string
     rules: AgentPreset['regexRules']
+    revision: string
   } {
     if (db === this.store.db) this.ensureInitialized()
     const state = db.select().from(agentPresetState).where(eq(agentPresetState.singletonId, 1)).get()
@@ -491,10 +513,12 @@ export class AgentPresetRepository {
       eq(agentPresetContents.presetId, preset.id),
       eq(agentPresetContents.kind, CONTENT_REGEX_RULES)
     )).get()
+    const rules = parseList(content?.content ?? '[]', regexRuleSchema, '预设正则')
     return {
       presetId: preset.id,
       presetName: preset.name,
-      rules: parseList(content?.content ?? '[]', regexRuleSchema, '预设正则')
+      rules,
+      revision: regexRulesRevision(rules)
     }
   }
 
@@ -544,19 +568,56 @@ export class AgentPresetRepository {
       for (const preset of presets) {
         const entries = db.select().from(agentPresetEntries).where(eq(agentPresetEntries.presetId, preset.id))
           .orderBy(asc(agentPresetEntries.sortIndex)).all()
-          .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设提示词')))
-        const required = withRequiredAgentPresetEntries(entries)
-        if (JSON.stringify(required) !== JSON.stringify(entries)) replaceEntries(db, preset.id, required)
+          .map((item) => currentEntrySchema.parse(parseObject(item.payloadJson, '预设提示词')))
+        const contents = db.select().from(agentPresetContents).where(and(
+          eq(agentPresetContents.presetId, preset.id),
+          eq(agentPresetContents.kind, CONTENT_PROMPT_POSITIONS)
+        )).get()
+        const positions = parseList(contents?.content ?? '[]', currentPromptPositionSchema, '预设提示词位置')
+        const normalized = normalizeAgentPresetPrompts(entries, positions)
+        if (JSON.stringify(normalized.entries) !== JSON.stringify(entries)) {
+          replaceEntries(db, preset.id, normalized.entries)
+        }
+        if (JSON.stringify(normalized.promptPositions) !== JSON.stringify(positions)) {
+          db.insert(agentPresetContents).values({
+            presetId: preset.id,
+            kind: CONTENT_PROMPT_POSITIONS,
+            content: JSON.stringify(normalized.promptPositions)
+          }).onConflictDoUpdate({
+            target: [agentPresetContents.presetId, agentPresetContents.kind],
+            set: { content: JSON.stringify(normalized.promptPositions) }
+          }).run()
+        }
 
-        if (!preset.versionId) continue
-        const versionEntries = db.select().from(agentPresetVersionEntries).where(and(
-          eq(agentPresetVersionEntries.presetId, preset.id),
-          eq(agentPresetVersionEntries.versionId, preset.versionId)
-        )).orderBy(asc(agentPresetVersionEntries.sortIndex)).all()
-          .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设版本提示词')))
-        const requiredVersionEntries = withRequiredAgentPresetEntries(versionEntries)
-        if (JSON.stringify(requiredVersionEntries) !== JSON.stringify(versionEntries)) {
-          replaceVersionEntries(db, preset.id, preset.versionId, requiredVersionEntries)
+        const versions = db.select({ versionId: agentPresetVersions.versionId }).from(agentPresetVersions)
+          .where(eq(agentPresetVersions.presetId, preset.id)).all()
+        for (const version of versions) {
+          const versionEntries = db.select().from(agentPresetVersionEntries).where(and(
+            eq(agentPresetVersionEntries.presetId, preset.id),
+            eq(agentPresetVersionEntries.versionId, version.versionId)
+          )).orderBy(asc(agentPresetVersionEntries.sortIndex)).all()
+            .map((item) => currentEntrySchema.parse(parseObject(item.payloadJson, '预设版本提示词')))
+          const versionContent = db.select().from(agentPresetVersionContents).where(and(
+            eq(agentPresetVersionContents.presetId, preset.id),
+            eq(agentPresetVersionContents.versionId, version.versionId),
+            eq(agentPresetVersionContents.kind, CONTENT_PROMPT_POSITIONS)
+          )).get()
+          const versionPositions = parseList(versionContent?.content ?? '[]', currentPromptPositionSchema, '预设版本提示词位置')
+          const normalizedVersion = normalizeAgentPresetPrompts(versionEntries, versionPositions)
+          if (JSON.stringify(normalizedVersion.entries) !== JSON.stringify(versionEntries)) {
+            replaceVersionEntries(db, preset.id, version.versionId, normalizedVersion.entries)
+          }
+          if (JSON.stringify(normalizedVersion.promptPositions) !== JSON.stringify(versionPositions)) {
+            db.insert(agentPresetVersionContents).values({
+              presetId: preset.id,
+              versionId: version.versionId,
+              kind: CONTENT_PROMPT_POSITIONS,
+              content: JSON.stringify(normalizedVersion.promptPositions)
+            }).onConflictDoUpdate({
+              target: [agentPresetVersionContents.presetId, agentPresetVersionContents.versionId, agentPresetVersionContents.kind],
+              set: { content: JSON.stringify(normalizedVersion.promptPositions) }
+            }).run()
+          }
         }
       }
     })
@@ -586,6 +647,14 @@ export class AgentPresetRepository {
           eq(agentPresetVersionContents.versionId, version.versionId)
         )).all().map((row) => [row.kind, row.content]))
         const toolConfiguration = this.readToolConfiguration(contents.get(CONTENT_TOOL_CONFIGURATION))
+        const prompts = normalizeAgentPresetPrompts(
+          this.store.db.select().from(agentPresetVersionEntries).where(and(
+            eq(agentPresetVersionEntries.presetId, presetId),
+            eq(agentPresetVersionEntries.versionId, version.versionId)
+          )).orderBy(asc(agentPresetVersionEntries.sortIndex)).all()
+            .map((item) => currentEntrySchema.parse(parseObject(item.payloadJson, '预设版本提示词'))),
+          parseList(contents.get(CONTENT_PROMPT_POSITIONS) ?? '[]', currentPromptPositionSchema, '预设版本提示词位置')
+        )
         return {
           id: version.versionId,
           number: version.versionNumber,
@@ -593,17 +662,13 @@ export class AgentPresetRepository {
           createdAtEpochMs: version.createdAtEpochMs,
           usageInstructions: contents.get(CONTENT_USAGE_INSTRUCTIONS) ?? '',
           timeline: parseList(contents.get(CONTENT_TIMELINE) ?? '[]', agentPresetTimelineItemSchema, '预设版本更新时间线'),
-          entries: this.store.db.select().from(agentPresetVersionEntries).where(and(
-            eq(agentPresetVersionEntries.presetId, presetId),
-            eq(agentPresetVersionEntries.versionId, version.versionId)
-          )).orderBy(asc(agentPresetVersionEntries.sortIndex)).all()
-            .map((item) => settingLibraryEntrySchema.parse(parseObject(item.payloadJson, '预设版本提示词'))),
+          entries: prompts.entries,
           groups: this.store.db.select().from(agentPresetVersionGroups).where(and(
             eq(agentPresetVersionGroups.presetId, presetId),
             eq(agentPresetVersionGroups.versionId, version.versionId)
           )).orderBy(asc(agentPresetVersionGroups.sortIndex)).all()
             .map((item) => settingLibraryGroupSchema.parse(parseObject(item.payloadJson, '预设版本提示词分组'))),
-          promptPositions: parseList(contents.get(CONTENT_PROMPT_POSITIONS) ?? '[]', settingLibraryPromptPositionSchema, '预设版本提示词位置'),
+          promptPositions: prompts.promptPositions,
           toolGroups: toolConfiguration.toolGroups,
           roleplayPlan: toolConfiguration.roleplayPlan,
           regexRules: parseList(contents.get(CONTENT_REGEX_RULES) ?? '[]', regexRuleSchema, '预设版本正则'),
@@ -653,7 +718,8 @@ function rebaseTransferContent(
 ): AgentPresetTransferContent {
   const sourceGroups = distinctById(content.groups)
   const groupIds = new Map(sourceGroups.map((group, index) => [group.id, `${presetId}-${scope}-group-${index + 1}`]))
-  const sourcePositions = distinctById(content.promptPositions)
+  const normalizedPrompts = normalizeAgentPresetPrompts(content.entries, distinctById(content.promptPositions))
+  const sourcePositions = normalizedPrompts.promptPositions
   const promptPositionIds = new Map(sourcePositions.map((position, index) => [position.id, `${presetId}-${scope}-position-${index + 1}`]))
   const includedIds = new Set(content.toolGroups.filter((group) => group.included).map((group) => group.id))
   const enabledIds = new Set(content.toolGroups.filter((group) => group.included && group.enabled).map((group) => group.id))
@@ -668,7 +734,7 @@ function rebaseTransferContent(
       createdAt: timestamp,
       updatedAt: timestamp
     })),
-    entries: withRequiredAgentPresetEntries(content.entries).map((entry, index) => ({
+    entries: normalizedPrompts.entries.map((entry, index) => ({
       ...entry,
       id: isHistoryCompactionEntry(entry)
         ? entry.id
@@ -757,6 +823,7 @@ function portableAvatar(reference: string, mediaAssets?: LocalMediaStore): {
 function normalizePreset(input: AgentPreset): AgentPreset {
   const validGroupIds = new Set(input.groups.map((group) => group.id))
   const validToolIds = new Set(AGENT_TOOL_GROUPS.map((group) => group.id))
+  const prompts = normalizeAgentPresetPrompts(input.entries, input.promptPositions)
   return agentPresetSchema.parse({
     ...input,
     name: input.name.trim().slice(0, 60) || '未命名预设',
@@ -777,13 +844,13 @@ function normalizePreset(input: AgentPreset): AgentPreset {
         note: item.note.trim().slice(0, 800)
       })).filter((item) => item.title).slice(0, 100)
     },
-    entries: withRequiredAgentPresetEntries(input.entries).map((entry, index) => settingLibraryEntrySchema.parse({
+    entries: prompts.entries.map((entry, index) => settingLibraryEntrySchema.parse({
       ...entry,
       groupId: validGroupIds.has(entry.groupId) ? entry.groupId : '',
       viewOrder: index + 1
     })),
     groups: input.groups.map((group, index) => settingLibraryGroupSchema.parse({ ...group, order: index + 1 })),
-    promptPositions: input.promptPositions.map((position, index) => settingLibraryPromptPositionSchema.parse({ ...position, order: index + 1 })),
+    promptPositions: prompts.promptPositions.map((position, index) => settingLibraryPromptPositionSchema.parse({ ...position, order: index + 1 })),
     toolGroups: input.toolGroups.filter((group) => validToolIds.has(group.id)).map((group) => ({
       ...group,
       included: group.included
@@ -801,6 +868,7 @@ function normalizePreset(input: AgentPreset): AgentPreset {
 }
 
 function emptyPreset(id: string, name: string, versionId: string, libraryGroupId: string): AgentPreset {
+  const prompts = normalizeAgentPresetPrompts([], [])
   return agentPresetSchema.parse({
     id,
     name,
@@ -810,9 +878,9 @@ function emptyPreset(id: string, name: string, versionId: string, libraryGroupId
     activeVersionId: versionId,
     activeVersionNumber: 1,
     profile: { authorName: '', authorAvatarPath: '', usageInstructions: '', timeline: [] },
-    entries: withRequiredAgentPresetEntries([]),
+    entries: prompts.entries,
     groups: [],
-    promptPositions: [],
+    promptPositions: prompts.promptPositions,
     toolGroups: agentToolGroups(),
     subagentModelSelection: { configId: '', model: '' },
     roleplayPlan: defaultRoleplayPlanSettings(),

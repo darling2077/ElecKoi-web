@@ -11,7 +11,7 @@ if (!existsSync(executable) || !existsSync(appAsar)) {
 }
 
 const probe = `
-  import('node:fs/promises').then(async ({ mkdtemp, readFile, rm }) => {
+  import('node:fs/promises').then(async ({ access, mkdtemp, readFile, rm }) => {
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const { pathToFileURL } = await import('node:url')
@@ -28,6 +28,29 @@ const probe = `
       throw new Error('Packaged main process does not contain the bundled updater runtime.')
     }
     process.stdout.write('Packaged updater runtime check passed.\\n')
+    const buildTimeBrowserPackages = [
+      '@fortawesome/fontawesome-free',
+      '@tailwindcss/browser',
+      'jquery',
+      'jquery-ui-dist',
+      'jquery-ui-touch-punch',
+      'lodash',
+      'pixi.js',
+      'showdown',
+      'toastr',
+      'vue',
+      'vue-router'
+    ]
+    for (const dependency of buildTimeBrowserPackages) {
+      try {
+        await access(join(appAsar, 'node_modules', ...dependency.split('/')))
+      } catch (error) {
+        if (error?.code === 'ENOENT') continue
+        throw error
+      }
+      throw new Error('Build-time browser package leaked into app.asar: ' + dependency)
+    }
+    process.stdout.write('Packaged browser dependency boundary check passed.\\n')
     const runtimeUrl = pathToFileURL(join(appAsar, 'node_modules', '@eleckoi', 'dsh-runtime', 'dist', 'index.mjs')).href
     const { DshRuntime } = await import(runtimeUrl)
     const root = await mkdtemp(join(tmpdir(), 'eleckoi-packaged-dsh-'))

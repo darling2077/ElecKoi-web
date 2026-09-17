@@ -33,10 +33,8 @@ const readStrategies = new Set<SettingLibraryEntry['agentReadStrategy']>(['requi
 const dynamicModes = new Set<SettingLibraryEntry['dynamicMode']>(['single_condition', 'ejs_controller', 'ejs_reference'])
 const keywordConditions = new Set<SettingLibraryEntry['keywordCondition']>(['none', 'any', 'all', 'not_any'])
 const positions = new Set<NonNullable<SettingLibraryEntry['position']>>([
-  'instructions', 'after_instructions', 'before_history', 'after_history',
-  'before_latest_user_input', 'after_latest_user_input', 'before_tool_flow', 'after_tool_flow'
+  'instructions', 'insert_point_1', 'insert_point_2', 'insert_point_3', 'insert_point_4', 'insert_point_5'
 ])
-
 export interface DecodedAgentPresetImport {
   preset: AgentPreset
   source: AgentPresetImportSource
@@ -298,7 +296,7 @@ function contentToPortable(content: AgentPresetTransferContent): JsonObject {
       prompt_only: rule.promptOnly, run_on_edit: rule.runOnEdit, order: rule.order
     })),
     prompt_positions: content.promptPositions.map((position) => ({
-      id: position.id, name: position.name, anchor: position.anchor, order: position.order,
+      id: position.id, name: position.name, anchor: position.anchor, side: position.side, order: position.order,
       created_at: position.createdAt, updated_at: position.updatedAt
     })),
     tool_configuration: {
@@ -391,7 +389,7 @@ function entryFromPortable(value: JsonObject, index: number, timestamp: string):
     keywordCondition: keywordConditions.has(condition) ? condition : 'none',
     keywordUseRegex: booleanValue(value.keyword_use_regex), keywordIgnoreCase: booleanValue(value.keyword_ignore_case, true),
     keywordWholeWord: booleanValue(value.keyword_whole_word), keywordRecursionDepth: Math.max(0, integerValue(value.keyword_recursion_depth)),
-    triggerMode: trigger === 'always' || trigger === 'agent_tool' ? trigger : null,
+    triggerMode: trigger === 'always' || trigger === 'agent_tool' || trigger === 'cache' ? trigger : null,
     enabled: booleanValue(value.enabled, true), position: positions.has(position) ? position : null,
     promptPositionId: stringValue(value.prompt_position_id), insertRole: insertRole(value.insert_role),
     order: Math.max(1, integerValue(value.order, index + 1)), viewOrder: integerValue(value.view_order, index + 1),
@@ -435,7 +433,9 @@ function positionFromPortable(value: JsonObject, index: number, timestamp: strin
   const anchor = stringValue(value.anchor) as SettingLibraryPromptPosition['anchor']
   return {
     id: stringValue(value.id) || `import-position-${index + 1}`, name: stringValue(value.name).slice(0, 60),
-    anchor: positions.has(anchor) ? anchor : 'after_instructions', order: Math.max(1, integerValue(value.order, index + 1)),
+    anchor: positions.has(anchor) ? anchor : 'insert_point_1',
+    side: value.side === 'after_setting_position' ? 'after_setting_position' : 'before_setting_position',
+    order: Math.max(1, integerValue(value.order, index + 1)),
     createdAt: stringValue(value.created_at) || timestamp, updatedAt: stringValue(value.updated_at) || timestamp
   }
 }

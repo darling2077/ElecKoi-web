@@ -66,7 +66,7 @@ describe('agent preset repository', () => {
         agentReadCondition: '', dynamicMode: 'single_condition', keywords: [], keywordScanDepth: 1,
         conditionKeywords: [], keywordCondition: 'none', keywordUseRegex: false, keywordIgnoreCase: true,
         keywordWholeWord: false, keywordRecursionDepth: 0, triggerMode: 'always', enabled: true,
-        position: 'after_instructions', promptPositionId: '', insertRole: 'user', order: 1,
+        position: 'insert_point_1', promptPositionId: '', insertRole: 'user', order: 1,
         viewOrder: 1, groupViewOrder: 0, treeViewOrder: 1, createdAt: timestamp, updatedAt: timestamp
       }],
       toolGroups: initial.toolGroups.map((group) => ({ ...group, enabled: group.id === 'builtin:web' })),
@@ -127,7 +127,7 @@ describe('agent preset repository', () => {
         title: '工具流协议',
         iconId: 'note',
         triggerMode: 'always',
-        position: 'before_latest_user_input',
+        position: 'insert_point_3',
         promptPositionId: '',
         insertRole: 'assistant',
         order: 7
@@ -138,7 +138,7 @@ describe('agent preset repository', () => {
       title: '工具流协议',
       iconId: 'note',
       triggerMode: 'always',
-      position: 'before_latest_user_input',
+      position: 'insert_point_3',
       promptPositionId: '',
       insertRole: 'assistant',
       order: 7
