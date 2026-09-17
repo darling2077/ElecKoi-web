@@ -13,6 +13,7 @@
  * 单图有体积上限、单次导入有张数与时间预算，超了就停下并如实报告。
  */
 import { createHash } from 'node:crypto'
+import type { ImageContentIndex } from './imageContentIndex'
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -80,6 +81,13 @@ export interface CardImageLocalizerOptions {
    * 只有验收（假图床就跑在本机）或确实在本机跑图床时才打开。
    */
   allowLocalAddresses?: boolean
+  /**
+   * 内容去重索引（跨租户共享）。给了就在上传前先查：同一张图有人传过就复用，
+   * 不再重复占图床存储——多租户下同一张卡被两个人导入是最常见的情况。
+   */
+  contentIndex?: ImageContentIndex
+  /** 索引键的作用域，通常用对外地址前缀；换图床后不会串用旧地址。 */
+  contentIndexScope?: string
   /** 进度回调：图片总数已知时先报一次 total，每搬完一张报一次 done。 */
   onProgress?: (progress: { phase: 'idle' | 'working' | 'done'; done: number; total: number }) => void
   log?: (message: string) => void
@@ -205,6 +213,21 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
     }
   }
 
+  /**
+   * 复用前探活：只认"确认还在"（2xx）与"确认没了"（404/410）。
+   * 其余情况（网络抖动、超时、5xx）**重新上传**——多一份存储是小事，卡片裂图是大事。
+   */
+  async function stillAvailable(url: string): Promise<boolean> {
+    if (url === '') return false
+    try {
+      const response = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(5000) })
+      if (response.ok) return true
+      return response.status !== 404 && response.status !== 410
+    } catch {
+      return false
+    }
+  }
+
   /** 按目标把一张图"搬"好，返回可以直接写进卡片的地址。 */
   async function place(buffer: Buffer, kind: string): Promise<string> {
     const target = options.target
@@ -217,12 +240,35 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
     const hash = createHash('sha256').update(buffer).digest('hex').slice(0, 32)
     const name = `${hash}.${kind}`
     if (target.kind === 'localDir') {
+      // 本地目录本身按内容哈希命名：同一张图第二次导入直接命中已有文件，天然去重。
       await mkdir(target.directory, { recursive: true })
       const file = join(target.directory, name)
       if (!existsSync(file)) await writeFile(file, buffer)
       return `${(options.publicBase ?? '').replace(/\/+$/, '')}/card-images/${name}`
     }
-    return await upload(buffer, kind)
+
+    // 图床：先查内容索引，命中且还在就复用——省一次上传与一份存储。
+    const indexKey = options.contentIndex === undefined
+      ? undefined
+      : `${options.contentIndexScope ?? ''}|${hash}`
+    if (indexKey !== undefined) {
+      const known = options.contentIndex!.lookup(indexKey)
+      if (known !== undefined) {
+        if (await stillAvailable(known)) return known
+        // 图床后台把图删了：忘掉这条，重新上传，别让卡片指向 404。
+        options.contentIndex!.forget(indexKey)
+      }
+    }
+    if (indexKey === undefined) return await upload(buffer, kind)
+    const running = inFlight.get(indexKey)
+    if (running !== undefined) return await running
+    const task = upload(buffer, kind).then((uploaded) => {
+      options.contentIndex!.remember(indexKey, uploaded)
+      void options.contentIndex!.flush()
+      return uploaded
+    }).finally(() => { inFlight.delete(indexKey) })
+    inFlight.set(indexKey, task)
+    return await task
   }
 
   async function upload(buffer: Buffer, kind: string): Promise<string> {
@@ -251,6 +297,15 @@ export function createCardImageLocalizer(options: CardImageLocalizerOptions): Ca
     // 只取路径再套回对外地址：从内网还是公网调 API 都能写对域名
     return `${(options.publicBase ?? '').replace(/\/+$/, '')}${new URL(url, uploadApi).pathname}`
   }
+
+  /**
+   * 同一内容正在上传中的任务。
+   *
+   * 为什么需要：一张卡里常常出现**同一张图重复多次**（同一头像用在多个位置），
+   * 而搬运是并发的——几个 worker 会同时发现"索引里还没有"然后各传一份。
+   * 这里把同 key 的并发上传合并成一次，后来者直接等前者的结果。
+   */
+  const inFlight = new Map<string, Promise<string>>()
 
   // 后台模式下进行中的任务：waitForIdle 用它，避免进程退出把搬运掐断。
   let pending: Promise<LocalizeOutcome> | undefined
