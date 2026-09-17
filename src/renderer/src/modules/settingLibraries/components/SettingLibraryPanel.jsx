@@ -448,8 +448,8 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
               <div className="setting-library-popover" role="menu">
                 <button type="button" role="menuitem" onClick={() => requestAddNode("group")}><CreateFolderIcon size={16} />文件夹</button>
                 <button type="button" role="menuitem" onClick={() => requestAddNode("entry")}><CreateEntryIcon size={16} />设定</button>
-                <button type="button" role="menuitem" onClick={() => requestAddNode("reference")}><CreateReferenceIcon size={16} />EJS引用设定</button>
                 <button type="button" role="menuitem" onClick={() => requestAddNode("cache")}><CreateCacheIcon size={16} />缓存设定</button>
+                <button type="button" role="menuitem" onClick={() => requestAddNode("reference")}><CreateReferenceIcon size={16} />EJS引用设定</button>
               </div>
             ) : null}
           </div>
@@ -525,8 +525,8 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
             <>
               <button type="button" role="menuitem" onClick={() => requestAddNode("group", contextMenu.parentId)}><CreateFolderIcon size={15} />新建文件夹</button>
               <button type="button" role="menuitem" onClick={() => requestAddNode("entry", contextMenu.parentId)}><CreateEntryIcon size={15} />新建设定</button>
-              <button type="button" role="menuitem" onClick={() => requestAddNode("reference", contextMenu.parentId)}><CreateReferenceIcon size={15} />新建 EJS引用设定</button>
               <button type="button" role="menuitem" onClick={() => requestAddNode("cache", contextMenu.parentId)}><CreateCacheIcon size={15} />新建缓存设定</button>
+              <button type="button" role="menuitem" onClick={() => requestAddNode("reference", contextMenu.parentId)}><CreateReferenceIcon size={15} />新建 EJS引用设定</button>
             </>
           ) : null}
           {contextMenu.kind === "entry" ? <button type="button" role="menuitem" onClick={() => duplicateEntry(contextMenu.id)}><Copy size={15} />复制</button> : null}

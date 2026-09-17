@@ -1176,6 +1176,19 @@
   color: var(--soft-text);
 }
 
+.setting-library-placement-row.is-fixed > i {
+  width: 15px;
+  height: 15px;
+  margin-left: 2px;
+  background: color-mix(in srgb, var(--text) 24%, var(--field-bg));
+  border: 0;
+}
+
+.setting-library-placement-row.is-instructions .setting-library-placement-choice {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .setting-library-placement-row.is-context > i {
   width: 15px;
   height: 15px;

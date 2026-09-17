@@ -40,6 +40,19 @@ describe('preset list consistency', () => {
     }
   });
 
+  it('matches Android creation capabilities and setting-library menu order', () => {
+    const presetSource = readFileSync(new URL('../src/renderer/src/modules/presets/components/PresetPromptEditor.jsx', import.meta.url), 'utf8');
+    expect(presetSource).not.toContain("createNode('cache'");
+    expect(presetSource).not.toContain('新建缓存设定');
+
+    const librarySource = readFileSync(new URL('../src/renderer/src/modules/settingLibraries/components/SettingLibraryPanel.jsx', import.meta.url), 'utf8');
+    const cacheOffsets = [...librarySource.matchAll(/requestAddNode\("cache"/g)].map((match) => match.index);
+    const referenceOffsets = [...librarySource.matchAll(/requestAddNode\("reference"/g)].map((match) => match.index);
+    expect(cacheOffsets).toHaveLength(2);
+    expect(referenceOffsets).toHaveLength(2);
+    expect(cacheOffsets.every((offset, index) => offset < referenceOffsets[index])).toBe(true);
+  });
+
   it('uses the Agent preset title in the sidebar', () => {
     const source = readFileSync(new URL('../src/renderer/src/modules/presets/components/PresetPanel.jsx', import.meta.url), 'utf8');
     expect(source).toContain('<h2>Agent预设</h2>');

@@ -186,7 +186,10 @@ describe('model discovery', () => {
             candidates: [{
               content: {
                 role: 'model',
-                parts: [{ functionCall: { name: 'eleckoi_capability_probe', args: { value: 'ok' } } }]
+                parts: [{
+                  functionCall: { name: 'eleckoi_capability_probe', args: { value: 'ok' }, id: 'call-1' },
+                  thoughtSignature: 'signed-reasoning-state'
+                }]
               }
             }]
           }
@@ -218,7 +221,24 @@ describe('model discovery', () => {
       }]
     })
     expect(JSON.stringify(requests[0]?.body)).not.toContain('additionalProperties')
+    expect(requests[0]?.body).not.toHaveProperty('toolConfig')
     expect(requests[1]?.body).toHaveProperty('tools')
+    expect(requests[1]?.body).toMatchObject({
+      contents: [
+        { role: 'user', parts: [{ text: 'Call eleckoi_capability_probe exactly once with value ok.' }] },
+        {
+          role: 'model',
+          parts: [{
+            functionCall: { name: 'eleckoi_capability_probe', args: { value: 'ok' }, id: 'call-1' },
+            thoughtSignature: 'signed-reasoning-state'
+          }]
+        },
+        {
+          role: 'user',
+          parts: [{ functionResponse: { name: 'eleckoi_capability_probe', id: 'call-1', response: { accepted: true } } }]
+        }
+      ]
+    })
   })
 
   it('rejects a chat completion endpoint that ignores the requested tool call without forcing tool_choice', async () => {

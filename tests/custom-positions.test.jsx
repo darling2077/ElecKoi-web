@@ -1,5 +1,6 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createEntryDraft } from '../src/renderer/src/modules/settingLibraries/model/settingLibraryEditing.js';
 import { createPositionDraft, fixedPlacementRowSelectable, moveCustomPosition, positionManagementRows, positionPickerRows, removeCustomPosition, savePositionDraft } from '../src/renderer/src/modules/settingLibraries/model/customPositions.js';
@@ -121,8 +122,13 @@ describe('custom position editing', () => {
     expect(presetHtml).toContain('世界状态');
     expect((presetHtml.match(/is-card/g) || [])).toHaveLength(7);
     expect(presetHtml).toContain('aria-label="选择系统指令"');
+    expect(presetHtml).toMatch(/setting-library-placement-row is-card is-instructions/);
     expect(presetHtml).toContain('aria-label="固定位置设定插入点 1"');
     expect(presetHtml).not.toContain('aria-label="选择设定插入点 1"');
+
+    const placementCss = readFileSync(new URL('../src/renderer/src/modules/settingLibraries/styles/setting-library.css', import.meta.url), 'utf8');
+    expect(placementCss).toMatch(/\.setting-library-placement-row\.is-fixed > i\s*\{[^}]*background:[^}]*border:\s*0;/s);
+    expect(placementCss).toMatch(/\.setting-library-placement-row\.is-instructions \.setting-library-placement-choice\s*\{[^}]*color:\s*var\(--text\);[^}]*font-weight:\s*600;/s);
 
     const characterHtml = renderToStaticMarkup(<VisualPositionPicker {...props} entry={{ ...props.entry, promptPositionId: '' }} allowCustomPromptPositions={false} />);
     expect(characterHtml).toContain('插入位置');

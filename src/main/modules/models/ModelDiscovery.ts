@@ -212,7 +212,6 @@ async function testGoogleTools(config: ModelConfig, baseUrl: string, model: stri
   const first = await postJson(endpoint, config, 'google', {
     contents: [{ role: 'user', parts: [{ text: PROBE_PROMPT }] }],
     tools: [{ functionDeclarations: [functionDeclaration] }],
-    toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [PROBE_TOOL_NAME] } },
     generationConfig: { maxOutputTokens: 64 }
   })
   const candidate = objectArray(first.candidates)[0]
@@ -220,12 +219,17 @@ async function testGoogleTools(config: ModelConfig, baseUrl: string, model: stri
   const callPart = objectArray(content?.parts).find((part) => objectValue(part.functionCall) !== undefined)
   const call = objectValue(callPart?.functionCall)
   assertProbeCall(call?.name, call?.args)
+  const callId = stringValue(call?.id)
 
   const second = await postJson(endpoint, config, 'google', {
     contents: [
       { role: 'user', parts: [{ text: PROBE_PROMPT }] },
-      { role: 'model', parts: [{ functionCall: { name: PROBE_TOOL_NAME, args: { value: 'ok' } } }] },
-      { role: 'user', parts: [{ functionResponse: { name: PROBE_TOOL_NAME, response: { accepted: true } } }] }
+      content,
+      { role: 'user', parts: [{ functionResponse: {
+        name: PROBE_TOOL_NAME,
+        ...(callId ? { id: callId } : {}),
+        response: { accepted: true }
+      } }] }
     ],
     tools: [{ functionDeclarations: [functionDeclaration] }],
     generationConfig: { maxOutputTokens: 64 }

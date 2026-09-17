@@ -408,7 +408,7 @@ export function VisualPositionPicker({ entry, entries, promptPositions, allowCus
             return (
               <button
                 type="button"
-                className={`setting-library-placement-row${row.card ? " is-card" : ""}${selected ? " is-selected" : ""}`}
+                className={`setting-library-placement-row${row.card ? " is-card" : ""}${row.value === "instructions" ? " is-instructions" : ""}${selected ? " is-selected" : ""}`}
                 key={`${row.value}-${index}`}
                 aria-label={`选择${POSITION_LABEL.get(row.value)}`}
                 aria-pressed={selected}

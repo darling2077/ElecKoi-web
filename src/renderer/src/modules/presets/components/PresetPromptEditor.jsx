@@ -15,7 +15,6 @@ const HIDDEN_TIMELINE_DISABLE_CONFIRMATION = {
 const CreateFolderIcon = SETTING_LIBRARY_CREATE_ICONS.group;
 const CreateEntryIcon = SETTING_LIBRARY_CREATE_ICONS.entry;
 const CreateReferenceIcon = SETTING_LIBRARY_CREATE_ICONS.reference;
-const CreateCacheIcon = SETTING_LIBRARY_CREATE_ICONS.cache;
 
 export function shouldConfirmHiddenTimelineDisable(entry, nextEnabled) {
   return nextEnabled === false && isHiddenToolTimelineEntry(entry);
@@ -51,7 +50,7 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
       onChange({ ...preset, groups: [...preset.groups, group], expandedGroupIds: [...new Set([...preset.expandedGroupIds, parentId].filter(Boolean))] });
       setSelected({ kind: 'group', id: group.id });
     } else {
-      const entry = { ...createEntryDraft(parentId, order, preset.entries, kind === 'reference' ? 'reference' : kind === 'cache' ? 'cache' : 'prompt'), title: kind === 'reference' ? '新建 EJS引用设定' : kind === 'cache' ? '新建缓存设定' : '新建提示词' };
+      const entry = { ...createEntryDraft(parentId, order, preset.entries, kind === 'reference' ? 'reference' : 'prompt'), title: kind === 'reference' ? '新建 EJS引用设定' : '新建提示词' };
       onChange({ ...preset, entries: [...preset.entries, entry] });
       setSelected({ kind: 'entry', id: entry.id });
     }
@@ -137,7 +136,6 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
     { label: '新建文件夹', icon: CreateFolderIcon, run: () => createNode('group', createTarget) },
     { label: '新建提示词', icon: CreateEntryIcon, run: () => createNode('entry', createTarget) },
     { label: '新建 EJS引用设定', icon: CreateReferenceIcon, run: () => createNode('reference', createTarget) },
-    { label: '新建缓存设定', icon: CreateCacheIcon, run: () => createNode('cache', createTarget) },
   ] : [{ label: '复制', icon: Copy, run: () => duplicateEntry(menuTarget.value) }];
   if (menuTarget && !pinnedMenuTarget) menuActions.push(
     { label: '重命名', icon: PencilSimple, run: () => renameNode(menuTarget) },
@@ -158,7 +156,6 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
               <button type="button" role="menuitem" onClick={() => createNode('group')}><CreateFolderIcon size={16} />文件夹</button>
               <button type="button" role="menuitem" onClick={() => createNode('entry')}><CreateEntryIcon size={16} />提示词</button>
               <button type="button" role="menuitem" onClick={() => createNode('reference')}><CreateReferenceIcon size={16} />EJS引用设定</button>
-              <button type="button" role="menuitem" onClick={() => createNode('cache')}><CreateCacheIcon size={16} />缓存设定</button>
             </div> : null}
           </div>
           {saveAction}
