@@ -20,6 +20,10 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        # 依赖安装源：默认官方 registry；国内可设 NPM_REGISTRY=https://registry.npmmirror.com
+        # （实测元数据快 18 倍、包体快 2.3 倍；首次构建的大头就是装这 900+ 个包）
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmjs.org}"
     image: ${ELECKOI_IMAGE:-eleckoi-web:dev}
     container_name: eleckoi-web
     restart: unless-stopped
