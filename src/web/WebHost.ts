@@ -7,6 +7,7 @@
  * 上游模块插件**原样挂载**，挂载顺序与 DesktopHost 保持一致，避免依赖解析顺序差异。
  */
 
+import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import { agentPlugin } from '@main/modules/agent'
 import { agentPresetsPlugin } from '@main/modules/agentPresets'
@@ -27,6 +28,7 @@ import { createWebShellPlugin } from './modules/webShellPlugin'
 import { WebGateway, type RunQuota } from './transport/WebGateway'
 import type { SqliteDatabase } from '@main/platform/sqlite/SqliteDatabase'
 import { createCardImageLocalizer, type CardImageLocalizer } from './media/cardImageLocalizer'
+import { createImageContentIndex } from './media/imageContentIndex'
 import { createMediaSigner } from './mediaSignature'
 import type { Plugin } from '@deepseek-ai/cordis'
 
@@ -85,7 +87,10 @@ function createWebGatewayPlugin(gateway: WebGateway): Plugin.Object {
  *
  * 兼容：未设置该变量时沿用旧的推断方式（配了图床三件套就是 self-hosted，否则关闭）。
  */
-export function createImportImageLocalizer(database: SqliteDatabase): CardImageLocalizer | undefined {
+export function createImportImageLocalizer(
+  database: SqliteDatabase,
+  options: { tenantRoot?: string } = {}
+): CardImageLocalizer | undefined {
   const read = (name: string): string => (process.env[name] ?? '').trim()
   const number = (raw: string | undefined, fallback: number): number => {
     const value = Number((raw ?? '').trim())
@@ -129,6 +134,22 @@ export function createImportImageLocalizer(database: SqliteDatabase): CardImageL
     })
   }
 
+  // 内容去重索引：默认放在数据根（跨租户共享），可用 ELECKOI_IMAGE_INDEX_FILE 覆盖，
+  // 或 ELECKOI_IMAGE_DEDUPE=0 关掉。索引只对"传图床"这一路有意义——
+  // 本地目录按内容哈希命名、内联不落盘，两者天然不重复。
+  const dedupeEnabled = read('ELECKOI_IMAGE_DEDUPE') !== '0'
+  const indexPath = ((): string | undefined => {
+    if (!dedupeEnabled) return undefined
+    const explicit = read('ELECKOI_IMAGE_INDEX_FILE')
+    if (explicit !== '') return explicit
+    if (options.tenantRoot === undefined) return undefined
+    // 租户目录形如 <数据根>/tenants/<id>，索引就放数据根下，所有租户共用同一份。
+    return join(resolve(options.tenantRoot, '..', '..'), 'image-index.json')
+  })()
+  const contentIndex = indexPath === undefined
+    ? undefined
+    : createImageContentIndex({ path: indexPath, log: (message) => console.log(`[card-images]${message}`) })
+
   if (mode === 'self-hosted') {
     if (publicBase === '' || uploadApi === '' || uploadToken === '') {
       console.warn('[card-images] 选择了 self-hosted，但 ELECKOI_IMAGE_PUBLIC_BASE / UPLOAD_API / UPLOAD_TOKEN 未配齐，已自动关闭搬运。')
@@ -137,6 +158,7 @@ export function createImportImageLocalizer(database: SqliteDatabase): CardImageL
     return createCardImageLocalizer({
       ...common,
       publicBase,
+      ...(contentIndex === undefined ? {} : { contentIndex, contentIndexScope: publicBase }),
       target: { kind: 'uploadApi', uploadApi, uploadToken }
     })
   }
@@ -186,7 +208,7 @@ export class WebHost {
     if (mounted !== gateway) throw new Error('desktopGateway 服务不是本租户的网关实例。')
 
     // 导入卡片后自动搬图：没配图床就自动关闭（不影响任何既有行为）。
-    const localizer = createImportImageLocalizer(context.database)
+    const localizer = createImportImageLocalizer(context.database, { tenantRoot: options.tenantRoot })
     if (localizer !== undefined) {
       mounted.importImageHook = localizer
       // 搬运完成后让前端刷新角色列表：卡片内容被改写了，不刷新会一直显示旧的黑图。
