@@ -1,8 +1,12 @@
 diff --git a/lib/index.js b/lib/index.js
-index b819f847403e2bd76a7c04518da4652562a7a791..57dfe557758bb57fb575140089a9a99ebba0636b 100644
+index b819f847403e2bd76a7c04518da4652562a7a791..cf7bfbf485f00a87eec5f5b51e9dfb9202150a0a 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -1738,6 +1738,7 @@ var PiAiAdapter = class extends LlmAdapter {
+@@ -9,0 +10 @@ import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
++import { googleGenerativeAIApi } from "@earendil-works/pi-ai/api/google-generative-ai.lazy";
+@@ -711,0 +713 @@ const PROTOCOLS = {
++	"google-generative-ai": googleGenerativeAIApi,
+@@ -1738,6 +1740,7 @@ var PiAiAdapter = class extends LlmAdapter {
  				const iterator = toStreamChunks(snapshot.models.streamSimple(model, context, {
  					...profileOptions(profile, reasoning, apiKey),
  					...options.temperature === void 0 ? {} : { temperature: options.temperature },
@@ -11,7 +15,7 @@ index b819f847403e2bd76a7c04518da4652562a7a791..57dfe557758bb57fb575140089a9a99e
  					...options.sessionId === void 0 ? {} : { sessionId: String(options.sessionId) },
  					signal: watchdog.signal,
 diff --git a/package.json b/package.json
-index 439f34c10ccf6821530e708fd6d5cee8c41171cb..b465c6aa865b4b1061b4bcc9c2451725a48fda05 100644
+index 439f34c10ccf6821530e708fd6d5cee8c41171cb..ff45468d86af907dc962fa9d1196693f80c34658 100644
 --- a/package.json
 +++ b/package.json
 @@ -43,7 +43,7 @@

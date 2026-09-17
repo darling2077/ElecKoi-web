@@ -9,7 +9,7 @@ overrides:
 
 patchedDependencies:
   '@deepseek-ai/dsh-llm-pi-ai@0.1.1-rc.2':
-    hash: 21e5c54fa6ec60578bc40332092d4e9dbc2ada928cf046213b6e06a926a91231
+    hash: 83e3d872b6863434d26cf519fa0f1f82ca48577c314937b4803c48dfa5fab5b7
     path: patches/@deepseek-ai__dsh-llm-pi-ai@0.1.1-rc.2.patch
   '@deepseek-ai/dsh-llm@0.1.1-rc.2':
     hash: a4393b05659d27602d693ef2736387d6ea2301cabcce5d90598d5b83a5db6a6b
@@ -132,7 +132,7 @@ importers:
         version: 0.1.1-rc.2(b06d485bc1c39edc28f39f8ab926129e)
       '@deepseek-ai/dsh-llm-pi-ai':
         specifier: 0.1.1-rc.2
-        version: 0.1.1-rc.2(patch_hash=21e5c54fa6ec60578bc40332092d4e9dbc2ada928cf046213b6e06a926a91231)(ded4e803048b98e8ef406ee475787d38)
+        version: 0.1.1-rc.2(patch_hash=83e3d872b6863434d26cf519fa0f1f82ca48577c314937b4803c48dfa5fab5b7)(ded4e803048b98e8ef406ee475787d38)
       '@deepseek-ai/dsh-llm-retry':
         specifier: 0.1.1-rc.2
         version: 0.1.1-rc.2(a7e83959d21e2280a2001cf94e950d21)
@@ -6334,7 +6334,7 @@ snapshots:
       '@deepseek-ai/schemastery': 3.18.1
       eventsource-parser: 3.1.1
 
-  '@deepseek-ai/dsh-llm-pi-ai@0.1.1-rc.2(patch_hash=21e5c54fa6ec60578bc40332092d4e9dbc2ada928cf046213b6e06a926a91231)(ded4e803048b98e8ef406ee475787d38)':
+  '@deepseek-ai/dsh-llm-pi-ai@0.1.1-rc.2(patch_hash=83e3d872b6863434d26cf519fa0f1f82ca48577c314937b4803c48dfa5fab5b7)(ded4e803048b98e8ef406ee475787d38)':
     dependencies:
       '@deepseek-ai/cordis': 4.0.1(@deepseek-ai/cordis-plugin-include@1.0.6)(@deepseek-ai/cordis-plugin-loader@1.0.2)
       '@deepseek-ai/dsh-attachment': 0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-brand@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1)))(@deepseek-ai/dsh-invariants@0.1.1-rc.2(@deepseek-ai/cordis@4.0.1))

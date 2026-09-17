@@ -207,7 +207,7 @@ async function testGoogleTools(config: ModelConfig, baseUrl: string, model: stri
   const functionDeclaration = {
     name: PROBE_TOOL_NAME,
     description: 'Return the exact protocol probe value.',
-    parameters: probeParameters()
+    parameters: googleProbeParameters()
   }
   const first = await postJson(endpoint, config, 'google', {
     contents: [{ role: 'user', parts: [{ text: PROBE_PROMPT }] }],
@@ -227,6 +227,7 @@ async function testGoogleTools(config: ModelConfig, baseUrl: string, model: stri
       { role: 'model', parts: [{ functionCall: { name: PROBE_TOOL_NAME, args: { value: 'ok' } } }] },
       { role: 'user', parts: [{ functionResponse: { name: PROBE_TOOL_NAME, response: { accepted: true } } }] }
     ],
+    tools: [{ functionDeclarations: [functionDeclaration] }],
     generationConfig: { maxOutputTokens: 64 }
   })
   const finalCandidate = objectArray(second.candidates)[0]
@@ -293,6 +294,14 @@ function probeParameters(): Record<string, unknown> {
     properties: { value: { type: 'string', enum: ['ok'] } },
     required: ['value'],
     additionalProperties: false
+  }
+}
+
+function googleProbeParameters(): Record<string, unknown> {
+  return {
+    type: 'OBJECT',
+    properties: { value: { type: 'STRING', enum: ['ok'] } },
+    required: ['value']
   }
 }
 

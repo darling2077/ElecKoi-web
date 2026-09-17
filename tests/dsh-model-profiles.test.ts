@@ -1,6 +1,12 @@
 import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { Config as DshPiAiConfig } from '@deepseek-ai/dsh-llm-pi-ai'
-import { createDshProviderPlan, describeDshModelCapabilities } from '@eleckoi/dsh-runtime'
+import {
+  createDshProviderCatalog,
+  createDshProviderPlan,
+  describeDshModelCapabilities,
+  resolveDshProviderBinding
+} from '@eleckoi/dsh-runtime'
+import type { DshModelSettings } from '@eleckoi/dsh-runtime'
 import { describe, expect, it } from 'vitest'
 
 const kimiK3 = {
@@ -13,6 +19,11 @@ const kimiK3 = {
   customHeaders: {},
   contextWindow: 272_000,
   supportsImageInput: false
+}
+
+function providerPlan(settings: DshModelSettings) {
+  const catalog = createDshProviderCatalog([settings])
+  return { providers: catalog.providers, main: resolveDshProviderBinding(catalog, settings) }
 }
 
 describe('DSH native model profiles', () => {
@@ -70,5 +81,66 @@ describe('DSH native model profiles', () => {
       models: [expect.objectContaining({ id: 'private-model', reasoningEfforts: false })]
     })
     expect(plan.providers[plan.main.provider]?.models?.[0]).not.toHaveProperty('topP')
+  })
+
+  it('normalizes Google model-list identities and the native API root for DSH', () => {
+    const google: DshModelSettings = {
+      ...kimiK3,
+      configId: 'google-config',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      model: 'models/gemini-3.6-flash',
+      apiFormat: 'google-generative-ai'
+    }
+    expect(describeDshModelCapabilities(google)).toMatchObject({
+      provider: 'google',
+      source: 'dsh_catalog'
+    })
+    const plan = providerPlan(google)
+    expect(plan.main).toMatchObject({ provider: 'google', model: 'gemini-3.6-flash' })
+    expect(plan.providers.google).not.toHaveProperty('baseURL')
+    expect(plan.providers.google?.models).toEqual([
+      expect.objectContaining({ id: 'gemini-3.6-flash' })
+    ])
+    expect(() => DshPiAiConfig({ providers: plan.providers })).not.toThrow()
+  })
+
+  it('adds the native Google API version for a custom Gemini endpoint', () => {
+    const google: DshModelSettings = {
+      ...kimiK3,
+      configId: 'google-proxy-config',
+      baseUrl: 'https://gateway.example/google',
+      model: 'models/private-gemini',
+      apiFormat: 'google-generative-ai'
+    }
+    const plan = providerPlan(google)
+    expect(plan.main).toEqual({ provider: plan.main.provider, model: 'private-gemini' })
+    expect(plan.providers[plan.main.provider]).toMatchObject({
+      api: 'google-generative-ai',
+      baseURL: 'https://gateway.example/google/v1beta',
+      models: [expect.objectContaining({ id: 'private-gemini' })]
+    })
+    expect(() => DshPiAiConfig({ providers: plan.providers })).not.toThrow()
+  })
+
+  it('accepts DeepSeek and native Google providers in one DSH process catalog', () => {
+    const google: DshModelSettings = {
+      ...kimiK3,
+      configId: 'google-config',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      model: 'models/gemini-3.6-flash',
+      apiFormat: 'google-generative-ai'
+    }
+    const deepseek: DshModelSettings = {
+      ...kimiK3,
+      configId: 'deepseek-config',
+      apiKey: 'deepseek-test-key',
+      baseUrl: 'https://api.deepseek.com',
+      model: 'deepseek-chat'
+    }
+    const catalog = createDshProviderCatalog([deepseek, google])
+
+    expect(() => DshPiAiConfig({ providers: catalog.providers })).not.toThrow()
+    expect(resolveDshProviderBinding(catalog, deepseek)).toMatchObject({ model: 'deepseek-chat' })
+    expect(resolveDshProviderBinding(catalog, google)).toMatchObject({ provider: 'google', model: 'gemini-3.6-flash' })
   })
 })

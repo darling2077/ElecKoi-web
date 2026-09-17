@@ -381,7 +381,7 @@ export class DshRuntime {
           ELECTRON_RUN_AS_NODE: '1',
           ELECKOI_DSH_PROVIDERS: JSON.stringify(catalog.providers),
           ...catalog.credentials,
-          DSH_MODEL: defaultSettings.model,
+          DSH_MODEL: binding.model,
           DSH_SYSTEM_PROMPT: 'You are ElecKoi.',
           DSH_CWD: this.options.workspaceRoot,
           DSH_HOME: join(this.options.runtimeDataRoot, 'home'),
@@ -572,7 +572,10 @@ export class DshRuntime {
       .replaceAll('__ELECKOI_SUBAGENT_OPTIONS__', subagentSettings ? [
         '    agentOptions:',
         `      provider: ${JSON.stringify(subagentProvider ?? 'custom')}`,
-        `      model: ${JSON.stringify(subagentSettings.model)}`,
+        `      model: ${JSON.stringify(resolveDshProviderBinding(
+          createDshProviderCatalog([subagentSettings]),
+          subagentSettings
+        ).model)}`,
         ...(subagentSettings.maxTokens === undefined ? [] : [`      maxTokens: ${subagentSettings.maxTokens}`])
       ].join('\n') : '')
     const disabled = new Set(toolPolicy?.disabledGroupIds ?? [])

@@ -147,9 +147,6 @@ export class ModelRepository {
     if (option?.autoCompactTokenLimit !== null && option?.autoCompactTokenLimit !== undefined && option.autoCompactTokenLimit > contextWindow) {
       throw new Error('自动压缩阈值不能超过当前模型的上下文窗口。')
     }
-    if (option?.maxOutputTokens !== null && option?.maxOutputTokens !== undefined && option.maxOutputTokens > contextWindow) {
-      throw new Error('单次最大输出不能超过当前模型的上下文窗口。')
-    }
     return {
       configId: config.id,
       apiKey: config.api_key,

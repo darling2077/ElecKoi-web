@@ -106,7 +106,18 @@ describe('packaged DSH runtime composition', () => {
       presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
       workspaceRoot: join(root, 'workspace'),
       runtimeDataRoot: join(root, 'runtime'),
-      executablePath: process.execPath
+      executablePath: process.execPath,
+      modelCatalog: () => [{
+        configId: 'enabled-google-config',
+        apiKey: 'google-test-key',
+        baseUrl: 'https://generativelanguage.googleapis.com',
+        model: 'models/gemini-3.6-flash',
+        systemPrompt: '',
+        apiFormat: 'google-generative-ai',
+        customHeaders: {},
+        contextWindow: 1_048_576,
+        supportsImageInput: true
+      }]
     })
     const deltas: string[] = []
     const finals: string[] = []
@@ -207,6 +218,109 @@ describe('packaged DSH runtime composition', () => {
       const persistedAfterRegeneration = await readdir(persistedSessionRoot, { recursive: true })
       expect(persistedAfterRegeneration.some((entry) => entry.split(/[\\/]/).at(-1) === 'runtime-thread-a')).toBe(false)
       expect(persistedAfterRegeneration.some((entry) => entry.split(/[\\/]/).at(-1) === 'runtime-thread-b')).toBe(true)
+    } finally {
+      await runtime.close()
+      server.close()
+      await once(server, 'close')
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  it('streams a real Agent reply through the native Google protocol', async () => {
+    const requests: Array<{
+      url: string | undefined
+      apiKey: string | undefined
+      body: Record<string, unknown>
+    }> = []
+    const server = createServer(async (request, response) => {
+      let rawBody = ''
+      for await (const chunk of request) rawBody += chunk.toString()
+      requests.push({
+        url: request.url,
+        apiKey: request.headers['x-goog-api-key'] as string | undefined,
+        body: JSON.parse(rawBody) as Record<string, unknown>
+      })
+      response.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'cache-control': 'no-cache'
+      })
+      response.write(`data: ${JSON.stringify({
+        candidates: [{
+          content: { role: 'model', parts: [{ text: '本地 Google 回复' }] },
+          finishReason: 'STOP'
+        }],
+        usageMetadata: {
+          promptTokenCount: 8,
+          candidatesTokenCount: 4,
+          totalTokenCount: 12
+        },
+        modelVersion: 'gemini-test',
+        responseId: 'google-local-test'
+      })}\n\n`)
+      response.end()
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('Local test server did not expose a TCP port')
+
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-google-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'),
+      runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath,
+      modelCatalog: () => [{
+        configId: 'enabled-google-config',
+        apiKey: 'google-test-key',
+        baseUrl: 'https://generativelanguage.googleapis.com',
+        model: 'models/gemini-3.6-flash',
+        systemPrompt: '',
+        apiFormat: 'google-generative-ai',
+        customHeaders: {},
+        contextWindow: 1_048_576,
+        supportsImageInput: true
+      }]
+    })
+    const deltas: string[] = []
+    const finals: string[] = []
+
+    try {
+      await expect(runtime.stream('conversation-google-test', '你好', {
+        configId: 'google-local-config',
+        apiKey: 'google-local-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: 'models/gemini-test',
+        systemPrompt: '只返回本地测试文本。',
+        apiFormat: 'google-generative-ai',
+        customHeaders: {},
+        contextWindow: 128_000,
+        autoCompactTokenLimit: 96_000,
+        temperature: 0.5,
+        supportsImageInput: true
+      }, {
+        onDelta: (delta) => deltas.push(delta),
+        onFinal: (content) => finals.push(content)
+      }, undefined, {
+        characterId: 'card-google',
+        characterName: '角色 G',
+        persona: {},
+        history: []
+      }, 'runtime-thread-google', {
+        disabledGroupIds: ['builtin:variables', 'builtin:other']
+      })).resolves.toBe('complete')
+
+      expect(deltas.join('')).toContain('本地 Google 回复')
+      expect(finals).toEqual(['本地 Google 回复'])
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.url).toContain('/v1beta/models/gemini-test:streamGenerateContent')
+      expect(requests[0]?.apiKey).toBe('google-local-key')
+      const googleTools = requests[0]?.body.tools as Array<{
+        functionDeclarations?: Array<Record<string, unknown>>
+      }>
+      expect(googleTools[0]?.functionDeclarations?.[0]).toHaveProperty('parametersJsonSchema')
+      expect(googleTools[0]?.functionDeclarations?.[0]).not.toHaveProperty('parameters')
     } finally {
       await runtime.close()
       server.close()
@@ -365,7 +479,18 @@ describe('packaged DSH runtime composition', () => {
       presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
       workspaceRoot: join(root, 'workspace'),
       runtimeDataRoot: join(root, 'runtime'),
-      executablePath: process.execPath
+      executablePath: process.execPath,
+      modelCatalog: () => [{
+        configId: 'enabled-google-config',
+        apiKey: 'google-test-key',
+        baseUrl: 'https://generativelanguage.googleapis.com',
+        model: 'models/gemini-3.6-flash',
+        systemPrompt: '',
+        apiFormat: 'google-generative-ai',
+        customHeaders: {},
+        contextWindow: 1_048_576,
+        supportsImageInput: true
+      }]
     })
     const finals: string[] = []
 

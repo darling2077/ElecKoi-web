@@ -8,6 +8,7 @@ export const agentPlugin = {
   name: 'eleckoi-agent',
   inject: [
     'appPaths',
+    'appLog',
     'database',
     'desktopGateway',
     'conversations',
@@ -28,6 +29,7 @@ export const agentPlugin = {
     const attachmentCleanup = new AgentAttachmentCleanupRepository(ctx.database, runtime, ctx.messages)
     attachmentCleanup.drain()
     const sessions = new AgentSessionCoordinator({
+      logger: ctx.appLog,
       runtime,
       database: ctx.database,
       gateway: ctx.desktopGateway,

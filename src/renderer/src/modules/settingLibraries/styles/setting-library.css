@@ -1164,6 +1164,18 @@
   cursor: default;
 }
 
+.setting-library-placement-row.is-fixed {
+  cursor: default;
+}
+
+.setting-library-placement-row.is-fixed .setting-library-placement-choice {
+  color: var(--soft-text);
+}
+
+.setting-library-placement-row.is-fixed:hover .setting-library-placement-choice {
+  color: var(--soft-text);
+}
+
 .setting-library-placement-row.is-context > i {
   width: 15px;
   height: 15px;

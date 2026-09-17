@@ -61,7 +61,7 @@ export function createEntryDraft(groupId, order, entries, draftKind = "standard"
     keywordRecursionDepth: 0,
     triggerMode: isCache ? "cache" : isPrompt ? "always" : "agent_tool",
     enabled: isReference || isCache,
-    position: isPrompt ? "insert_point_1" : null,
+    position: null,
     promptPositionId: "",
     insertRole: "user",
     order: 1,

@@ -2,13 +2,14 @@ import { join } from 'node:path'
 import { app, dialog } from 'electron'
 import { DesktopHost } from '@main/host/DesktopHost'
 import { StartupProfileStore } from '@main/host/startup/StartupProfileStore'
-import { configureElectron } from '@main/host/startup/configureElectron'
+import { configureElectron, configureRuntimeUserData } from '@main/host/startup/configureElectron'
 import { getBootstrapLogger } from '@main/platform/logging/AppLog'
 import { registerLocalMediaScheme } from '@main/platform/electron/mediaProtocol'
 
 const logger = getBootstrapLogger()
 registerLocalMediaScheme()
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+configureRuntimeUserData()
 const startupProfiles = new StartupProfileStore()
 const startupProfile = startupProfiles.load(join(app.getPath('userData'), 'startup-profile.json'))
 configureElectron(startupProfile)

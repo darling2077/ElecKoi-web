@@ -85,6 +85,10 @@ export function positionPickerRows(positions) {
     ]);
 }
 
+export function fixedPlacementRowSelectable(row, allowCustomPromptPositions) {
+  return row.type === 'position' && (row.value === 'instructions' || !allowCustomPromptPositions);
+}
+
 export function positionManagementRows(positions) {
   const byPlacement = new Map();
   for (const position of normalizeCustomPositions(positions)) {

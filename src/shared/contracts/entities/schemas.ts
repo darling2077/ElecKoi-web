@@ -122,9 +122,6 @@ export const modelOptionSchema = z.object({
     if (option.autoCompactTokenLimit !== null && option.autoCompactTokenLimit !== undefined && option.autoCompactTokenLimit > capacity) {
       context.addIssue({ code: 'custom', path: ['autoCompactTokenLimit'], message: '自动压缩阈值不能超过上下文窗口。' })
     }
-    if (option.maxOutputTokens !== null && option.maxOutputTokens !== undefined && option.maxOutputTokens > capacity) {
-      context.addIssue({ code: 'custom', path: ['maxOutputTokens'], message: '单次最大输出不能超过上下文窗口。' })
-    }
   }
 })
 

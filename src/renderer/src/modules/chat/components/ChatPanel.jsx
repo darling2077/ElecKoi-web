@@ -19,6 +19,7 @@ import {
   resolveChatAvatarShape,
   resolveChatDisplayProfile,
 } from "../../appearance/index.js";
+import { findLatestRegenerateTargetMessageId } from "../model/chatRegeneration.js";
 
 export function ChatPanel({
   hasActiveChat,
@@ -188,9 +189,7 @@ export function ChatPanel({
   };
   const userAvatar = resolveChatAvatar(persona, "user", avatarShape);
   const assistantAvatar = resolveChatAvatar(persona, "assistant", avatarShape);
-  const regenerateTargetMessageId = [...messages]
-    .reverse()
-    .find((item) => item.role === "assistant" && item.id !== "opening" && !item.pending)?.id || "";
+  const regenerateTargetMessageId = findLatestRegenerateTargetMessageId(messages);
   const displayedMessages = messages.filter((item) => !(
     item.role === "assistant" && !String(item.content || "").trim() && !(item.process || []).length
   ));

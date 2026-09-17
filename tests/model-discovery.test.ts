@@ -3,6 +3,7 @@ import { once } from 'node:events'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import type { ModelConfig } from '@shared/contracts/entities/model'
+import { requestContracts } from '@shared/contracts/gateway/definitions'
 import { discoverModels, testModelConnection } from '@main/modules/models/ModelDiscovery'
 
 const servers = new Set<ReturnType<typeof createServer>>()
@@ -95,6 +96,12 @@ describe('model discovery', () => {
         {
           name: 'models/embedding-test',
           supportedGenerationMethods: ['embedContent']
+        },
+        {
+          name: 'models/gemini-tts-test',
+          inputTokenLimit: 8_192,
+          outputTokenLimit: 16_384,
+          supportedGenerationMethods: ['generateContent']
         }
       ] }))
     })
@@ -106,14 +113,29 @@ describe('model discovery', () => {
     const config = modelConfig(`http://127.0.0.1:${address.port}/v1beta/openai`, 'google_gemini')
     config.api_key = 'gemini-test-key'
 
-    await expect(discoverModels(config)).resolves.toEqual([{
-      id: 'models/gemini-test',
-      name: 'Gemini Test',
-      contextWindowTokens: 1_048_576,
-      maxOutputTokens: 8_192,
-      isUserAdded: false,
-      supportsImageInput: false
-    }])
+    const models = await discoverModels(config)
+    expect(models).toEqual([
+      {
+        id: 'models/gemini-test',
+        name: 'Gemini Test',
+        contextWindowTokens: 1_048_576,
+        maxOutputTokens: 8_192,
+        isUserAdded: false,
+        supportsImageInput: false
+      },
+      {
+        id: 'models/gemini-tts-test',
+        name: 'models/gemini-tts-test',
+        contextWindowTokens: 8_192,
+        maxOutputTokens: 16_384,
+        isUserAdded: false,
+        supportsImageInput: false
+      }
+    ])
+    expect(() => requestContracts['query.models.options'].output.parse({
+      items: models,
+      config: { ...config, model_options: models }
+    })).not.toThrow()
     expect(requests).toEqual([{
       url: '/v1beta/models?pageSize=1000',
       apiKey: 'gemini-test-key',
@@ -151,6 +173,52 @@ describe('model discovery', () => {
       expect.objectContaining({ type: 'function_call', call_id: 'call-1' }),
       expect.objectContaining({ type: 'function_call_output', call_id: 'call-1' })
     ]))
+  })
+
+  it('uses the native Gemini endpoint and Google-compatible tool schema', async () => {
+    const requests: Array<{ url: string | undefined; body: Record<string, unknown> }> = []
+    const server = createServer(async (request, response) => {
+      const body = JSON.parse(await readRequestBody(request)) as Record<string, unknown>
+      requests.push({ url: request.url, body })
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(requests.length === 1
+        ? {
+            candidates: [{
+              content: {
+                role: 'model',
+                parts: [{ functionCall: { name: 'eleckoi_capability_probe', args: { value: 'ok' } } }]
+              }
+            }]
+          }
+        : {
+            candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] } }]
+          }))
+    })
+    servers.add(server)
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address() as AddressInfo
+    const config = modelConfig(`http://127.0.0.1:${address.port}`, 'google_gemini')
+    config.model = 'models/gemini-test'
+
+    await expect(testModelConnection(config)).resolves.toBeUndefined()
+    expect(requests.map((request) => request.url)).toEqual([
+      '/v1beta/models/gemini-test:generateContent',
+      '/v1beta/models/gemini-test:generateContent'
+    ])
+    expect(requests[0]?.body).toMatchObject({
+      tools: [{
+        functionDeclarations: [{
+          parameters: {
+            type: 'OBJECT',
+            properties: { value: { type: 'STRING', enum: ['ok'] } },
+            required: ['value']
+          }
+        }]
+      }]
+    })
+    expect(JSON.stringify(requests[0]?.body)).not.toContain('additionalProperties')
+    expect(requests[1]?.body).toHaveProperty('tools')
   })
 
   it('rejects a chat completion endpoint that ignores the requested tool call without forcing tool_choice', async () => {

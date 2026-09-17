@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { DesktopGateway } from '@main/gateway/DesktopGateway'
+import type { Logger } from 'pino'
 import type { ConversationRepository, MessageRepository } from '@main/modules/conversations'
 import type { ModelRepository } from '@main/modules/models'
 import type { PersonaRepository } from '@main/modules/personas'
@@ -49,6 +50,7 @@ interface PreparingRun {
 }
 
 export interface AgentSessionDependencies {
+  logger?: Pick<Logger, 'error'> | undefined
   runtime: AgentRuntimePort
   database: SqliteDatabase
   gateway: DesktopGateway
@@ -540,6 +542,13 @@ export class AgentSessionCoordinator {
         return
       }
       const diagnosticMessage = errorMessage(error)
+      this.dependencies.logger?.error({
+        err: error,
+        conversationId: active.conversationId,
+        runId: active.runId,
+        messageId: active.messageId,
+        runtimeThreadId: active.runtimeThreadId
+      }, 'Agent 运行失败')
       const messageText = publicRuntimeErrorMessage(diagnosticMessage)
       const message = this.dependencies.database.withWriteTx((database) => {
         const errorContent = regexRules

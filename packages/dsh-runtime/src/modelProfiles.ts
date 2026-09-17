@@ -107,7 +107,7 @@ export function createDshProviderCatalog(settingsList: readonly DshModelSettings
     for (const settings of group.settings) {
       bindings[modelBindingKey(settings)] = compact({
         provider: group.provider,
-        model: settings.model,
+        model: runtimeModelId(settings),
         reasoningEffort: acceptedReasoningEffort(settings.reasoningEffort, findNativeModel(settings))
       })
     }
@@ -147,8 +147,8 @@ function modelBindingKey(settings: DshModelSettings): string {
 }
 
 function findNativeModel(identity: DshModelIdentity): NativeMatch | undefined {
-  const modelId = identity.model.trim()
-  const endpoint = normalizeUrl(identity.baseUrl)
+  const modelId = runtimeModelId(identity)
+  const endpoint = normalizeUrl(runtimeBaseUrl(identity))
   if (!modelId || endpoint === undefined) return undefined
   for (const provider of getBuiltinProviders()) {
     const model = getBuiltinModels(provider).find((candidate) => (
@@ -197,7 +197,7 @@ function providerProfile(
     apiKeyEnv,
     ...(inheritsCatalog ? {} : {
       api: native?.model.api ?? first.apiFormat,
-      baseURL: native?.model.baseUrl ?? first.baseUrl,
+      baseURL: native?.model.baseUrl ?? runtimeBaseUrl(first),
       defaultContextWindow: first.contextWindow,
       defaultMaxTokens: Math.min(32_768, first.contextWindow),
       defaultInput: first.supportsImageInput ? ['text', 'image'] : ['text']
@@ -214,14 +214,14 @@ function modelProfile(
 ): PiAiModelProfile {
   if (native !== undefined && inheritsCatalog) {
     return compact({
-      id: settings.model,
+      id: runtimeModelId(settings),
       contextWindow: settings.contextWindowOverride,
       input: settings.supportsImageInput ? ['text', 'image'] : ['text']
     }) as PiAiModelProfile
   }
   const model = native?.model
   return compact({
-    id: settings.model,
+    id: runtimeModelId(settings),
     name: model?.name,
     contextWindow: settings.contextWindowOverride ?? model?.contextWindow ?? settings.contextWindow,
     input: settings.supportsImageInput ? ['text', 'image'] : ['text'],
@@ -244,10 +244,36 @@ function providerConnectionKey(settings: DshModelSettings, native: NativeMatch |
     provider: native?.provider ?? 'custom',
     apiKey: settings.apiKey,
     api: settings.apiFormat,
-    baseUrl: normalizeUrl(settings.baseUrl) ?? settings.baseUrl.trim(),
+    baseUrl: normalizeUrl(runtimeBaseUrl(settings)) ?? runtimeBaseUrl(settings),
     headers: settings.customHeaders,
     proxyUrl: settings.proxyUrl ?? ''
   })
+}
+
+function runtimeModelId(identity: DshModelIdentity): string {
+  const model = identity.model.trim()
+  return identity.apiFormat === 'google-generative-ai'
+    ? model.replace(/^models\//i, '')
+    : model
+}
+
+function runtimeBaseUrl(identity: DshModelIdentity): string {
+  const configured = identity.baseUrl.trim().replace(/\/+$/, '')
+  if (identity.apiFormat !== 'google-generative-ai') return configured
+  try {
+    const url = new URL(configured)
+    const rootPath = url.pathname
+      .replace(/\/+$/, '')
+      .replace(/\/v1beta\/openai$/i, '')
+      .replace(/\/v1beta$/i, '')
+      .replace(/\/v1$/i, '')
+    url.pathname = `${rootPath}/v1beta`.replace(/\/+/g, '/')
+    url.search = ''
+    url.hash = ''
+    return url.toString().replace(/\/$/, '')
+  } catch {
+    return configured
+  }
 }
 
 function uniqueProviderName(base: string, key: string, used: Set<string>, direct: boolean): string {

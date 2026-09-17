@@ -2,7 +2,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createEntryDraft } from '../src/renderer/src/modules/settingLibraries/model/settingLibraryEditing.js';
-import { createPositionDraft, moveCustomPosition, positionManagementRows, positionPickerRows, removeCustomPosition, savePositionDraft } from '../src/renderer/src/modules/settingLibraries/model/customPositions.js';
+import { createPositionDraft, fixedPlacementRowSelectable, moveCustomPosition, positionManagementRows, positionPickerRows, removeCustomPosition, savePositionDraft } from '../src/renderer/src/modules/settingLibraries/model/customPositions.js';
 import { CustomPositionManager } from '../src/renderer/src/modules/settingLibraries/components/CustomPositionManager.jsx';
 import { CachedEntryInsertSection, SettingLibraryEntryEditor, VisualPositionPicker } from '../src/renderer/src/modules/settingLibraries/components/SettingLibraryEntryEditor.jsx';
 
@@ -120,6 +120,9 @@ describe('custom position editing', () => {
     expect(presetHtml).toContain('管理位置');
     expect(presetHtml).toContain('世界状态');
     expect((presetHtml.match(/is-card/g) || [])).toHaveLength(7);
+    expect(presetHtml).toContain('aria-label="选择系统指令"');
+    expect(presetHtml).toContain('aria-label="固定位置设定插入点 1"');
+    expect(presetHtml).not.toContain('aria-label="选择设定插入点 1"');
 
     const characterHtml = renderToStaticMarkup(<VisualPositionPicker {...props} entry={{ ...props.entry, promptPositionId: '' }} allowCustomPromptPositions={false} />);
     expect(characterHtml).toContain('插入位置');
@@ -127,6 +130,19 @@ describe('custom position editing', () => {
     expect(characterHtml).not.toContain('管理位置');
     expect(characterHtml).not.toContain('世界状态');
     expect((characterHtml.match(/is-card/g) || [])).toHaveLength(6);
+    expect(characterHtml).toContain('aria-label="选择设定插入点 1"');
+  });
+  it('keeps setting insertion points visible but non-selectable in Agent presets', () => {
+    const rows = positionPickerRows([]).filter((row) => row.type === 'position');
+    expect(rows.map((row) => [row.value, fixedPlacementRowSelectable(row, true)])).toEqual([
+      ['instructions', true],
+      ['insert_point_1', false],
+      ['insert_point_2', false],
+      ['insert_point_3', false],
+      ['insert_point_4', false],
+      ['insert_point_5', false],
+    ]);
+    expect(rows.every((row) => fixedPlacementRowSelectable(row, false))).toBe(true);
   });
   it('uses the three-step cache editor and keeps its insertion settings fixed', () => {
     vi.stubGlobal('crypto', { randomUUID: () => 'cache-entry' });

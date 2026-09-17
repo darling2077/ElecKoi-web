@@ -29,7 +29,7 @@ export function ModelParametersSection({ form, activeModelOption, automaticConte
         </label>
         <label>
           <span>单次最大输出 <small>留空由上游决定</small></span>
-          <input type="number" min="1" max={effectiveContextWindow} disabled={!form.model} value={activeModelOption?.maxOutputTokens ?? ""} onChange={(event) => onChange({ maxOutputTokens: optionalNumber(event.target.value) })} placeholder="自动" />
+          <input type="number" min="1" max="4000000" disabled={!form.model} value={activeModelOption?.maxOutputTokens ?? ""} onChange={(event) => onChange({ maxOutputTokens: optionalNumber(event.target.value) })} placeholder="自动" />
         </label>
         <label>
           <span>推理强度 <small>DSH / pi-ai</small></span>
@@ -50,7 +50,7 @@ export function ModelParametersSection({ form, activeModelOption, automaticConte
           <input type="checkbox" disabled={!form.model} checked={activeModelOption?.supportsImageInput === true} onChange={(event) => onChange({ supportsImageInput: event.target.checked })} />
         </label>
       </div>
-      {parameterError ? <p className="model-parameter-error">上下文需为 4,096–4,000,000；压缩和输出不能超过上下文；温度为 0–2，Top P 为 0–1。</p> : null}
+      {parameterError ? <p className="model-parameter-error">上下文需为 4,096–4,000,000；压缩不能超过上下文；输出需为 1–4,000,000；温度为 0–2，Top P 为 0–1。</p> : null}
     </section>
   );
 }

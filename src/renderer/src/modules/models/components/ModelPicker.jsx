@@ -64,7 +64,7 @@ function normalizedParameters(draft, automaticContextWindow) {
   const invalid = [contextWindowTokens, autoCompactTokenLimit, maxOutputTokens, temperature, topP].some(Number.isNaN)
     || (contextWindowTokens !== null && (contextWindowTokens < 4096 || contextWindowTokens > 4_000_000))
     || (autoCompactTokenLimit !== null && (autoCompactTokenLimit < 1024 || autoCompactTokenLimit > context))
-    || (maxOutputTokens !== null && (maxOutputTokens < 1 || maxOutputTokens > context))
+    || (maxOutputTokens !== null && (maxOutputTokens < 1 || maxOutputTokens > 4_000_000))
     || (temperature !== null && (temperature < 0 || temperature > 2))
     || (topP !== null && (topP < 0 || topP > 1));
   if (invalid) return null;

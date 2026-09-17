@@ -23,7 +23,7 @@
     "check:author-runtime-notices": "node scripts/generate-author-runtime-notices.mjs --check",
     "verify:packaged-dsh": "node scripts/verify-packaged-dsh-runtime.mjs",
     "build:native-frame": "node scripts/build-windows-native-frame.mjs",
-    "predev": "pnpm rebuild:electron && pnpm build:native-frame",
+    "predev": "pnpm build:workspace-runtime && pnpm rebuild:electron && pnpm build:native-frame",
     "dev": "electron-vite dev",
     "build": "pnpm check:architecture && pnpm check:database-schema && pnpm check:dsh-versions && pnpm check:dsh-runtime && pnpm check:licenses && pnpm check:author-runtime-notices && pnpm typecheck && electron-vite build && node scripts/check-built-preload.mjs && pnpm build:native-frame",
     "build:unpack": "pnpm build && pnpm rebuild:electron && pnpm check:electron-sqlite && pnpm check:electron-dsh && electron-builder --dir && pnpm verify:packaged-dsh",

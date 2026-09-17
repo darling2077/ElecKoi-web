@@ -29,7 +29,7 @@ import {
 } from "../model/settingLibraryEditing.js";
 import { commitKeywordDraft, splitKeywordDraft } from "../model/settingLibraryKeywords.js";
 import { CustomPositionManager, FixedPositionIcon } from './CustomPositionManager.jsx';
-import { positionPickerRows } from '../model/customPositions.js';
+import { fixedPlacementRowSelectable, positionPickerRows } from '../model/customPositions.js';
 
 const EDITOR_SECTIONS = [
   { id: "base", label: "基础" },
@@ -391,13 +391,26 @@ export function VisualPositionPicker({ entry, entries, promptPositions, allowCus
                 <i>{selected ? <Check size={11} weight="bold" /> : null}</i><span className="setting-library-placement-choice"><FixedPositionIcon id="custom" size={16} /><span>{position.name || '未命名位置'}</span></span>
               </button>;
             }
-            const selected = entry.position === row.value && !entry.promptPositionId;
+            const selectable = fixedPlacementRowSelectable(row, allowCustomPromptPositions);
+            const selected = selectable && entry.position === row.value && !entry.promptPositionId;
             if (row.type === "context") return <div className="setting-library-placement-row is-context" key={`context-${row.id}`}><i /><span><FixedPositionIcon id={row.id} size={16} />{row.label}</span></div>;
+            if (!selectable) return <div
+              className={`setting-library-placement-row${row.card ? " is-card" : ""} is-fixed`}
+              key={`${row.value}-${index}`}
+              aria-label={`固定位置${POSITION_LABEL.get(row.value)}`}
+            >
+              <i />
+              <span className="setting-library-placement-choice">
+                {row.card ? <FixedPositionIcon id={row.value} size={16} /> : null}
+                <span>{POSITION_LABEL.get(row.value)}</span>
+              </span>
+            </div>;
             return (
               <button
                 type="button"
                 className={`setting-library-placement-row${row.card ? " is-card" : ""}${selected ? " is-selected" : ""}`}
                 key={`${row.value}-${index}`}
+                aria-label={`选择${POSITION_LABEL.get(row.value)}`}
                 aria-pressed={selected}
                 onClick={() => onEntriesChange(moveEntryToPosition(entries, entry.id, row.value))}
               >
