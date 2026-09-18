@@ -169,10 +169,7 @@ export function stopChatMessageSend({
 
 export function getErrorMessage(error, fallback) {
   const raw = typeof error === "string" ? error : error?.message;
-  if (raw?.trim() && !/json-rpc|plugin tree|node_modules|file:\/\/\/|at\s+\S+\s*\(/i.test(raw)) {
-    return raw.split(/\r?\n/, 1)[0].slice(0, 200);
-  }
-  return fallback;
+  return raw?.trim() || fallback;
 }
 
 export function isAbortError(error) {

@@ -522,7 +522,7 @@ export class AgentSessionCoordinator {
       const status = active.cancelled || result === 'cancelled' ? 'cancelled' : 'complete'
       const rawContent = finalContent || active.accumulated
       if (status === 'complete' && rawContent.trim().length === 0) {
-        throw new Error('模型本轮没有返回可展示的正文，请重试。')
+        throw new Error('DSH completed the turn without assistant text')
       }
       const content = regexRules
         ? transformCollectionSurface(rawContent, regexRules, 'AiOutput', 'Stored')
@@ -579,7 +579,7 @@ export class AgentSessionCoordinator {
         messageId: active.messageId,
         runtimeThreadId: active.runtimeThreadId
       }, 'Agent 运行失败')
-      const messageText = publicRuntimeErrorMessage(diagnosticMessage)
+      const messageText = diagnosticMessage || 'Unknown agent runtime error'
       active.terminalCommitted = true
       const message = this.dependencies.database.withWriteTx((database) => {
         const errorContent = regexRules
@@ -685,12 +685,4 @@ function generationCancelledError(): Error {
   const error = new Error('生成已停止')
   error.name = 'AbortError'
   return error
-}
-
-function publicRuntimeErrorMessage(raw: string): string {
-  if (/json-rpc|plugin tree|node_modules|file:\/\/\/|at\s+\S+\s*\(/i.test(raw)) {
-    return 'Agent 启动失败，请重试。'
-  }
-  const firstLine = raw.split(/\r?\n/, 1)[0]?.trim()
-  return firstLine ? firstLine.slice(0, 200) : 'Agent 运行失败，请重试。'
 }

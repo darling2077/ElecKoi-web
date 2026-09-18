@@ -258,7 +258,7 @@ export function MainWindow() {
         onRegenerate={chat.regenerateReply}
         onDeleteMessages={chat.deleteMessagesFrom}
          onEditMessage={(message, replacementMessage) => chat.regenerateReply({
-          targetMessageId: message.id,
+          targetMessageId: message.turnId || message.id,
           replacementMessage,
          })}
          onEditOpening={chat.editOpening}
@@ -330,7 +330,7 @@ export function MainWindow() {
         onSave={saveModelChangesAndLeave}
         onDiscard={discardModelChangesAndLeave}
       />
-      <AppToast notice={chat.notice} />
+      <AppToast notice={chat.notice} onDismiss={chat.dismissNotice} />
       <AppUpdateController updates={appUpdates} />
     </main>
   );

@@ -66,11 +66,11 @@ describe('角色卡宏', () => {
   it('只解析变量状态 JSON 的字符串值并安全保留特殊字符', () => {
     const source = '{"name":"{{user}}","nested":["{{char}}",1],"{{user}}":"键名不变"}'
     const resolved = resolveCharacterCardMacrosInJson(source, {
-      userName: '测试用户"$1',
+      userName: '测试用户甲"$1',
       characterName: '角色'
     })
     expect(JSON.parse(resolved)).toEqual({
-      name: '测试用户"$1',
+      name: '测试用户甲"$1',
       nested: ['角色', 1],
       '{{user}}': '键名不变'
     })
@@ -106,6 +106,7 @@ describe('角色卡宏', () => {
       characterId: 'character-a',
       agentPresetId: '',
       agentPresetName: '',
+      agentPresetRegexRevision: '0'.repeat(64),
       globalRules: [],
       agentPresetRules: [],
       characterRules: [],

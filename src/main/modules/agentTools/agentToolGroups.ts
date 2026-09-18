@@ -4,9 +4,9 @@ export const AGENT_TOOL_GROUPS: ReadonlyArray<Omit<AgentToolGroup, 'enabled' | '
   group('builtin:mcp-resources', 'MCP 资源读取', '列出并读取 MCP 服务器提供的资源和资源模板', [
     'list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'
   ]),
-  group('builtin:workflow', '任务与交互', '维护任务计划，并在确有必要时向用户提问', [
-    'update_plan', 'todo_write', 'request_user_input', 'get_goal', 'create_goal', 'update_goal',
-    'get_context_remaining', 'new_context_window', 'job_output', 'job_list', 'job_kill', 'skill', 'workflow'
+  group('builtin:workflow', '任务与工作流', '维护任务、目标和后台作业，并编排大规模子代理工作流', [
+    'todo_write', 'get_goal', 'create_goal', 'update_goal',
+    'job_output', 'job_list', 'job_kill', 'skill', 'workflow'
   ]),
   group('builtin:creator', '创作能力', '按需发现并调用角色创作、设定库与图片生成能力', [
     'eleckoi_list_toolsets', 'eleckoi_describe_toolset', 'eleckoi_call_capability'
@@ -15,8 +15,7 @@ export const AGENT_TOOL_GROUPS: ReadonlyArray<Omit<AgentToolGroup, 'enabled' | '
     'eleckoi_glob_variables', 'eleckoi_grep_variables', 'eleckoi_read_variables', 'eleckoi_apply_variable_patch'
   ]),
   group('builtin:collaboration', '多代理协作', '创建和管理并行子任务；普通角色通常不需要', [
-    'subagent', 'spawn_agent', 'send_input', 'resume_agent', 'wait_agent', 'close_agent',
-    'send_message', 'followup_task', 'interrupt_agent', 'list_agents'
+    'subagent', 'subagent_fork', 'send_message', 'interrupt_agent', 'list_agents'
   ]),
   group('builtin:plugin-discovery', '插件发现', '发现并请求安装当前尚未启用的插件', [
     'request_plugin_install', 'list_available_plugins_to_install'

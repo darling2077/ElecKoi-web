@@ -61,8 +61,10 @@ function harness() {
   const agentPresets = new AgentPresetRepository(database)
   agentPresets.ensureInitialized()
   const repository = new RegexRuleRepository(database, agentPresets)
-  return { database, repository }
+  return { agentPresets, database, repository }
 }
+
+const EMPTY_PRESET_REGEX_REVISION = '0'.repeat(64)
 
 describe('regex processor', () => {
   it('matches Android delimiter, flags and replacement semantics', () => {
@@ -79,7 +81,8 @@ describe('regex processor', () => {
 
   it('keeps scope priority and Android surface rules', () => {
     const collection = {
-      characterId: 'card-a', agentPresetId: 'preset', agentPresetName: '标准', revision: 0,
+      characterId: 'card-a', agentPresetId: 'preset', agentPresetName: '标准',
+      agentPresetRegexRevision: EMPTY_PRESET_REGEX_REVISION, revision: 0,
       globalRules: [rule({ id: 'global', pattern: '/x/g', replacement: 'g' })],
       agentPresetRules: [rule({ id: 'preset', pattern: '/g/g', replacement: 'p', displayOnly: true })],
       characterRules: [rule({ id: 'character', pattern: '/p/g', replacement: 'c', promptOnly: true })],
@@ -93,7 +96,8 @@ describe('regex processor', () => {
   it('allows one rule on both display and prompt surfaces without changing stored text', () => {
     const shared = rule({ id: 'shared', displayOnly: true, promptOnly: true })
     const collection = {
-      characterId: 'card-a', agentPresetId: 'preset', agentPresetName: '标准', revision: 0,
+      characterId: 'card-a', agentPresetId: 'preset', agentPresetName: '标准',
+      agentPresetRegexRevision: EMPTY_PRESET_REGEX_REVISION, revision: 0,
       globalRules: [], agentPresetRules: [], characterRules: [shared], versions: [], activeVersionId: ''
     }
     expect(rulesForSurface(collection, 'AiOutput', 'Display').map((item) => item.id)).toEqual(['shared'])
@@ -103,7 +107,8 @@ describe('regex processor', () => {
 
   it('applies a saved regex preset to all three rule scopes', () => {
     const collection = {
-      characterId: 'card-a', agentPresetId: 'preset', agentPresetName: '标准', revision: 0,
+      characterId: 'card-a', agentPresetId: 'preset', agentPresetName: '标准',
+      agentPresetRegexRevision: EMPTY_PRESET_REGEX_REVISION, revision: 0,
       globalRules: [rule({ id: 'global' })],
       agentPresetRules: [rule({ id: 'preset' })],
       characterRules: [rule({ id: 'character' })],
@@ -123,7 +128,8 @@ describe('regex processor', () => {
     const enabled = rule({ id: 'enabled-import' })
     const disabled = rule({ id: 'disabled-import', enabled: false })
     const collection = {
-      characterId: 'card-a', agentPresetId: 'preset', agentPresetName: '标准', revision: 0,
+      characterId: 'card-a', agentPresetId: 'preset', agentPresetName: '标准',
+      agentPresetRegexRevision: EMPTY_PRESET_REGEX_REVISION, revision: 0,
       globalRules: [], agentPresetRules: [], characterRules: [enabled, disabled],
       versions: [{
         id: 'version-a', name: '常用', globalEnabledIds: [], agentPresetEnabledIds: [], characterEnabledIds: []
@@ -165,6 +171,65 @@ describe('regex repository', () => {
       .toEqual(expect.objectContaining({ content: expect.stringContaining('preset') }))
     expect(() => repository.save('card-a', saved, empty.revision)).toThrow('其他窗口更新')
     expect(database.native.pragma('foreign_key_check')).toEqual([])
+  })
+
+  it('reads the active preset rules and rejects a stale page after the active preset changes', () => {
+    const { agentPresets, repository } = harness()
+    const initial = agentPresets.active()
+    agentPresets.save({
+      ...initial,
+      regexRules: [rule({ id: 'preset-a', name: '预设 A' })]
+    })
+    const loaded = repository.get('card-a')
+    expect(loaded.agentPresetRules.map((item) => item.id)).toEqual(['preset-a'])
+
+    const next = agentPresets.create('预设 B')
+    agentPresets.save({
+      ...next,
+      regexRules: [rule({ id: 'preset-b', name: '预设 B' })]
+    })
+    agentPresets.setActive(next.id)
+
+    expect(repository.get('card-a')).toMatchObject({
+      agentPresetId: next.id,
+      agentPresetRules: [{ id: 'preset-b' }]
+    })
+    expect(() => repository.save('card-a', loaded, loaded.revision)).toThrow('当前 Agent 预设或其正则已在其他窗口更新')
+    expect(agentPresets.active().regexRules.map((item) => item.id)).toEqual(['preset-b'])
+  })
+
+  it('rejects stale preset rules when the same active preset was edited elsewhere', () => {
+    const { agentPresets, repository } = harness()
+    const loaded = repository.get('card-a')
+    const active = agentPresets.active()
+    agentPresets.save({
+      ...active,
+      regexRules: [rule({ id: 'external', name: '外部更新' })]
+    })
+
+    expect(() => repository.save('card-a', {
+      ...loaded,
+      characterRules: [rule({ id: 'local', name: '本页修改' })]
+    }, loaded.revision)).toThrow('当前 Agent 预设或其正则已在其他窗口更新')
+    expect(agentPresets.active().regexRules.map((item) => item.id)).toEqual(['external'])
+  })
+
+  it('rejects a stale preset editor save after regex rules changed elsewhere', () => {
+    const { agentPresets } = harness()
+    const stale = agentPresets.active()
+    agentPresets.save({
+      ...stale,
+      regexRules: [rule({ id: 'external', name: '外部更新' })]
+    })
+
+    expect(() => agentPresets.save({
+      ...stale,
+      name: '旧页面修改'
+    }, stale.regexRules)).toThrow('当前预设正则已在其他窗口更新')
+    expect(agentPresets.active()).toMatchObject({
+      name: stale.name,
+      regexRules: [{ id: 'external' }]
+    })
   })
 
   it('imports Tavern rules, keeps scopes and ignores unsupported depth metadata', () => {

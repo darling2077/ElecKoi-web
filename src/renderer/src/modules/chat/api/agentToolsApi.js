@@ -14,7 +14,7 @@ function asToolCatalog(preset, configs) {
   return {
     characterId: '',
     scopeId: `agent-preset:${preset.id}`,
-    groups: preset.toolGroups.filter((group) => group.included ?? group.enabled),
+    groups: preset.toolGroups.filter((group) => group.included),
     modelConfigs: chatModelConfigs(configs),
     subagentModelSelection: preset.subagentModelSelection,
     roleplayPlan: preset.roleplayPlan,
@@ -32,6 +32,7 @@ export async function loadAgentTools() {
 export async function setAgentToolGroupEnabled(groupId, enabled) {
   const { preset } = await loadActivePreset();
   const saved = await desktopClient.request('command.agent_presets.save', {
+    expectedRegexRules: preset.regexRules,
     preset: {
       ...preset,
       toolGroups: preset.toolGroups.map((group) => group.id === groupId ? { ...group, included: true, enabled } : group),
@@ -47,6 +48,7 @@ export async function setSubagentModelSelection(selection) {
     desktopClient.request('query.models.list', {}),
   ]);
   const saved = await desktopClient.request('command.agent_presets.save', {
+    expectedRegexRules: preset.regexRules,
     preset: { ...preset, subagentModelSelection: selection },
   });
   return asToolCatalog(saved, configs);
@@ -58,6 +60,7 @@ export async function setRoleplayPlanSettings(roleplayPlan) {
     desktopClient.request('query.models.list', {}),
   ]);
   const saved = await desktopClient.request('command.agent_presets.save', {
+    expectedRegexRules: preset.regexRules,
     preset: { ...preset, roleplayPlan },
   });
   return asToolCatalog(saved, configs);

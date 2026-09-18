@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { faChevronLeft, faChevronRight } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
@@ -185,7 +185,6 @@ function MessageBubbleComponent({ message = {}, avatar, name, layoutMode = "role
   const [pageInput, setPageInput] = useState("");
   const [openingSwitching, setOpeningSwitching] = useState(false);
   const articleRef = useRef(null);
-  const editTextareaRef = useRef(null);
   const toolsRef = useRef(null);
   const jumpDialogRef = useRef(null);
   const jumpTriggerRef = useRef(null);
@@ -202,27 +201,6 @@ function MessageBubbleComponent({ message = {}, avatar, name, layoutMode = "role
   const requestedPageValid = requestedIndex >= 0 && requestedIndex < options.length;
 
   useEffect(() => setDraft(content || ""), [content]);
-  useLayoutEffect(() => {
-    const textarea = editTextareaRef.current;
-    if (!editing || !textarea) return;
-
-    // Chromium versions that support field-sizing handle this in CSS. Keep a
-    // scrollHeight fallback for older Electron runtimes so long messages never
-    // stay trapped in the initial one-line box.
-    if (typeof CSS !== "undefined" && CSS.supports?.("field-sizing", "content")) {
-      textarea.style.height = "";
-      textarea.style.overflowY = "";
-      return;
-    }
-
-    textarea.style.height = "0px";
-    const computedMaxHeight = Number.parseFloat(window.getComputedStyle(textarea).maxHeight);
-    const viewportMaxHeight = Math.min(620, window.innerHeight * 0.75);
-    const maxHeight = Number.isFinite(computedMaxHeight) ? computedMaxHeight : viewportMaxHeight;
-    const nextHeight = Math.min(textarea.scrollHeight, maxHeight);
-    textarea.style.height = `${nextHeight}px`;
-    textarea.style.overflowY = textarea.scrollHeight > nextHeight ? "auto" : "hidden";
-  }, [draft, editing]);
   useEffect(() => {
     if (!expanded) return undefined;
     const close = (event) => { if (!toolsRef.current?.contains(event.target)) setExpanded(false); };
@@ -339,7 +317,6 @@ function MessageBubbleComponent({ message = {}, avatar, name, layoutMode = "role
         </div>
         {isUser ? <ChatImageGallery images={message.inputImageAttachments || []} conversationId={message.conversationId} /> : null}
         {editing ? <div className="message-inline-editor"><textarea
-          ref={editTextareaRef}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {

@@ -2,7 +2,6 @@ import { getBuiltinModels } from '@earendil-works/pi-ai/providers/all'
 import { Config as DshPiAiConfig } from '@deepseek-ai/dsh-llm-pi-ai'
 import {
   createDshProviderCatalog,
-  createDshProviderPlan,
   describeDshModelCapabilities,
   resolveDshProviderBinding
 } from '@eleckoi/dsh-runtime'
@@ -37,7 +36,7 @@ describe('DSH native model profiles', () => {
 
     const native = getBuiltinModels('moonshotai-cn').find((model) => model.id === 'kimi-k3')
     expect(native?.compat).toMatchObject({ supportsDeveloperRole: false })
-    const plan = createDshProviderPlan({ ...kimiK3, reasoningEffort: 'high', topP: 0.85 })
+    const plan = providerPlan({ ...kimiK3, reasoningEffort: 'high', topP: 0.85 })
     expect(plan.main).toEqual({ provider: 'moonshotai-cn', model: 'kimi-k3', reasoningEffort: 'high' })
     expect(plan.providers['moonshotai-cn']?.apiKeyEnv).toMatch(/^ELECKOI_MODEL_KEY_/)
     expect(plan.providers['moonshotai-cn']?.models).toEqual([
@@ -50,12 +49,12 @@ describe('DSH native model profiles', () => {
   })
 
   it('does not send an unsupported Kimi K3 off effort', () => {
-    const plan = createDshProviderPlan({ ...kimiK3, reasoningEffort: 'off' })
+    const plan = providerPlan({ ...kimiK3, reasoningEffort: 'off' })
     expect(plan.main).toEqual({ provider: 'moonshotai-cn', model: 'kimi-k3' })
   })
 
   it('omits Top P when the model leaves it on the upstream default', () => {
-    const plan = createDshProviderPlan(kimiK3)
+    const plan = providerPlan(kimiK3)
     expect(plan.providers['moonshotai-cn']).not.toHaveProperty('models.0.topP')
   })
 
@@ -74,7 +73,7 @@ describe('DSH native model profiles', () => {
       source: 'provider_default',
       reasoningEfforts: []
     })
-    const plan = createDshProviderPlan(custom)
+    const plan = providerPlan(custom)
     expect(plan.main.provider).toMatch(/^openai-completions-/)
     expect(plan.main).toEqual({ provider: plan.main.provider, model: 'private-model' })
     expect(plan.providers[plan.main.provider]).toMatchObject({

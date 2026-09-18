@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useChatSessions } from "../../modules/chat/index.js";
 import { getModelConfig, getModelMeta, useModelRuntime } from "../../modules/models/index.js";
 import { usePersonaCharacters } from "../../modules/persona/index.js";
@@ -13,10 +13,13 @@ export function useChatClient() {
   function notify(type, message) {
     const id = Date.now();
     setNotice({ id, type, message });
+    if (type === "error") return;
     window.setTimeout(() => {
       setNotice((current) => (current?.id === id ? null : current));
-    }, type === "error" ? 5200 : 3200);
+    }, 3200);
   }
+
+  const dismissNotice = useCallback(() => setNotice(null), []);
 
   const {
     modelConfig,
@@ -212,6 +215,7 @@ export function useChatClient() {
     status,
     notice,
     notify,
+    dismissNotice,
     language,
     chatPersona,
     chatBackgroundCharacter,

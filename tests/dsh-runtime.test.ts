@@ -7,6 +7,58 @@ import { DshRuntime } from '@eleckoi/dsh-runtime'
 import { describe, expect, it, vi } from 'vitest'
 
 describe('packaged DSH runtime composition', () => {
+  it('surfaces the provider failure recorded by a failed turn/end event', async () => {
+    const server = createServer(async (request, response) => {
+      for await (const _chunk of request) {
+        // Drain the request before returning the provider failure.
+      }
+      response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '59' })
+      response.end(JSON.stringify({
+        error: {
+          message: 'RAW_PROVIDER_QUOTA_FAILURE',
+          code: 429,
+          status: 'Too Many Requests'
+        }
+      }))
+    })
+    server.listen(0, '127.0.0.1')
+    await once(server, 'listening')
+    const address = server.address()
+    if (address === null || typeof address === 'string') throw new Error('Local test server did not expose a TCP port')
+
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-provider-error-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'),
+      runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath
+    })
+
+    try {
+      await expect(runtime.stream('conversation-provider-error', '你好', {
+        configId: 'provider-error',
+        provider: 'custom',
+        apiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: 'provider-error-model',
+        systemPrompt: '',
+        apiFormat: 'openai-completions',
+        customHeaders: {},
+        contextWindow: 128_000,
+        supportsImageInput: false
+      }, {
+        onDelta: () => undefined,
+        onFinal: () => undefined
+      })).rejects.toThrow(/RAW_PROVIDER_QUOTA_FAILURE/)
+    } finally {
+      await runtime.close()
+      server.close()
+      await once(server, 'close')
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   it('normalizes and persists submitted images with the complete DSH policy', async () => {
     const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-image-'))
     const runtime = new DshRuntime({
@@ -137,6 +189,12 @@ describe('packaged DSH runtime composition', () => {
       expect(composition).toContain('thresholdRatio: 0.8')
       expect(composition).toContain('retainTokens: 0')
       expect(composition).not.toContain('retainRatio')
+      expect(composition).not.toMatch(/name:\s*['"]@deepseek-ai\//)
+      const normalizedComposition = composition.replaceAll('\\\\', '/').replaceAll('\\', '/')
+      expect(normalizedComposition).toMatch(/dsh-agent-instructions\/lib\/index\.js/)
+      expect(normalizedComposition).toMatch(/dsh-compaction-basic\/lib\/index\.js/)
+      expect(normalizedComposition).toMatch(/dsh-command-compact\/lib\/index\.js/)
+      expect(normalizedComposition).toMatch(/dsh-compaction-tool-result-pruner\/lib\/index\.js/)
     } finally {
       await runtime.close()
       await rm(root, { recursive: true, force: true })
@@ -763,7 +821,20 @@ describe('packaged DSH runtime composition', () => {
       expect(child?.body).not.toHaveProperty('reasoning_effort')
       expect(child?.body).toHaveProperty('messages')
       expect(requests.filter((item) => item.body.model === 'main-model')).toHaveLength(2)
-      expect(requests.find((item) => item.body.model === 'main-model')?.authorization).toBe('Bearer main-key')
+      const mainRequest = requests.find((item) => item.body.model === 'main-model')
+      expect(mainRequest?.authorization).toBe('Bearer main-key')
+      const mainToolNames = ((mainRequest?.body.tools ?? []) as Array<{ function?: { name?: string } }>)
+        .map((tool) => tool.function?.name)
+        .filter((name): name is string => typeof name === 'string')
+      expect(mainToolNames).toEqual(expect.arrayContaining([
+        'subagent', 'subagent_fork', 'send_message', 'interrupt_agent', 'list_agents',
+        'todo_write', 'get_goal', 'create_goal', 'update_goal',
+        'job_output', 'job_list', 'job_kill', 'skill', 'workflow'
+      ]))
+      expect(mainToolNames).not.toEqual(expect.arrayContaining([
+        'spawn_agent', 'send_input', 'resume_agent', 'wait_agent', 'close_agent', 'followup_task',
+        'update_plan', 'request_user_input', 'get_context_remaining', 'new_context_window'
+      ]))
     } finally {
       await runtime.close()
       server.close()

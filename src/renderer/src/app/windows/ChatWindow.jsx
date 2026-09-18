@@ -70,7 +70,7 @@ export function ChatWindow() {
           onRegenerate={chat.regenerateReply}
           onDeleteMessages={chat.deleteMessagesFrom}
           onEditMessage={(message, replacementMessage) => chat.regenerateReply({
-            targetMessageId: message.id,
+            targetMessageId: message.turnId || message.id,
             replacementMessage,
           })}
           onEditOpening={chat.editOpening}
@@ -109,7 +109,7 @@ export function ChatWindow() {
         onSaveNewCharacterBackground={appearance.saveNewCharacterBackground}
         onNotify={chat.notify}
       />
-      <AppToast notice={chat.notice} />
+      <AppToast notice={chat.notice} onDismiss={chat.dismissNotice} />
     </main>
   );
 }

@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { classify, filterDeclarations } from '../resources/dsh/tool-policy.mjs'
 
 describe('DSH character tool policy', () => {
-  it('classifies Android tool groups and keeps internal probes', () => {
+  it('classifies the current desktop tool groups and keeps internal probes', () => {
     expect(classify({ type: 'function', function: { name: 'eleckoi_read_variables' } })).toBe('builtin:variables')
     expect(classify({ type: 'function', function: { name: 'pwsh' } })).toBe('builtin:workspace')
     expect(classify({ type: 'function', function: { name: 'skill' } })).toBe('builtin:workflow')
     expect(classify({ type: 'function', function: { name: 'workflow' } })).toBe('builtin:workflow')
+    expect(classify({ type: 'function', function: { name: 'subagent_fork' } })).toBe('builtin:collaboration')
+    expect(classify({ type: 'function', function: { name: 'send_message' } })).toBe('builtin:collaboration')
     expect(classify({ type: 'namespace', name: 'collaboration', tools: [] })).toBe('builtin:collaboration')
     expect(classify({ type: 'web_search' })).toBe('builtin:web')
+    expect(classify({ type: 'function', function: { name: 'spawn_agent' } })).toBe('builtin:other')
+    expect(classify({ type: 'function', function: { name: 'update_plan' } })).toBe('builtin:other')
     expect(classify({ type: 'function', function: { name: 'future_tool' } })).toBe('builtin:other')
 
     expect(filterDeclarations([

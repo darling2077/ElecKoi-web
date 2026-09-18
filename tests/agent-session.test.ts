@@ -351,7 +351,7 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
     await harness.terminal
 
     expect(harness.events.find((event) => event.name === 'agent.run.failed')).toMatchObject({
-      payload: { message: '模型本轮没有返回可展示的正文，请重试。' }
+      payload: { message: 'DSH completed the turn without assistant text' }
     })
     expect(harness.terminalRecords).toEqual([{ status: 'error', state: 'failed', text: '' }])
   })

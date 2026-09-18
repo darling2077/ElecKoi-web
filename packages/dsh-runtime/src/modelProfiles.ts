@@ -51,12 +51,6 @@ export interface DshProviderCatalog {
   bindings: Record<string, DshProviderBinding>
 }
 
-export interface DshProviderPlan {
-  providers: Record<string, DshProviderProfile>
-  main: DshProviderBinding
-  subagent: DshProviderBinding
-}
-
 interface NativeRoute {
   provider: BuiltinProvider
   model: CatalogModel | undefined
@@ -184,18 +178,6 @@ export function resolveDshProviderBinding(
   const binding = catalog.bindings[modelBindingKey(settings)]
   if (binding === undefined) throw new Error(`模型 ${settings.model} 不在当前 DSH provider 目录中。`)
   return binding
-}
-
-export function createDshProviderPlan(
-  mainSettings: DshModelSettings,
-  subagentSettings: DshModelSettings = mainSettings
-): DshProviderPlan {
-  const catalog = createDshProviderCatalog([mainSettings, subagentSettings])
-  return {
-    providers: catalog.providers,
-    main: resolveDshProviderBinding(catalog, mainSettings),
-    subagent: resolveDshProviderBinding(catalog, subagentSettings)
-  }
 }
 
 function createDeepSeekProfile(

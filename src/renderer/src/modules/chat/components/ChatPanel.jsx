@@ -551,7 +551,7 @@ function VirtualizedMessageList({
               onOpenProcess={onOpenProcess}
               onEdit={item.id === "opening" ? onEditOpening : onEditMessage}
               onSelectOpening={onSelectOpening}
-              onRegenerate={(message) => onRegenerate?.({ targetMessageId: message.id })}
+              onRegenerate={(message) => onRegenerate?.({ targetMessageId: message.turnId || message.id })}
               />
             )}
           </div>

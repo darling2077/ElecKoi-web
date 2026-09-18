@@ -72,14 +72,12 @@ const WORKSPACE_TOOLS = new Set([
   'shell_command', 'bash', 'pwsh', 'read', 'edit', 'write', 'exec_command', 'write_stdin', 'apply_patch', 'request_permissions'
 ])
 const WORKFLOW_TOOLS = new Set([
-  'update_plan', 'todo_write', 'request_user_input', 'get_goal', 'create_goal', 'update_goal',
-  'get_context_remaining', 'new_context_window', 'job_output', 'job_list', 'job_kill',
-  'load_skill', 'skill', 'workflow'
+  'todo_write', 'get_goal', 'create_goal', 'update_goal',
+  'job_output', 'job_list', 'job_kill', 'skill', 'workflow'
 ])
 const ROLEPLAY_TOOLS = new Set(['update_roleplay_plan'])
 const MCP_RESOURCE_TOOLS = new Set(['list_mcp_resources', 'list_mcp_resource_templates', 'read_mcp_resource'])
 const PLUGIN_DISCOVERY_TOOLS = new Set(['request_plugin_install', 'list_available_plugins_to_install'])
 const COLLABORATION_TOOLS = new Set([
-  'subagent', 'subagent_fork', 'spawn_agent', 'send_input', 'resume_agent', 'wait_agent', 'close_agent',
-  'send_message', 'followup_task', 'interrupt_agent', 'list_agents'
+  'subagent', 'subagent_fork', 'send_message', 'interrupt_agent', 'list_agents'
 ])

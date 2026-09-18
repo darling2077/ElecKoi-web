@@ -349,10 +349,10 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
       setStatus("请先在发送按钮左侧选择模型");
       return;
     }
-    const targetMessageId = String(options.targetMessageId || "").trim();
+    const requestedTargetMessageId = String(options.targetMessageId || "").trim();
     const hasReplacementMessage = Object.prototype.hasOwnProperty.call(options, "replacementMessage");
     const replacementMessage = hasReplacementMessage ? String(options.replacementMessage || "").trim() : "";
-    if (!targetMessageId) {
+    if (!requestedTargetMessageId) {
       setStatus(hasReplacementMessage ? "请选择要修改的输入" : "请选择要重新生成的 AI 回复");
       return;
     }
@@ -361,11 +361,13 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
       return;
     }
 
-    const branchUserIndex = findRegenerateBranchUserIndex(messages, targetMessageId, hasReplacementMessage);
+    const branchUserIndex = findRegenerateBranchUserIndex(messages, requestedTargetMessageId, hasReplacementMessage);
     if (branchUserIndex < 0) {
       setStatus(hasReplacementMessage ? "没有找到要修改的用户输入" : "没有找到这条回复对应的用户输入");
       return;
     }
+    const branchUser = messages[branchUserIndex];
+    const targetMessageId = String(branchUser?.turnId || branchUser?.id || requestedTargetMessageId).trim();
 
     const controller = new AbortController();
     const activeRequest = { controller };
@@ -428,7 +430,19 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
     } catch (error) {
       if (requestRef.current === activeRequest && !isAbortError(error)) {
         const message = getErrorMessage(error, "重新生成失败");
-        commitPendingError(assistantId);
+        let reconciled = false;
+        try {
+          const durable = await getChat(sessionId);
+          if (requestRef.current === activeRequest) {
+            reconcileChatMessages(durable.chat);
+            setChatCharacter(normalizeLatestChatCharacter(durable.chat || {}));
+            reconciled = true;
+          }
+        } catch {
+          // Preserve the original regeneration failure when durable refresh also fails.
+        }
+        if (requestRef.current !== activeRequest) return;
+        if (!reconciled) commitPendingError(assistantId);
         setStatus(message);
         notify?.("error", message);
       }

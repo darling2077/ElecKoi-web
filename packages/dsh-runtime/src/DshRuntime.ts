@@ -1,5 +1,6 @@
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import {
   DeepSeekHarness,
@@ -40,6 +41,8 @@ import type {
   DshAgentPreset,
   DshWebSearchSettings
 } from './types'
+
+const resolveRuntimeModule = createRequire(import.meta.url).resolve
 import {
   readDshTrajectory,
   type DshSessionEventRecord,
@@ -97,31 +100,23 @@ export class DshRuntime {
     const decoded = images.map(decodeImage)
     const totalBytes = decoded.reduce((total, image) => total + image.data.byteLength, 0)
     if (totalBytes > imageLimits.maxMessageImageBytes) throw new Error('每条消息的图片总计不能超过 20 MB。')
-    try {
-      const prepared = await Promise.all(decoded.map((image) => (
-        prepareImageFile(image, imageLimits, imageNormalizationPolicy)
-      )))
-      const root = join(this.options.runtimeDataRoot, 'home', 'attachments', 'v1')
-      const committed: DshImageAttachmentRef[] = []
-      for (const image of prepared) {
-        committed.push(await commitPreparedImageFile(root, image) as unknown as DshImageAttachmentRef)
-      }
-      return committed
-    } catch (error) {
-      throw new Error(publicImageError(error), { cause: error })
+    const prepared = await Promise.all(decoded.map((image) => (
+      prepareImageFile(image, imageLimits, imageNormalizationPolicy)
+    )))
+    const root = join(this.options.runtimeDataRoot, 'home', 'attachments', 'v1')
+    const committed: DshImageAttachmentRef[] = []
+    for (const image of prepared) {
+      committed.push(await commitPreparedImageFile(root, image) as unknown as DshImageAttachmentRef)
     }
+    return committed
   }
 
   async readImage(image: DshImageAttachmentRef): Promise<{ mediaType: DshImageAttachmentRef['mediaType']; data: string }> {
-    try {
-      const stored = await readImageFile(
-        join(this.options.runtimeDataRoot, 'home', 'attachments', 'v1'),
-        image as unknown as ImageAttachmentRef
-      )
-      return { mediaType: image.mediaType, data: Buffer.from(stored.data).toString('base64') }
-    } catch (error) {
-      throw new Error('图片读取失败。', { cause: error })
-    }
+    const stored = await readImageFile(
+      join(this.options.runtimeDataRoot, 'home', 'attachments', 'v1'),
+      image as unknown as ImageAttachmentRef
+    )
+    return { mediaType: image.mediaType, data: Buffer.from(stored.data).toString('base64') }
   }
 
   removeImage(attachmentId: string): void {
@@ -264,9 +259,10 @@ export class DshRuntime {
         }
       )
       if (run.cancelled) return 'cancelled'
-      if (!result.events.some((event) => event.type === 'turn/end')) {
-        throw new Error('Agent 会话提前结束，本轮消息未实际执行，请重试。')
-      }
+      const turnEnd = result.events.findLast((event) => event.type === 'turn/end')
+      if (turnEnd === undefined) throw new Error('DSH session ended without a turn/end event')
+      const turnFailure = turnEndFailureMessage(turnEnd)
+      if (turnFailure !== undefined) throw new Error(turnFailure)
       if (variableContext !== undefined) callbacks.onVariableState?.(readVariableBridgeState(variableStateFile))
       if (conversationContext?.settingLibrary !== undefined) callbacks.onSettingLibraryState?.(readSettingBridgeState(settingStateFile))
       callbacks.onFinal(finalReplyText(result.finalResponse))
@@ -659,6 +655,7 @@ export class DshRuntime {
         ).model)}`,
         ...(subagentSettings.maxTokens === undefined ? [] : [`      maxTokens: ${subagentSettings.maxTokens}`])
       ].join('\n') : '')
+    composition = resolvePresetPluginSpecifiers(composition)
     const disabled = new Set(toolPolicy?.disabledGroupIds ?? [])
     composition = applyPresetToolPolicy(composition, disabled)
     writeAtomically(join(directory, 'agent.cordis.yml'), composition)
@@ -699,6 +696,15 @@ export class DshRuntime {
       if ([...prefixes].some((prefix) => key.startsWith(prefix))) this.trajectoryContextTurns.delete(key)
     }
   }
+}
+
+function resolvePresetPluginSpecifiers(source: string): string {
+  return source.replace(
+    /(^\s*name:\s*)(['"])(@deepseek-ai\/[^'"\r\n]+)\2\s*$/gm,
+    (_match, prefix: string, _quote: string, specifier: string) => (
+      `${prefix}${JSON.stringify(resolveRuntimeModule(specifier))}`
+    )
+  )
 }
 
 function defaultAgentPreset(): DshAgentPreset {
@@ -853,15 +859,6 @@ function decodeImage(image: DshEncodedImageAttachment): SaveImageAttachment {
   return { data, mediaType: image.mediaType, ...(image.name ? { name: image.name } : {}) }
 }
 
-function publicImageError(error: unknown): string {
-  const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
-  if (code === 'IMAGE_TOO_LARGE') return '图片大小超过限制。'
-  if (code === 'IMAGE_TOO_MANY_PIXELS') return '图片像素总量超过 6400 万，请缩小后重试。'
-  if (code === 'IMAGE_DIMENSION_TOO_LARGE') return '图片宽或高不能超过 8192 像素，请缩小后重试。'
-  if (code === 'IMAGE_TYPE_MISMATCH' || code === 'INVALID_IMAGE') return '无法识别这张图片，请重新选择 PNG、JPEG、WebP 或 GIF。'
-  return '图片处理失败，请重新添加。'
-}
-
 function safeConversationDirectory(conversationId: string): string {
   return conversationId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 96) || 'default'
 }
@@ -972,6 +969,15 @@ function clearConversationEntries<T>(entries: Map<string, T>, conversationId: st
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function turnEndFailureMessage(event: unknown): string | undefined {
+  const data = isRecord(event) ? isRecord(event.data) ? event.data : undefined : undefined
+  const reason = isRecord(data?.reason) ? data.reason : undefined
+  if (reason?.kind !== 'error') return undefined
+  const failure = isRecord(reason.error) ? reason.error : undefined
+  if (typeof failure?.message === 'string' && failure.message.trim()) return failure.message
+  return JSON.stringify(failure ?? reason)
 }
 
 function parsedObject(raw: string, label: string): Record<string, unknown> {

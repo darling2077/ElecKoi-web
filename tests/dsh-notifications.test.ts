@@ -357,7 +357,7 @@ describe('DSH process projection', () => {
       error: 'summary is not smaller than the shadowed content (420 estimated framed tokens >= 300)'
     }, 200))).toMatchObject({
       status: 'error',
-      summary: '摘要没有比被替换的历史更短（摘要约 420 Token，原历史约 300 Token）'
+      summary: 'summary is not smaller than the shadowed content (420 estimated framed tokens >= 300)'
     })
   })
 

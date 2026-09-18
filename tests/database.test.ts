@@ -341,7 +341,7 @@ describe('shared SQLite baseline', () => {
       firstStart.close()
       secondStart.close()
     }
-  }, 30_000)
+  }, 15_000)
 
   it('rolls back every v1 schema change when a migration step fails', () => {
     const database = legacyV1Database()
@@ -600,7 +600,7 @@ describe('shared SQLite baseline', () => {
     } finally {
       secondReopen.close()
     }
-  }, 30_000)
+  })
 
   it('keeps a v2 file unchanged when the placement migration encounters damaged JSON', () => {
     const directory = mkdtempSync(join(tmpdir(), 'eleckoi-v2-placement-rollback-'))

@@ -660,12 +660,5 @@ function json(value: unknown): string { try { return JSON.stringify(value, null,
 function serialized(value: unknown): string { return typeof value === 'string' ? value : json(value) }
 
 function compactionFailureMessage(error: string): string {
-  if (!error) return ''
-  const notSmaller = /summary is not smaller than the shadowed content \((\d+) estimated framed tokens >= (\d+)\)/i.exec(error)
-  if (notSmaller) {
-    return `摘要没有比被替换的历史更短（摘要约 ${notSmaller[1]} Token，原历史约 ${notSmaller[2]} Token）`
-  }
-  if (/summarization produced no text summary content/i.test(error)) return '摘要模型没有返回可用的文本内容'
-  if (/summary did not shrink history/i.test(error)) return '生成的摘要没有缩短历史上下文'
   return error
 }

@@ -8,8 +8,8 @@ export function getPreset(presetId) {
   return desktopClient.request('query.agent_presets.read', { presetId });
 }
 
-export function savePreset(preset) {
-  return desktopClient.request('command.agent_presets.save', { preset });
+export function savePreset(preset, expectedRegexRules) {
+  return desktopClient.request('command.agent_presets.save', { preset, expectedRegexRules });
 }
 
 export function createPreset(name, libraryGroupId) {

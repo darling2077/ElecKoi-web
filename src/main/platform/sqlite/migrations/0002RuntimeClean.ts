@@ -4,6 +4,7 @@ interface LegacyToolConfigRow {
   payloadJson: string
   updatedAt: string
 }
+
 interface WebSearchSettingsRow {
   mode: 'provider_native' | 'tavily'
   maxResults: 3 | 5 | 8

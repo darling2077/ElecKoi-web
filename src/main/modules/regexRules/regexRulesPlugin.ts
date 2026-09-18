@@ -9,16 +9,20 @@ export const regexRulesPlugin = {
   apply(ctx: Context) {
     const regexRules = new RegexRuleRepository(ctx.database, ctx.agentPresets)
     ctx.provide('regexRules', regexRules)
+    const changed = () => {
+      ctx.desktopGateway.broadcast('records.changed', { module: 'regexRules' })
+      ctx.desktopGateway.broadcast('records.changed', { module: 'agentPresets' })
+    }
     return [
       ctx.desktopGateway.register('query.regex_rules.read', ({ characterId }) => regexRules.get(characterId)),
       ctx.desktopGateway.register('command.regex_rules.save', ({ characterId, collection, expectedRevision }) => {
         const saved = regexRules.save(characterId, collection, expectedRevision)
-        ctx.desktopGateway.broadcast('records.changed', { module: 'regexRules' })
+        changed()
         return saved
       }),
       ctx.desktopGateway.register('command.regex_rules.import', ({ characterId, fallbackScope, documents, expectedRevision }) => {
         const result = regexRules.import(characterId, fallbackScope, documents, expectedRevision)
-        ctx.desktopGateway.broadcast('records.changed', { module: 'regexRules' })
+        changed()
         return result
       }),
       ctx.desktopGateway.register('command.regex_rules.export', ({ characterId, ruleIds }) => (

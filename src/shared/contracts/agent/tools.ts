@@ -14,7 +14,7 @@ export const agentToolGroupSchema = z.object({
   source: agentToolGroupSourceSchema,
   members: z.array(agentToolMemberSchema),
   enabled: z.boolean(),
-  included: z.boolean().optional()
+  included: z.boolean()
 })
 
 export const agentToolCatalogSchema = z.object({

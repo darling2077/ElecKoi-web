@@ -239,7 +239,7 @@ export const requestContracts = {
     agentPresetSchema
   ),
   'command.agent_presets.save': defineRoute(
-    z.object({ preset: agentPresetSchema }),
+    z.object({ preset: agentPresetSchema, expectedRegexRules: z.array(regexRuleSchema) }),
     agentPresetSchema
   ),
   'command.agent_presets.create': defineRoute(

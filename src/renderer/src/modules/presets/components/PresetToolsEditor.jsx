@@ -19,8 +19,8 @@ export function PresetToolsEditor({
   const [configGroupId, setConfigGroupId] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const context = usePresetContextMenu();
-  const selectedGroups = useMemo(() => preset.toolGroups.filter((group) => group.included ?? group.enabled), [preset.toolGroups]);
-  const availableGroups = useMemo(() => preset.toolGroups.filter((group) => !(group.included ?? group.enabled)), [preset.toolGroups]);
+  const selectedGroups = useMemo(() => preset.toolGroups.filter((group) => group.included), [preset.toolGroups]);
+  const availableGroups = useMemo(() => preset.toolGroups.filter((group) => !group.included), [preset.toolGroups]);
   const visibleGroups = useMemo(() => {
     const key = query.trim().toLocaleLowerCase();
     return selectedGroups.filter((group) => !key || `${group.name} ${group.description} ${group.members.map((member) => member.name).join(' ')}`.toLocaleLowerCase().includes(key));

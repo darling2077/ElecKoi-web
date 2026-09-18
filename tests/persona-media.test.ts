@@ -50,7 +50,7 @@ describe('persona media persistence and cleanup', () => {
     const { database, conversations, personas, characters } = harness()
     personas.save({
       assistant_name: '', assistant_avatar: '', assistant_square: '', assistant_cover: '', opening: '', show_opening: false,
-      user_name: '测试用户', user_avatar: '', user_square: '', user_portrait: '', user_cover: ''
+      user_name: '测试用户甲', user_avatar: '', user_square: '', user_portrait: '', user_cover: ''
     })
     characters.create({
       id: 'character-a', name: '角色 A', avatar: '', group: '',
@@ -70,7 +70,7 @@ describe('persona media persistence and cleanup', () => {
     }).conversation
 
     const metadata = conversations.getMetadata(conversation.id)
-    expect(metadata.characterPersona.user_name).toBe('测试用户')
+    expect(metadata.characterPersona.user_name).toBe('测试用户甲')
     expect(database.native.prepare('SELECT personaJson FROM chat_session_character_snapshots WHERE sessionId = ?')
       .get(conversation.id)).toEqual({ personaJson: '{"assistant_name":"角色 A"}' })
   })

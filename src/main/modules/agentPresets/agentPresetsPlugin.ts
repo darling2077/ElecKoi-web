@@ -13,8 +13,8 @@ export const agentPresetsPlugin = {
     return [
       ctx.desktopGateway.register('query.agent_presets.catalog', () => agentPresets.catalog()),
       ctx.desktopGateway.register('query.agent_presets.read', ({ presetId }) => agentPresets.get(presetId)),
-      ctx.desktopGateway.register('command.agent_presets.save', ({ preset }) => {
-        const saved = agentPresets.save(preset)
+      ctx.desktopGateway.register('command.agent_presets.save', ({ preset, expectedRegexRules }) => {
+        const saved = agentPresets.save(preset, expectedRegexRules)
         changed()
         return saved
       }),

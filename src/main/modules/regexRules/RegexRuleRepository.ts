@@ -29,7 +29,12 @@ import {
 import { decodeRegexDocuments, encodeRegexExport, type ScopedRegexRule } from '@shared/foundation/regexRuleTransfer'
 
 export interface AgentPresetRegexPort {
-  readActiveRegexRules(db?: ElecKoiDatabase): { presetId: string; presetName: string; rules: RegexRule[] }
+  readActiveRegexRules(db?: ElecKoiDatabase): {
+    presetId: string
+    presetName: string
+    rules: RegexRule[]
+    revision: string
+  }
   replaceActiveRegexRules(rules: RegexRule[], db: ElecKoiDatabase): void
 }
 
@@ -137,6 +142,7 @@ export class RegexRuleRepository {
       characterId,
       agentPresetId: preset.presetId,
       agentPresetName: preset.presetName,
+      agentPresetRegexRevision: preset.revision,
       globalRules: db.select().from(globalRegexRules).orderBy(asc(globalRegexRules.sortIndex)).all().map(rowToRule),
       agentPresetRules: preset.rules,
       characterRules: db.select().from(characterRegexRules).where(eq(characterRegexRules.characterId, characterId))
@@ -165,6 +171,16 @@ export class RegexRuleRepository {
     if (revision !== expectedRevision) {
       throw new DesktopError(DESKTOP_ERROR_CODES.CONFLICT, '正则配置已在其他窗口更新，请重新打开后再保存。')
     }
+    const activePreset = this.agentPresetRegexes.readActiveRegexRules(db)
+    if (
+      activePreset.presetId !== normalized.agentPresetId
+      || activePreset.revision !== normalized.agentPresetRegexRevision
+    ) {
+      throw new DesktopError(
+        DESKTOP_ERROR_CODES.CONFLICT,
+        '当前 Agent 预设或其正则已在其他窗口更新，请重新打开后再保存。'
+      )
+    }
     this.persistShared(db, normalized)
     this.agentPresetRegexes.replaceActiveRegexRules(normalized.agentPresetRules, db)
     db.delete(characterRegexRules).where(eq(characterRegexRules.characterId, characterId)).run()
@@ -182,7 +198,7 @@ export class RegexRuleRepository {
       target: regexState.singletonId,
       set: { activeVersionId: normalized.activeVersionId || null, revision: revision + 1 }
     }).run()
-    return { ...normalized, revision: revision + 1 }
+    return this.get(characterId, db)
   }
 
   import(

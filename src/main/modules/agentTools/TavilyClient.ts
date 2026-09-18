@@ -31,7 +31,7 @@ export class TavilyClient {
       response = await this.request(url, init)
     } catch (error) {
       if (isAbortError(error)) throw new Error(`${label}已取消。`, { cause: error })
-      throw new Error(`${label}失败，请检查网络连接。`, { cause: error })
+      throw error
     }
     const body = await readBoundedBody(response, response.ok ? RESPONSE_LIMIT : ERROR_LIMIT)
     if (!response.ok) throw new Error(publicHttpError(response.status, body, apiKey, label))
@@ -81,9 +81,6 @@ async function readBoundedBody(response: Response, limit: number): Promise<strin
 }
 
 function publicHttpError(status: number, body: string, apiKey: string, label: string): string {
-  if (status === 401) return 'Tavily API Key 无效。'
-  if (status === 429) return 'Tavily 请求过于频繁，请稍后重试。'
-  if (status === 432 || status === 433) return 'Tavily 可用额度已耗尽。'
   const detail = body.replaceAll(apiKey, '[REDACTED]').replace(/\s+/g, ' ').trim().slice(0, 600)
   return `${label} HTTP ${status}${detail ? `：${detail}` : ''}`
 }
@@ -110,4 +107,3 @@ function integerValue(value: unknown): number | undefined {
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
 }
-

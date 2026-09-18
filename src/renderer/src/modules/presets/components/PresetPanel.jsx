@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle } from '@phosphor-icons/react';
+import { listenRecordsChanged } from '../../../bridge/recordEvents.js';
 import { CharacterManagerIcon, ChevronRightIcon, ImportIcon, PlusIcon, TrashIcon } from '../../../ui/icons/index.jsx';
 import { Avatar } from '../../../ui/ui/Avatar.jsx';
 import { DshSearchField } from '../../../ui/ui/DshSearchField.jsx';
@@ -90,6 +91,9 @@ export function PresetProvider({ children, navigationGuardRef: externalNavigatio
   }
 
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => listenRecordsChanged((event) => {
+    if (event.module === 'agentPresets') void refresh();
+  }), []);
 
   const value = useMemo(() => ({ catalog, setCatalog, selectedPresetId, setSelectedPresetId, navigationGuard, refresh, error, setError }), [catalog, selectedPresetId, error]);
   return <PresetContext.Provider value={value}>{children}</PresetContext.Provider>;
@@ -323,11 +327,15 @@ export function PresetWorkspace({
   const [profileEditing, setProfileEditing] = useState(false);
   const introductionRef = useRef(null);
   const savingRef = useRef(false);
+  const dirtyRef = useRef(false);
+  const pendingLatestRef = useRef(null);
+  const externalChangeRef = useRef(false);
   const allowCloseRef = useRef(false);
   const requestedTabRef = useRef(requestedTab);
   const requestedTabHandledRef = useRef(onRequestedTabHandled);
   const [pendingAction, setPendingAction] = useState(null);
   const dirty = Boolean(preset && persisted && JSON.stringify(preset) !== JSON.stringify(persisted));
+  dirtyRef.current = dirty;
   requestedTabRef.current = requestedTab;
   requestedTabHandledRef.current = onRequestedTabHandled;
 
@@ -350,6 +358,8 @@ export function PresetWorkspace({
     setError('');
     getPreset(selectedPresetId).then((loaded) => {
       if (!active) return;
+      pendingLatestRef.current = null;
+      externalChangeRef.current = false;
       setPreset(loaded);
       setPersisted(loaded);
       const initialTab = requestedTabRef.current || 'introduction';
@@ -359,6 +369,30 @@ export function PresetWorkspace({
     }).catch((cause) => active && setError(cause?.message || '读取预设失败')).finally(() => active && setLoading(false));
     return () => { active = false; };
   }, [selectedPresetId]);
+
+  useEffect(() => {
+    if (!selectedPresetId) return undefined;
+    let active = true;
+    return listenRecordsChanged((event) => {
+      if (event.module !== 'agentPresets' || savingRef.current) return;
+      void getPreset(selectedPresetId).then((loaded) => {
+        if (!active || savingRef.current) return;
+        if (dirtyRef.current) {
+          if (JSON.stringify(loaded) !== JSON.stringify(persisted)) {
+            pendingLatestRef.current = loaded;
+            externalChangeRef.current = true;
+            setError('当前预设已在其他窗口更新，请放弃未保存修改后重新打开。');
+          }
+          return;
+        }
+        pendingLatestRef.current = null;
+        externalChangeRef.current = false;
+        setPreset(loaded);
+        setPersisted(loaded);
+        setError('');
+      }).catch((cause) => active && setError(cause?.message || '同步预设失败'));
+    });
+  }, [selectedPresetId, persisted]);
 
   useEffect(() => {
     function saveShortcut(event) {
@@ -390,11 +424,17 @@ export function PresetWorkspace({
 
   async function save(candidate = preset) {
     if (!candidate || savingRef.current) return false;
+    if (externalChangeRef.current) {
+      setError('当前预设已在其他窗口更新，请放弃未保存修改后重新打开。');
+      return false;
+    }
     savingRef.current = true;
     setSaving(true);
     setError('');
     try {
-      const saved = await savePreset(candidate);
+      const saved = await savePreset(candidate, persisted?.regexRules || []);
+      pendingLatestRef.current = null;
+      externalChangeRef.current = false;
       setPreset(saved);
       setPersisted(saved);
       await refresh(saved.id);
@@ -406,6 +446,15 @@ export function PresetWorkspace({
       savingRef.current = false;
       setSaving(false);
     }
+  }
+
+  function discardChanges() {
+    const latest = pendingLatestRef.current || persisted;
+    pendingLatestRef.current = null;
+    externalChangeRef.current = false;
+    setPreset(latest);
+    setPersisted(latest);
+    setError('');
   }
 
   async function activate() {
@@ -420,7 +469,7 @@ export function PresetWorkspace({
 
   const tabCounts = {
     prompts: preset.entries.length,
-    tools: preset.toolGroups.filter((group) => group.included ?? group.enabled).length,
+    tools: preset.toolGroups.filter((group) => group.included).length,
     regex: preset.regexRules.length,
   };
   const saveAction = <SaveControl dirty={dirty} error={error} saving={saving} onSave={() => void save()} />;
@@ -432,8 +481,7 @@ export function PresetWorkspace({
     onCancel={() => setPendingAction(null)}
     onDiscard={() => {
       const action = pendingAction?.action;
-      setPreset(persisted);
-      setError('');
+      discardChanges();
       setPendingAction(null);
       action?.();
     }}
@@ -454,7 +502,7 @@ export function PresetWorkspace({
         saving={saving}
         error={error}
         onChange={setPreset}
-        onCancel={() => { setPreset(persisted); setProfileEditing(false); }}
+        onCancel={() => { discardChanges(); setProfileEditing(false); }}
         onSave={async () => { if (await save()) setProfileEditing(false); }}
       />
     </section>

@@ -35,6 +35,7 @@ export const regexRuleCollectionSchema = z.object({
   characterId: z.string().min(1),
   agentPresetId: z.string(),
   agentPresetName: z.string(),
+  agentPresetRegexRevision: z.string().regex(/^[a-f0-9]{64}$/),
   globalRules: z.array(regexRuleSchema),
   agentPresetRules: z.array(regexRuleSchema),
   characterRules: z.array(regexRuleSchema),

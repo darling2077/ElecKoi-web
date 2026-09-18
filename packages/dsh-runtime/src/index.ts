@@ -1,7 +1,6 @@
 export { DshRuntime } from './DshRuntime'
 export {
   createDshProviderCatalog,
-  createDshProviderPlan,
   describeDshModelCapabilities,
   resolveDshProviderBinding
 } from './modelProfiles'
@@ -32,8 +31,7 @@ export type {
 export type {
   DshModelCapabilities,
   DshProviderBinding,
-  DshProviderCatalog,
-  DshProviderPlan
+  DshProviderCatalog
 } from './modelProfiles'
 export type {
   DshContextBreakdownStats,

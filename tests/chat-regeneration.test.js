@@ -34,6 +34,16 @@ describe("chat regeneration targets", () => {
     expect(findRegenerateBranchUserIndex(messages, "assistant-1")).toBe(1);
   });
 
+  it("uses the durable turn id shared by a user message and its assistant response", () => {
+    const messages = [
+      { id: "user-message", turnId: "turn-1", role: "user", content: "测试消息" },
+      { id: "assistant-response", turnId: "turn-1", role: "assistant", content: "测试回复" },
+    ];
+
+    expect(findLatestRegenerateTargetMessageId(messages)).toBe("turn-1");
+    expect(findRegenerateBranchUserIndex(messages, "turn-1")).toBe(0);
+  });
+
   it("ignores opening messages and pending replies", () => {
     const messages = [
       { id: "opening", role: "assistant", content: "开场白" },

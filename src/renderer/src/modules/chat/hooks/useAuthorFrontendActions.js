@@ -17,7 +17,7 @@ function upsertProcess(items = [], item) {
 
 function publicError(error, fallback) {
   const message = typeof error === 'string' ? error : error?.message;
-  return message?.trim() ? message.split(/\r?\n/, 1)[0].slice(0, 200) : fallback;
+  return message?.trim() || fallback;
 }
 
 export function useAuthorFrontendActions({

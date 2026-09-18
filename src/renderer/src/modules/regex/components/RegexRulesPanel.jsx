@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { MagnifyingGlass, Plus, SlidersHorizontal } from "@phosphor-icons/react";
+import { listenRecordsChanged } from "../../../bridge/recordEvents.js";
 import { ConfirmationDialog, SaveControl } from "../../settingLibraries/index.js";
 import { exportRegexRules, getRegexRules, importRegexRules, saveRegexRules } from "../api/regexRulesApi.js";
 import {
@@ -40,12 +41,16 @@ export const RegexRulesPanel = forwardRef(function RegexRulesPanel({ characterId
   const [notice, setNotice] = useState("");
   const collectionRef = useRef(null);
   const persistedRef = useRef(null);
+  const pendingLatestRef = useRef(null);
+  const dirtyRef = useRef(false);
+  const savingRef = useRef(false);
   const savePromiseRef = useRef(null);
   const importInputRef = useRef(null);
   const importScopeRef = useRef("Global");
 
   const dirty = useMemo(() => JSON.stringify(collection) !== JSON.stringify(persisted), [collection, persisted]);
   const selected = useMemo(() => collection ? findRegexRule(collection, selectedId) : null, [collection, selectedId]);
+  dirtyRef.current = dirty;
 
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useEffect(() => {
@@ -55,17 +60,45 @@ export const RegexRulesPanel = forwardRef(function RegexRulesPanel({ characterId
   }, [notice]);
   useEffect(() => {
     let active = true;
-    setError("");
-    getRegexRules(characterId).then((loaded) => {
-      if (!active) return;
+    function applyLoaded(loaded, resetView = false) {
+      pendingLatestRef.current = null;
       collectionRef.current = loaded;
       persistedRef.current = loaded;
       setCollection(loaded);
       setPersisted(loaded);
-      setSelectedId("");
-      setManagerOpen(false);
-    }).catch((cause) => active && setError(cause?.message || "读取正则配置失败"));
-    return () => { active = false; };
+      setSelectedId((current) => resetView || !findRegexRule(loaded, current) ? "" : current);
+      if (resetView) setManagerOpen(false);
+      setError("");
+      setNotice("");
+    }
+    async function loadLatest(resetView = false) {
+      const loaded = await getRegexRules(characterId);
+      if (!active) return;
+      if (dirtyRef.current || savingRef.current) {
+        const baseline = persistedRef.current;
+        const changed = !baseline
+          || baseline.revision !== loaded.revision
+          || baseline.agentPresetId !== loaded.agentPresetId
+          || baseline.agentPresetRegexRevision !== loaded.agentPresetRegexRevision;
+        if (changed) {
+          pendingLatestRef.current = loaded;
+          setError("正则配置或当前 Agent 预设已更新；请放弃本页未保存修改后载入最新内容。");
+        }
+        return;
+      }
+      applyLoaded(loaded, resetView);
+    }
+    setError("");
+    void loadLatest(true).catch((cause) => active && setError(cause?.message || "读取正则配置失败"));
+    const stopListening = listenRecordsChanged((event) => {
+      if (event.module !== "agentPresets" && event.module !== "regexRules") return;
+      if (savingRef.current) return;
+      void loadLatest().catch((cause) => active && setError(cause?.message || "同步正则配置失败"));
+    });
+    return () => {
+      active = false;
+      stopListening();
+    };
   }, [characterId]);
 
   function changeCollection(nextOrUpdater) {
@@ -82,12 +115,14 @@ export const RegexRulesPanel = forwardRef(function RegexRulesPanel({ characterId
     if (!collectionRef.current) return false;
     if (savePromiseRef.current) return savePromiseRef.current;
     const task = (async () => {
+      savingRef.current = true;
       setSaving(true);
       setError("");
       try {
         const saved = await saveRegexRules(characterId, collectionRef.current);
         collectionRef.current = saved;
         persistedRef.current = saved;
+        pendingLatestRef.current = null;
         setCollection(saved);
         setPersisted(saved);
         setNotice("saved");
@@ -96,6 +131,7 @@ export const RegexRulesPanel = forwardRef(function RegexRulesPanel({ characterId
         setError(cause?.message || "保存正则配置失败");
         return false;
       } finally {
+        savingRef.current = false;
         setSaving(false);
       }
     })();
@@ -104,8 +140,12 @@ export const RegexRulesPanel = forwardRef(function RegexRulesPanel({ characterId
   }
 
   function discard() {
-    collectionRef.current = persistedRef.current;
-    setCollection(persistedRef.current);
+    const latest = pendingLatestRef.current || persistedRef.current;
+    pendingLatestRef.current = null;
+    collectionRef.current = latest;
+    persistedRef.current = latest;
+    setCollection(latest);
+    setPersisted(latest);
     setSelectedId("");
     setManagerOpen(false);
     setError("");
