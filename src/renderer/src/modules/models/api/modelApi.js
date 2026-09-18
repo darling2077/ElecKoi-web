@@ -14,7 +14,7 @@ const PROVIDERS = [
 
 const PROVIDER_DEFAULTS = {
   custom: { baseUrl: "", apiFormat: "responses" },
-  deepseek: { baseUrl: "https://api.deepseek.com", apiFormat: "responses" },
+  deepseek: { baseUrl: "https://api.deepseek.com", apiFormat: "chat_completions" },
   zhipu: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", apiFormat: "chat_completions" },
   zai: { baseUrl: "https://api.z.ai/api/paas/v4", apiFormat: "chat_completions" },
   moonshot: { baseUrl: "https://api.moonshot.cn/v1", apiFormat: "chat_completions" },
@@ -100,10 +100,16 @@ export function testModelConnection(config) {
 
 export function fetchModelCapabilities(config, model = config?.model) {
   const normalized = normalizeModelConfig(config);
+  const modelId = String(model || normalized.model || "").trim();
+  const option = normalized.model_options.find((item) => String(item?.id || "").trim() === modelId);
   return desktopClient.request("query.agent.model_capabilities", {
+    provider: normalized.provider,
     baseUrl: normalized.base_url,
-    model: String(model || normalized.model || "").trim(),
+    model: modelId,
     apiFormat: normalized.api_format,
+    ...(option?.reasoningEfforts !== null && option?.reasoningEfforts !== undefined
+      ? { reasoningEfforts: option.reasoningEfforts }
+      : {}),
   });
 }
 

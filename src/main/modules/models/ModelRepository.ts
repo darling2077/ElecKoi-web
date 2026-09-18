@@ -101,7 +101,7 @@ export class ModelRepository {
           { id: 'deepseek-chat', name: 'deepseek-chat' },
           { id: 'deepseek-reasoner', name: 'deepseek-reasoner' }
         ],
-        api_format: 'responses'
+        api_format: 'chat_completions'
       })
     }
   }
@@ -149,6 +149,7 @@ export class ModelRepository {
     }
     return {
       configId: config.id,
+      provider: config.provider,
       apiKey: config.api_key,
       baseUrl,
       model,
@@ -163,6 +164,9 @@ export class ModelRepository {
       ...(option?.maxOutputTokens ? { maxTokens: option.maxOutputTokens } : {}),
       ...(option?.temperature !== null && option?.temperature !== undefined ? { temperature: option.temperature } : {}),
       ...(option?.topP !== null && option?.topP !== undefined ? { topP: option.topP } : {}),
+      ...(option?.reasoningEfforts !== null && option?.reasoningEfforts !== undefined
+        ? { reasoningEfforts: option.reasoningEfforts }
+        : {}),
       ...(option?.reasoningEffort ? { reasoningEffort: option.reasoningEffort } : {}),
       supportsImageInput: option?.supportsImageInput === true,
       ...(config.proxy_url.trim() ? { proxyUrl: config.proxy_url.trim() } : {})
@@ -233,7 +237,7 @@ function defaultBaseUrl(provider: string): string {
 }
 
 function defaultApiFormat(provider: ModelProviderId): ModelApiFormat {
-  return provider === 'custom' || provider === 'deepseek' ? 'responses' : 'chat_completions'
+  return provider === 'custom' ? 'responses' : 'chat_completions'
 }
 
 function defaultProviderName(provider: ModelProviderId): string {

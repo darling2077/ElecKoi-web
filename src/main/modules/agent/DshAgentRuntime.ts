@@ -42,14 +42,18 @@ export class DshAgentRuntime implements AgentRuntimePort {
   }
 
   describeModelCapabilities(input: {
+    provider: import('@shared/contracts/entities/model').ModelProviderId
     baseUrl: string
     model: string
     apiFormat: 'chat_completions' | 'responses' | 'anthropic_messages' | 'google_gemini'
+    reasoningEfforts?: import('@shared/contracts/entities/model').ModelReasoningEfforts | false | undefined
   }) {
     return describeDshModelCapabilities({
+      provider: input.provider,
       baseUrl: input.baseUrl,
       model: input.model,
-      apiFormat: runtimeApiFormat(input.apiFormat)
+      apiFormat: runtimeApiFormat(input.apiFormat),
+      reasoningEfforts: input.reasoningEfforts
     })
   }
 

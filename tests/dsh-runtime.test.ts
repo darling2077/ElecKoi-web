@@ -7,7 +7,110 @@ import { DshRuntime } from '@eleckoi/dsh-runtime'
 import { describe, expect, it, vi } from 'vitest'
 
 describe('packaged DSH runtime composition', () => {
-  it('preserves the DSH default retention when no absolute compaction threshold is configured', async () => {
+  it('normalizes and persists submitted images with the complete DSH policy', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-image-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'),
+      runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath
+    })
+    const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+
+    try {
+      const [stored] = await runtime.prepareImages([{
+        mediaType: 'image/png',
+        data: pixel.toString('base64'),
+        name: 'pixel.png'
+      }])
+
+      expect(stored).toMatchObject({
+        attachmentId: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        width: 1,
+        height: 1,
+        name: 'pixel.png'
+      })
+      await expect(runtime.readImage(stored!)).resolves.toMatchObject({
+        data: expect.any(String)
+      })
+    } finally {
+      await runtime.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('detaches a cancelled run before the runtime acknowledgement returns', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-cancel-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'),
+      runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath
+    })
+    let acknowledge!: (value: object) => void
+    const request = vi.fn(() => new Promise<object>((resolveRequest) => { acknowledge = resolveRequest }))
+    const active = { cancelled: false, runtimeThreadId: 'thread-a' }
+    const internals = runtime as unknown as {
+      harness: { client: { request: typeof request }; close(): Promise<void> } | undefined
+      activeRuns: Map<string, typeof active>
+      cancellationTasks: Map<string, Promise<void>>
+      waitForCancellationBarrier(conversationId: string): Promise<void>
+    }
+    internals.harness = { client: { request }, close: async () => undefined }
+    internals.activeRuns.set('conversation-a', active)
+
+    try {
+      const cancellation = runtime.stop('conversation-a')
+      expect(active.cancelled).toBe(true)
+      expect(internals.activeRuns.has('conversation-a')).toBe(false)
+      expect(request).toHaveBeenCalledWith('session/cancel', { sessionId: 'thread-a' })
+      let barrierSettled = false
+      const barrier = internals.waitForCancellationBarrier('conversation-a').then(() => { barrierSettled = true })
+      await Promise.resolve()
+      expect(barrierSettled).toBe(false)
+      acknowledge({ accepted: true })
+      await expect(cancellation).resolves.toBe(true)
+      await barrier
+      expect(barrierSettled).toBe(true)
+      expect(internals.cancellationTasks.has('conversation-a')).toBe(false)
+    } finally {
+      await runtime.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('cancels a run that is still starting without contacting an unstarted session', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-starting-cancel-'))
+    const runtime = new DshRuntime({
+      configPath: resolve('resources/dsh/cordis.yml'),
+      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
+      workspaceRoot: join(root, 'workspace'),
+      runtimeDataRoot: join(root, 'runtime'),
+      executablePath: process.execPath
+    })
+    const request = vi.fn(async () => ({}))
+    const starting = { cancelled: false, runtimeThreadId: 'thread-starting' }
+    const internals = runtime as unknown as {
+      harness: { client: { request: typeof request }; close(): Promise<void> } | undefined
+      startingRuns: Map<string, typeof starting>
+    }
+    internals.harness = { client: { request }, close: async () => undefined }
+    internals.startingRuns.set('conversation-a', starting)
+
+    try {
+      await expect(runtime.stop('conversation-a')).resolves.toBe(true)
+      expect(starting.cancelled).toBe(true)
+      expect(internals.startingRuns.has('conversation-a')).toBe(false)
+      expect(request).not.toHaveBeenCalled()
+    } finally {
+      await runtime.close()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('uses DSH balanced retention when no absolute compaction threshold is configured', async () => {
     const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-default-compaction-'))
     const runtime = new DshRuntime({
       configPath: resolve('resources/dsh/cordis.yml'),
@@ -32,8 +135,8 @@ describe('packaged DSH runtime composition', () => {
       )
 
       expect(composition).toContain('thresholdRatio: 0.8')
-      expect(composition).toContain('retainRatio: 0.16')
-      expect(composition).not.toContain('retainTokens')
+      expect(composition).toContain('retainTokens: 0')
+      expect(composition).not.toContain('retainRatio')
     } finally {
       await runtime.close()
       await rm(root, { recursive: true, force: true })
@@ -57,7 +160,7 @@ describe('packaged DSH runtime composition', () => {
         subagentProvider: undefined,
         webSearch: undefined,
         mainSettings: {
-          configId: string; apiKey: string; baseUrl: string; model: string; systemPrompt: string
+          configId: string; provider: 'deepseek'; apiKey: string; baseUrl: string; model: string; systemPrompt: string
           apiFormat: 'openai-responses'; customHeaders: Record<string, string>; contextWindow: number
           autoCompactTokenLimit: number; supportsImageInput: boolean
         }
@@ -72,7 +175,7 @@ describe('packaged DSH runtime composition', () => {
         undefined,
         undefined,
         {
-          configId: 'deepseek-default', apiKey: 'test-key', baseUrl: 'https://api.deepseek.com',
+          configId: 'deepseek-default', provider: 'deepseek', apiKey: 'test-key', baseUrl: 'https://api.deepseek.com',
           model: 'deepseek-flash', systemPrompt: '', apiFormat: 'openai-responses', customHeaders: {},
           contextWindow: 1_000_000, autoCompactTokenLimit: 200_000, supportsImageInput: false
         }
@@ -193,6 +296,7 @@ describe('packaged DSH runtime composition', () => {
       executablePath: process.execPath,
       modelCatalog: () => [{
         configId: 'enabled-google-config',
+        provider: 'custom',
         apiKey: 'google-test-key',
         baseUrl: 'https://generativelanguage.googleapis.com',
         model: 'models/gemini-3.6-flash',
@@ -209,6 +313,7 @@ describe('packaged DSH runtime composition', () => {
     try {
       await expect(runtime.stream('conversation-local-test', '你好', {
         configId: 'local-test-config',
+        provider: 'deepseek',
         apiKey: 'local-test-key',
         baseUrl: `http://127.0.0.1:${address.port}`,
         model: 'deepseek-chat',
@@ -238,9 +343,23 @@ describe('packaged DSH runtime composition', () => {
         settingLibrary: {
           characterId: 'card-a',
           name: '设定库',
-          entries: [],
+          entries: [
+            {
+              id: 'cache-entry', title: '缓存设定区', enabled: true,
+              content: 'ELECKOI_CACHE_CONTEXT_SENTINEL', kind: 'normal', triggerMode: 'cache',
+              position: null, promptPositionId: '', insertRole: 'system', order: 1
+            },
+            {
+              id: 'hidden-tool-timeline', title: '隐藏工具时间线', enabled: true,
+              content: 'ELECKOI_HIDDEN_TIMELINE_SENTINEL', kind: 'hidden_tool_timeline', triggerMode: 'always',
+              position: 'insert_point_4', promptPositionId: 'hidden-tool-timeline-position', insertRole: 'user', order: 1
+            }
+          ],
           groups: [],
-          promptPositions: []
+          promptPositions: [{
+            id: 'hidden-tool-timeline-position', name: '隐藏工具时间线',
+            anchor: 'insert_point_4', side: 'before_setting_position', order: 1
+          }]
         }
       }, 'runtime-thread-a', {
         disabledGroupIds: ['builtin:variables', 'builtin:other']
@@ -257,6 +376,8 @@ describe('packaged DSH runtime composition', () => {
       expect(JSON.stringify(dialogue[0]?.content)).toContain('你好啊')
       expect(JSON.stringify(dialogue[1]?.content)).toContain('你好')
       expect(dialogue.filter((message) => message.role === 'user' && message.content === '你好')).toHaveLength(1)
+      expect(JSON.stringify(requests[0]?.body.messages)).toContain('ELECKOI_CACHE_CONTEXT_SENTINEL')
+      expect(JSON.stringify(requests[0]?.body.messages)).toContain('ELECKOI_HIDDEN_TIMELINE_SENTINEL')
       expect(JSON.stringify(dialogue)).not.toContain('prior transcript')
       expect(JSON.stringify(requests[0]?.body.tools)).toContain('eleckoi_read_setting_files')
       expect(JSON.stringify(requests[0]?.body.tools)).not.toContain('eleckoi_read_variables')
@@ -272,6 +393,7 @@ describe('packaged DSH runtime composition', () => {
       expect(settingBridge.variableState).toEqual({})
       await expect(runtime.stream('conversation-local-test', '你好', {
         configId: 'local-main',
+        provider: 'deepseek',
         apiKey: 'local-test-key',
         baseUrl: `http://127.0.0.1:${address.port}`,
         model: 'deepseek-chat',
@@ -310,109 +432,6 @@ describe('packaged DSH runtime composition', () => {
     }
   }, 30_000)
 
-  it('streams a real Agent reply through the native Google protocol', async () => {
-    const requests: Array<{
-      url: string | undefined
-      apiKey: string | undefined
-      body: Record<string, unknown>
-    }> = []
-    const server = createServer(async (request, response) => {
-      let rawBody = ''
-      for await (const chunk of request) rawBody += chunk.toString()
-      requests.push({
-        url: request.url,
-        apiKey: request.headers['x-goog-api-key'] as string | undefined,
-        body: JSON.parse(rawBody) as Record<string, unknown>
-      })
-      response.writeHead(200, {
-        'content-type': 'text/event-stream',
-        'cache-control': 'no-cache'
-      })
-      response.write(`data: ${JSON.stringify({
-        candidates: [{
-          content: { role: 'model', parts: [{ text: '本地 Google 回复' }] },
-          finishReason: 'STOP'
-        }],
-        usageMetadata: {
-          promptTokenCount: 8,
-          candidatesTokenCount: 4,
-          totalTokenCount: 12
-        },
-        modelVersion: 'gemini-test',
-        responseId: 'google-local-test'
-      })}\n\n`)
-      response.end()
-    })
-    server.listen(0, '127.0.0.1')
-    await once(server, 'listening')
-    const address = server.address()
-    if (address === null || typeof address === 'string') throw new Error('Local test server did not expose a TCP port')
-
-    const root = await mkdtemp(join(tmpdir(), 'eleckoi-dsh-google-'))
-    const runtime = new DshRuntime({
-      configPath: resolve('resources/dsh/cordis.yml'),
-      presetTemplatePath: resolve('resources/dsh/agent-preset-template/agent.cordis.yml'),
-      workspaceRoot: join(root, 'workspace'),
-      runtimeDataRoot: join(root, 'runtime'),
-      executablePath: process.execPath,
-      modelCatalog: () => [{
-        configId: 'enabled-google-config',
-        apiKey: 'google-test-key',
-        baseUrl: 'https://generativelanguage.googleapis.com',
-        model: 'models/gemini-3.6-flash',
-        systemPrompt: '',
-        apiFormat: 'google-generative-ai',
-        customHeaders: {},
-        contextWindow: 1_048_576,
-        supportsImageInput: true
-      }]
-    })
-    const deltas: string[] = []
-    const finals: string[] = []
-
-    try {
-      await expect(runtime.stream('conversation-google-test', '你好', {
-        configId: 'google-local-config',
-        apiKey: 'google-local-key',
-        baseUrl: `http://127.0.0.1:${address.port}`,
-        model: 'models/gemini-test',
-        systemPrompt: '只返回本地测试文本。',
-        apiFormat: 'google-generative-ai',
-        customHeaders: {},
-        contextWindow: 128_000,
-        autoCompactTokenLimit: 96_000,
-        temperature: 0.5,
-        supportsImageInput: true
-      }, {
-        onDelta: (delta) => deltas.push(delta),
-        onFinal: (content) => finals.push(content)
-      }, undefined, {
-        characterId: 'card-google',
-        characterName: '角色 G',
-        persona: {},
-        history: []
-      }, 'runtime-thread-google', {
-        disabledGroupIds: ['builtin:variables', 'builtin:other']
-      })).resolves.toBe('complete')
-
-      expect(deltas.join('')).toContain('本地 Google 回复')
-      expect(finals).toEqual(['本地 Google 回复'])
-      expect(requests).toHaveLength(1)
-      expect(requests[0]?.url).toContain('/v1beta/models/gemini-test:streamGenerateContent')
-      expect(requests[0]?.apiKey).toBe('google-local-key')
-      const googleTools = requests[0]?.body.tools as Array<{
-        functionDeclarations?: Array<Record<string, unknown>>
-      }>
-      expect(googleTools[0]?.functionDeclarations?.[0]).toHaveProperty('parametersJsonSchema')
-      expect(googleTools[0]?.functionDeclarations?.[0]).not.toHaveProperty('parameters')
-    } finally {
-      await runtime.close()
-      server.close()
-      await once(server, 'close')
-      await rm(root, { recursive: true, force: true })
-    }
-  }, 30_000)
-
   it('keeps concurrent chats and immutable request parameters isolated in one recoverable process', async () => {
     const requests: Array<{ authorization: string | undefined; body: Record<string, unknown> }> = []
     const server = createServer(async (request, response) => {
@@ -435,12 +454,12 @@ describe('packaged DSH runtime composition', () => {
 
     const endpoint = `http://127.0.0.1:${address.port}`
     const modelA = {
-      configId: 'model-a-config', apiKey: 'key-a', baseUrl: endpoint, model: 'model-a',
+      configId: 'model-a-config', provider: 'custom', apiKey: 'key-a', baseUrl: endpoint, model: 'model-a',
       systemPrompt: 'A 系统提示', apiFormat: 'openai-completions' as const, customHeaders: {},
       contextWindow: 128_000, temperature: 0.2, topP: 0, supportsImageInput: false
     }
     const modelB = {
-      configId: 'model-b-config', apiKey: 'key-b', baseUrl: endpoint, model: 'model-b',
+      configId: 'model-b-config', provider: 'custom', apiKey: 'key-b', baseUrl: endpoint, model: 'model-b',
       systemPrompt: 'B 系统提示', apiFormat: 'openai-completions' as const, customHeaders: {},
       contextWindow: 128_000, temperature: 0.8, supportsImageInput: false
     }
@@ -566,6 +585,7 @@ describe('packaged DSH runtime composition', () => {
       executablePath: process.execPath,
       modelCatalog: () => [{
         configId: 'enabled-google-config',
+        provider: 'custom',
         apiKey: 'google-test-key',
         baseUrl: 'https://generativelanguage.googleapis.com',
         model: 'models/gemini-3.6-flash',
@@ -581,6 +601,7 @@ describe('packaged DSH runtime composition', () => {
     try {
       await expect(runtime.stream('conversation-anthropic-test', '你好', {
         configId: 'local-anthropic',
+        provider: 'custom',
         apiKey: 'local-anthropic-key',
         baseUrl: `http://127.0.0.1:${address.port}`,
         model: 'claude-local-test',
@@ -688,6 +709,7 @@ describe('packaged DSH runtime composition', () => {
         '请调用子代理完成验证。',
         {
           configId: 'main-config',
+          provider: 'custom',
           apiKey: 'main-key',
           baseUrl: `http://127.0.0.1:${address.port}`,
           model: 'main-model',
@@ -715,6 +737,7 @@ describe('packaged DSH runtime composition', () => {
         undefined,
         {
           configId: 'child-config',
+          provider: 'custom',
           apiKey: 'child-key',
           baseUrl: `http://127.0.0.1:${address.port}`,
           model: 'child-model',

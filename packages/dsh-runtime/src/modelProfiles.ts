@@ -6,13 +6,18 @@ import {
   type BuiltinProvider
 } from '@earendil-works/pi-ai/providers/all'
 import type { PiAiModelProfile, PiAiProviderProfile } from '@deepseek-ai/dsh-llm-pi-ai'
-import type { DshModelIdentity, DshModelSettings, DshReasoningEffort } from './types'
+import type {
+  DshModelIdentity,
+  DshModelSettings,
+  DshReasoningEffort,
+  DshReasoningEfforts
+} from './types'
 
 type CatalogModel = ReturnType<typeof getBuiltinModels>[number]
 
 export interface DshModelCapabilities {
   provider: string | null
-  source: 'dsh_catalog' | 'provider_default'
+  source: 'dsh_catalog' | 'explicit_profile' | 'provider_default'
   reasoningEfforts: DshReasoningEffort[]
 }
 
@@ -24,38 +29,84 @@ export interface DshProviderBinding {
 
 export type DshProviderProfile = PiAiProviderProfile
 
+export interface DshDeepSeekModelProfile {
+  id: string
+  name?: string | undefined
+  contextWindow?: number | undefined
+  maxTokens?: number | undefined
+  inputModalities?: Array<'text' | 'image'> | undefined
+}
+
+export interface DshDeepSeekProfile {
+  apiKeyEnv: string
+  baseURL: string
+  defaultContextWindow: number
+  models: DshDeepSeekModelProfile[]
+}
+
 export interface DshProviderCatalog {
   providers: Record<string, DshProviderProfile>
+  deepseek?: DshDeepSeekProfile | undefined
   credentials: Record<string, string>
   bindings: Record<string, DshProviderBinding>
 }
 
-/** @deprecated Small facade retained for focused provider-profile callers. */
 export interface DshProviderPlan {
   providers: Record<string, DshProviderProfile>
   main: DshProviderBinding
   subagent: DshProviderBinding
 }
 
-interface NativeMatch {
+interface NativeRoute {
   provider: BuiltinProvider
-  model: CatalogModel
+  model: CatalogModel | undefined
 }
 
 interface ConnectionGroup {
   settings: DshModelSettings[]
-  native: NativeMatch | undefined
+  native: NativeRoute | undefined
   connectionKey: string
   provider: string
   apiKeyEnv: string
 }
 
 const reasoningEfforts = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
+const deepSeekReasoningEfforts = ['off', 'low', 'high', 'max'] as const
+const deepSeekPiAiReasoningEfforts = {
+  off: 'none',
+  low: 'low',
+  high: 'high',
+  max: 'max'
+} as const
+const deepSeekProviderRoute = 'deepseek-official'
+const deepSeekApiKeyEnv = 'ELECKOI_DEEPSEEK_API_KEY'
 
 export function describeDshModelCapabilities(identity: DshModelIdentity): DshModelCapabilities {
-  const native = findNativeModel(identity)
-  return native === undefined
-    ? { provider: null, source: 'provider_default', reasoningEfforts: [] }
+  if (usesOfficialDeepSeekRoute(identity)) {
+    return {
+      provider: deepSeekProviderRoute,
+      source: 'dsh_catalog',
+      reasoningEfforts: [...deepSeekReasoningEfforts]
+    }
+  }
+  if (isDedicatedDeepSeekProvider(identity)) {
+    return {
+      provider: null,
+      source: 'dsh_catalog',
+      reasoningEfforts: [...deepSeekReasoningEfforts]
+    }
+  }
+  const native = findNativeRoute(identity)
+  const declared = declaredReasoningEfforts(identity.reasoningEfforts)
+  if (declared !== undefined) {
+    return {
+      provider: native?.provider ?? null,
+      source: 'explicit_profile',
+      reasoningEfforts: declared
+    }
+  }
+  return native?.model === undefined
+    ? { provider: native?.provider ?? null, source: 'provider_default', reasoningEfforts: [] }
     : {
         provider: native.provider,
         source: 'dsh_catalog',
@@ -63,15 +114,28 @@ export function describeDshModelCapabilities(identity: DshModelIdentity): DshMod
       }
 }
 
-/** Builds the immutable process-wide provider directory used by every Session. */
+/** Builds the immutable process-wide DSH route directory used by every Session. */
 export function createDshProviderCatalog(settingsList: readonly DshModelSettings[]): DshProviderCatalog {
   const uniqueSettings = deduplicateSettings(settingsList)
   if (uniqueSettings.length === 0) throw new Error('DSH provider catalog requires at least one model configuration.')
 
+  const officialDeepSeek = uniqueSettings.filter(usesOfficialDeepSeekRoute)
+  const piAiSettings = uniqueSettings.filter((settings) => !usesOfficialDeepSeekRoute(settings))
+  const providers: Record<string, DshProviderProfile> = {}
+  const credentials: Record<string, string> = {}
+  const bindings: Record<string, DshProviderBinding> = {}
+  const deepseek = createDeepSeekProfile(officialDeepSeek, credentials, bindings)
+
   const connectionGroups = new Map<string, ConnectionGroup>()
   const nativeConnectionCounts = new Map<string, Set<string>>()
-  for (const settings of uniqueSettings) {
-    const native = findNativeModel(settings)
+  for (const settings of piAiSettings) {
+    const native = findNativeRoute(settings)
+    if (settings.apiFormat === 'google-generative-ai' && native === undefined) {
+      throw new Error(
+        '最新版 DSH 仅允许 Google Generative AI 接口使用 pi-ai 的原生 Google 路由；'
+        + '自定义代理请改选代理实际支持的 OpenAI Chat、OpenAI Responses 或 Anthropic Messages 接口。'
+      )
+    }
     const connectionKey = providerConnectionKey(settings, native)
     if (native !== undefined) {
       const keys = nativeConnectionCounts.get(native.provider) ?? new Set<string>()
@@ -85,7 +149,7 @@ export function createDshProviderCatalog(settingsList: readonly DshModelSettings
     })
   }
 
-  const usedProviders = new Set<string>()
+  const usedProviders = new Set<string>(officialDeepSeek.length === 0 ? [] : [deepSeekProviderRoute])
   for (const group of connectionGroups.values()) {
     const directNative = group.native !== undefined
       && nativeConnectionCounts.get(group.native.provider)?.size === 1
@@ -97,22 +161,20 @@ export function createDshProviderCatalog(settingsList: readonly DshModelSettings
     usedProviders.add(group.provider)
   }
 
-  const providers: Record<string, DshProviderProfile> = {}
-  const credentials: Record<string, string> = {}
-  const bindings: Record<string, DshProviderBinding> = {}
   for (const group of connectionGroups.values()) {
     const inheritsCatalog = group.native?.provider === group.provider
     providers[group.provider] = providerProfile(group.settings, group.apiKeyEnv, group.native, inheritsCatalog)
     credentials[group.apiKeyEnv] = group.settings[0]!.apiKey
     for (const settings of group.settings) {
+      const native = findNativeRoute(settings)
       bindings[modelBindingKey(settings)] = compact({
         provider: group.provider,
         model: runtimeModelId(settings),
-        reasoningEffort: acceptedReasoningEffort(settings.reasoningEffort, findNativeModel(settings))
+        reasoningEffort: acceptedReasoningEffort(settings.reasoningEffort, native?.model, settings)
       })
     }
   }
-  return { providers, credentials, bindings }
+  return { providers, deepseek, credentials, bindings }
 }
 
 export function resolveDshProviderBinding(
@@ -136,6 +198,45 @@ export function createDshProviderPlan(
   }
 }
 
+function createDeepSeekProfile(
+  settingsList: readonly DshModelSettings[],
+  credentials: Record<string, string>,
+  bindings: Record<string, DshProviderBinding>
+): DshDeepSeekProfile | undefined {
+  if (settingsList.length === 0) return undefined
+  const first = settingsList[0]!
+  for (const settings of settingsList.slice(1)) {
+    if (settings.apiKey !== first.apiKey || runtimeBaseUrl(settings) !== runtimeBaseUrl(first)) {
+      throw new Error('DeepSeek 专用入口只能使用一套 API Key 和 Base URL。')
+    }
+  }
+  credentials[deepSeekApiKeyEnv] = first.apiKey
+  for (const settings of settingsList) {
+    bindings[modelBindingKey(settings)] = compact({
+      provider: deepSeekProviderRoute,
+      model: runtimeModelId(settings),
+      reasoningEffort: isDeepSeekReasoningEffort(settings.reasoningEffort)
+        ? settings.reasoningEffort
+        : undefined
+    })
+  }
+  const models = new Map<string, DshDeepSeekModelProfile>()
+  for (const settings of settingsList) {
+    models.set(runtimeModelId(settings), compact({
+      id: runtimeModelId(settings),
+      contextWindow: settings.contextWindowOverride ?? settings.contextWindow,
+      maxTokens: settings.maxTokens,
+      inputModalities: settings.supportsImageInput ? ['text', 'image'] : ['text']
+    }))
+  }
+  return {
+    apiKeyEnv: deepSeekApiKeyEnv,
+    baseURL: runtimeBaseUrl(first),
+    defaultContextWindow: first.contextWindow,
+    models: [...models.values()]
+  }
+}
+
 function deduplicateSettings(items: readonly DshModelSettings[]): DshModelSettings[] {
   const unique = new Map<string, DshModelSettings>()
   for (const item of items) unique.set(modelBindingKey(item), item)
@@ -143,22 +244,28 @@ function deduplicateSettings(items: readonly DshModelSettings[]): DshModelSettin
 }
 
 function modelBindingKey(settings: DshModelSettings): string {
-  return `${settings.configId || providerConnectionKey(settings, findNativeModel(settings))}\u0000${settings.model}`
+  return `${settings.configId || providerConnectionKey(settings, findNativeRoute(settings))}\u0000${settings.model}`
 }
 
-function findNativeModel(identity: DshModelIdentity): NativeMatch | undefined {
+function findNativeRoute(identity: DshModelIdentity): NativeRoute | undefined {
   const modelId = runtimeModelId(identity)
   const endpoint = normalizeUrl(runtimeBaseUrl(identity))
   if (!modelId || endpoint === undefined) return undefined
+  const routeMatches: NativeRoute[] = []
   for (const provider of getBuiltinProviders()) {
-    const model = getBuiltinModels(provider).find((candidate) => (
+    const models = getBuiltinModels(provider)
+    const model = models.find((candidate) => (
       candidate.id === modelId
       && candidate.api === identity.apiFormat
       && normalizeUrl(candidate.baseUrl) === endpoint
     ))
     if (model !== undefined) return { provider, model }
+    if (models.some((candidate) => (
+      candidate.api === identity.apiFormat
+      && normalizeUrl(candidate.baseUrl) === endpoint
+    ))) routeMatches.push({ provider, model: undefined })
   }
-  return undefined
+  return routeMatches.length === 1 ? routeMatches[0] : undefined
 }
 
 function normalizeUrl(value: string): string | undefined {
@@ -176,19 +283,37 @@ function supportedReasoningEfforts(model: CatalogModel): DshReasoningEffort[] {
   return getSupportedThinkingLevels(model).filter(isReasoningEffort)
 }
 
-function acceptedReasoningEffort(value: string | undefined, native: NativeMatch | undefined): DshReasoningEffort | undefined {
+function acceptedReasoningEffort(
+  value: string | undefined,
+  model: CatalogModel | undefined,
+  identity: DshModelIdentity
+): DshReasoningEffort | undefined {
   if (!isReasoningEffort(value)) return undefined
-  return native !== undefined && supportedReasoningEfforts(native.model).includes(value) ? value : undefined
+  const supported = isDedicatedDeepSeekProvider(identity)
+    ? deepSeekReasoningEfforts
+    : declaredReasoningEfforts(identity.reasoningEfforts)
+      ?? (model === undefined ? [] : supportedReasoningEfforts(model))
+  return (supported as readonly DshReasoningEffort[]).includes(value) ? value : undefined
 }
 
 function isReasoningEffort(value: unknown): value is DshReasoningEffort {
   return typeof value === 'string' && (reasoningEfforts as readonly string[]).includes(value)
 }
 
+function isDeepSeekReasoningEffort(value: unknown): value is 'off' | 'low' | 'high' | 'max' {
+  return typeof value === 'string' && (deepSeekReasoningEfforts as readonly string[]).includes(value)
+}
+
+function declaredReasoningEfforts(value: DshModelIdentity['reasoningEfforts']): DshReasoningEffort[] | undefined {
+  if (value === undefined) return undefined
+  if (value === false) return []
+  return reasoningEfforts.filter((level) => Object.hasOwn(value, level))
+}
+
 function providerProfile(
   settingsList: readonly DshModelSettings[],
   apiKeyEnv: string,
-  native: NativeMatch | undefined,
+  native: NativeRoute | undefined,
   inheritsCatalog: boolean
 ): DshProviderProfile {
   const first = settingsList[0]!
@@ -196,37 +321,40 @@ function providerProfile(
     displayName: native?.provider ?? first.configId ?? 'Custom provider',
     apiKeyEnv,
     ...(inheritsCatalog ? {} : {
-      api: native?.model.api ?? first.apiFormat,
-      baseURL: native?.model.baseUrl ?? runtimeBaseUrl(first),
+      api: native?.model?.api ?? first.apiFormat,
+      baseURL: native?.model?.baseUrl ?? runtimeBaseUrl(first),
       defaultContextWindow: first.contextWindow,
       defaultMaxTokens: Math.min(32_768, first.contextWindow),
       defaultInput: first.supportsImageInput ? ['text', 'image'] : ['text']
     }),
     headers: nonEmptyRecord(first.customHeaders),
-    models: settingsList.map((settings) => modelProfile(settings, findNativeModel(settings), inheritsCatalog))
+    models: settingsList.map((settings) => modelProfile(settings, findNativeRoute(settings)?.model, inheritsCatalog))
   })
 }
 
 function modelProfile(
   settings: DshModelSettings,
-  native: NativeMatch | undefined,
+  native: CatalogModel | undefined,
   inheritsCatalog: boolean
 ): PiAiModelProfile {
   if (native !== undefined && inheritsCatalog) {
     return compact({
       id: runtimeModelId(settings),
       contextWindow: settings.contextWindowOverride,
-      input: settings.supportsImageInput ? ['text', 'image'] : ['text']
+      input: settings.supportsImageInput ? ['text', 'image'] : ['text'],
+      reasoningEfforts: settings.reasoningEfforts
     }) as PiAiModelProfile
   }
-  const model = native?.model
   return compact({
     id: runtimeModelId(settings),
-    name: model?.name,
-    contextWindow: settings.contextWindowOverride ?? model?.contextWindow ?? settings.contextWindow,
+    name: native?.name,
+    contextWindow: settings.contextWindowOverride ?? native?.contextWindow ?? settings.contextWindow,
     input: settings.supportsImageInput ? ['text', 'image'] : ['text'],
-    reasoningEfforts: model === undefined ? false : materializedReasoningEfforts(model),
-    compat: model?.compat
+    reasoningEfforts: isDedicatedDeepSeekProvider(settings)
+      ? { ...deepSeekPiAiReasoningEfforts }
+      : settings.reasoningEfforts
+        ?? (native === undefined ? undefined : materializedReasoningEfforts(native)),
+    compat: native?.compat
   }) as PiAiModelProfile
 }
 
@@ -239,7 +367,15 @@ function materializedReasoningEfforts(model: CatalogModel): false | Record<strin
   ]))
 }
 
-function providerConnectionKey(settings: DshModelSettings, native: NativeMatch | undefined): string {
+function usesOfficialDeepSeekRoute(identity: DshModelIdentity): boolean {
+  return isDedicatedDeepSeekProvider(identity) && identity.apiFormat === 'openai-completions'
+}
+
+function isDedicatedDeepSeekProvider(identity: DshModelIdentity): boolean {
+  return identity.provider === 'deepseek'
+}
+
+function providerConnectionKey(settings: DshModelSettings, native: NativeRoute | undefined): string {
   return JSON.stringify({
     provider: native?.provider ?? 'custom',
     apiKey: settings.apiKey,

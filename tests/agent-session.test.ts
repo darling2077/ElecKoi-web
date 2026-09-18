@@ -103,14 +103,11 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
     harness.database.close()
   })
 
-  it('waits for cancellation and stores a cancelled terminal message', async () => {
+  it('commits cancellation immediately without waiting for the runtime to drain', async () => {
     let finishRuntime: ((result: AgentRunResult) => void) | undefined
     const harness = createHarness({
       run: () => new Promise<AgentRunResult>((resolve) => { finishRuntime = resolve }),
-      cancel: async () => {
-        finishRuntime?.('cancelled')
-        return true
-      }
+      cancel: async () => true
     })
 
     harness.coordinator.start(harness.conversationId, '停止测试')
@@ -121,6 +118,143 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
       payload: { message: { status: 'cancelled' } }
     })
     expect(harness.terminalRecords).toEqual([{ status: 'cancelled', state: 'cancelled', text: '' }])
+    finishRuntime?.('cancelled')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    harness.database.close()
+  })
+
+  it('rejects a stale cancellation identity without stopping the current run', async () => {
+    let finishRuntime: ((result: AgentRunResult) => void) | undefined
+    const cancel = vi.fn(async () => true)
+    const harness = createHarness({
+      run: () => new Promise<AgentRunResult>((resolve) => { finishRuntime = resolve }),
+      cancel
+    })
+
+    const accepted = await harness.coordinator.start(harness.conversationId, '竞态测试', [], 'request-current')
+    await expect(harness.coordinator.cancel(harness.conversationId, {
+      requestId: 'request-stale',
+      runId: accepted.runId
+    })).resolves.toEqual({ cancelled: false })
+    await expect(harness.coordinator.cancel(harness.conversationId, {
+      requestId: 'request-current',
+      runId: 'run-stale'
+    })).resolves.toEqual({ cancelled: false })
+
+    expect(cancel).not.toHaveBeenCalled()
+    expect(harness.coordinator.inspect(harness.conversationId)).toMatchObject({
+      active: true,
+      runId: accepted.runId
+    })
+
+    await expect(harness.coordinator.cancel(harness.conversationId, {
+      requestId: 'request-current',
+      runId: accepted.runId
+    })).resolves.toEqual({ cancelled: true })
+    expect(cancel).toHaveBeenCalledOnce()
+    finishRuntime?.('cancelled')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    harness.database.close()
+  })
+
+  it('does not let a late cancellation for the previous run stop its replacement', async () => {
+    const finishRuns: Array<(result: AgentRunResult) => void> = []
+    const cancel = vi.fn(async () => true)
+    const harness = createHarness({
+      run: () => new Promise<AgentRunResult>((resolve) => { finishRuns.push(resolve) }),
+      cancel
+    })
+
+    const previous = await harness.coordinator.start(harness.conversationId, '旧请求', [], 'request-previous')
+    await expect(harness.coordinator.cancel(harness.conversationId, {
+      requestId: 'request-previous',
+      runId: previous.runId
+    })).resolves.toEqual({ cancelled: true })
+
+    const current = await harness.coordinator.start(harness.conversationId, '新请求', [], 'request-current')
+    await expect(harness.coordinator.cancel(harness.conversationId, {
+      requestId: 'request-previous',
+      runId: previous.runId
+    })).resolves.toEqual({ cancelled: false })
+
+    expect(cancel).toHaveBeenCalledTimes(1)
+    expect(harness.coordinator.inspect(harness.conversationId)).toMatchObject({
+      active: true,
+      runId: current.runId
+    })
+
+    await expect(harness.coordinator.cancel(harness.conversationId, {
+      requestId: 'request-current',
+      runId: current.runId
+    })).resolves.toEqual({ cancelled: true })
+    expect(cancel).toHaveBeenCalledTimes(2)
+    finishRuns.forEach((finish) => finish('cancelled'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    harness.database.close()
+  })
+
+  it('opens the trajectory from the latest attempted runtime even when that reply was cancelled', () => {
+    const trajectory = vi.fn((conversationId: string, runtimeThreadId: string) => ({
+      conversationId,
+      runtimeThreadId,
+      records: [],
+      totalRecords: 0,
+      hasMore: false,
+      beforeIndex: null,
+      startedAtMillis: null,
+      completedAtMillis: null
+    }))
+    const harness = createHarness({ trajectory })
+    const messages = new MessageRepository(harness.database)
+    messages.create(harness.conversationId, 'user', '已完成的一轮', 'complete')
+    messages.create(harness.conversationId, 'assistant', '旧回复', 'complete', undefined, 'thread-completed')
+    messages.create(harness.conversationId, 'user', '后来取消的一轮', 'complete')
+    messages.create(harness.conversationId, 'assistant', '', 'cancelled', undefined, 'thread-cancelled')
+
+    expect(harness.coordinator.trajectory(harness.conversationId)).toMatchObject({
+      runtimeThreadId: 'thread-cancelled'
+    })
+    expect(trajectory).toHaveBeenCalledWith(harness.conversationId, 'thread-cancelled', undefined)
+    expect(messages.latestCompletedRuntimeThreadId(harness.conversationId)).toBe('thread-completed')
+  })
+
+  it('regenerates from the durable user turn after an empty reply is cancelled', async () => {
+    let finishRuntime: ((result: AgentRunResult) => void) | undefined
+    let runCount = 0
+    const runtimeThreadIds: string[] = []
+    const harness = createHarness({
+      run: async (input, callbacks) => {
+        runCount += 1
+        runtimeThreadIds.push(input.runtimeThreadId ?? '')
+        if (runCount === 1) {
+          return new Promise<AgentRunResult>((resolve) => { finishRuntime = resolve })
+        }
+        callbacks.onFinal('重新生成成功')
+        return 'complete'
+      },
+      cancel: async () => {
+        finishRuntime?.('cancelled')
+        return true
+      }
+    })
+
+    harness.coordinator.start(harness.conversationId, '取消后重试')
+    await expect(harness.coordinator.cancel(harness.conversationId)).resolves.toEqual({ cancelled: true })
+    await harness.terminal
+    const messages = new MessageRepository(harness.database)
+    const cancelled = messages.list(harness.conversationId)
+    const user = cancelled.find((message) => message.role === 'user')
+    expect(user?.id).toBeTruthy()
+
+    harness.coordinator.regenerate(harness.conversationId, user!.id)
+    await vi.waitFor(() => {
+      expect(harness.events.filter((event) => event.name === 'agent.run.finished')).toHaveLength(2)
+    })
+    expect(messages.list(harness.conversationId).map((message) => [message.role, message.content])).toEqual([
+      ['user', '取消后重试'],
+      ['assistant', '重新生成成功']
+    ])
+    expect(runtimeThreadIds[1]).not.toBe(runtimeThreadIds[0])
     harness.database.close()
   })
 
@@ -194,8 +328,13 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
 
     const start = Promise.resolve(harness.coordinator.start(harness.conversationId, '', [{
       mediaType: 'image/png', data: 'iVBORw0KGgo=', name: 'pixel.png'
-    }]))
-    await expect(harness.coordinator.cancel(harness.conversationId)).resolves.toEqual({ cancelled: true })
+    }], 'request-image'))
+    await expect(harness.coordinator.cancel(harness.conversationId, {
+      requestId: 'request-stale'
+    })).resolves.toEqual({ cancelled: false })
+    await expect(harness.coordinator.cancel(harness.conversationId, {
+      requestId: 'request-image'
+    })).resolves.toEqual({ cancelled: true })
     releasePreparation([image])
 
     await expect(start).rejects.toMatchObject({ name: 'AbortError', message: '生成已停止' })
@@ -401,6 +540,7 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
 
     expect(runtimeInput?.subagentSettings).toEqual({
       configId: 'child-config',
+      provider: 'custom',
       apiKey: 'child-key',
       baseUrl: 'https://child.example.com/v1',
       model: 'child-model',
@@ -596,6 +736,45 @@ describe('Agent session coordinator（Agent 会话协调器）', () => {
     expect(messages.list(harness.conversationId).map((message) => message.content)).toEqual([expectedText, '新的回复'])
   })
 
+  it.each([
+    { label: 'image-only', text: '' },
+    { label: 'image and text', text: '这张图里是什么' }
+  ])('regenerates a durable $label user turn with its image attachment', async ({ text }) => {
+    const image = {
+      attachmentId: `sha256:${'f'.repeat(64)}`,
+      mediaType: 'image/png' as const,
+      bytes: 68,
+      width: 1,
+      height: 1,
+      name: 'pixel.png'
+    }
+    let runtimeInput: AgentRunInput | undefined
+    const harness = createHarness({
+      run: async (input, callbacks) => {
+        runtimeInput = input
+        callbacks.onFinal('识图回复')
+        return 'complete'
+      }
+    })
+    harness.models.save({
+      id: 'test-model', name: 'Test model', provider: 'deepseek', api_key: 'test-key',
+      base_url: 'https://api.deepseek.com', model: 'deepseek-chat',
+      model_options: [{ id: 'deepseek-chat', name: 'deepseek-chat', supportsImageInput: true }],
+      custom_headers: {}, supports_tools: null, enabled: true, image_settings: {}, api_format: 'responses'
+    })
+    const messages = new MessageRepository(harness.database)
+    const user = messages.create(harness.conversationId, 'user', text, 'complete', undefined, '', [image])
+
+    harness.coordinator.regenerate(harness.conversationId, user.id)
+    await harness.terminal
+
+    expect(runtimeInput).toMatchObject({ text, inputImages: [image] })
+    expect(messages.list(harness.conversationId)).toEqual([
+      expect.objectContaining({ id: user.id, role: 'user', content: text, inputImageAttachments: [image] }),
+      expect.objectContaining({ role: 'assistant', content: '识图回复', status: 'complete' })
+    ])
+  })
+
   it('coordinates message-tail deletion with runtime and unreferenced image cleanup', async () => {
     const disposed: Array<{ conversationId: string; threadIds: readonly string[] | undefined }> = []
     const discarded: string[][] = []
@@ -722,6 +901,8 @@ function createHarness(
     ...(overrides.prepareImages ? { prepareImages: overrides.prepareImages } : {}),
     ...(overrides.readImage ? { readImage: overrides.readImage } : {}),
     run: overrides.run ?? defaultRun,
+    ...(overrides.generationStats ? { generationStats: overrides.generationStats } : {}),
+    ...(overrides.trajectory ? { trajectory: overrides.trajectory } : {}),
     cancel: overrides.cancel ?? (async () => true),
     disposeConversation: overrides.disposeConversation ?? (async () => undefined),
     close: overrides.close ?? (async () => undefined)

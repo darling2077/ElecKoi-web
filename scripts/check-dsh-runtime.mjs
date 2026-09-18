@@ -10,6 +10,7 @@ const runtime = readJson('packages/dsh-runtime/package.json')
 const manifest = readJson('resources/dsh/runtime-manifest.json')
 const config = readFileSync(resolve(root, 'resources/dsh', manifest.composition), 'utf8')
 const presetConfig = readFileSync(resolve(root, 'resources/dsh', manifest.presetComposition), 'utf8')
+const sdkServerSource = readFileSync(require.resolve('@deepseek-ai/dsh-sdk-jsonrpc-server'), 'utf8')
 
 if (manifest.schemaVersion !== 1) throw new Error('DSH runtime manifest schemaVersion 必须为 1。')
 if (manifest.transport !== 'stdio-jsonrpc') throw new Error('DSH Runtime 必须使用 stdio JSON-RPC transport。')
@@ -95,6 +96,11 @@ for (const specifier of manifest.presetLocalPlugins ?? []) {
 
 if (runtime.dependencies?.['@deepseek-ai/dsh-sdk-client'] !== manifest.upstream.version) {
   throw new Error('@eleckoi/dsh-runtime 必须固定与 Runtime 相同版本的 dsh-sdk-client。')
+}
+
+if (!sdkServerSource.includes('ctx.on("agent/assistant-stream"')
+  || !sdkServerSource.includes('this.transport.notify("agent.assistant-stream"')) {
+  throw new Error('DSH SDK Runtime 必须把官方 agent/assistant-stream 实时帧转发给 Desktop。')
 }
 
 for (const capability of [

@@ -29,11 +29,22 @@ describe('agent process detail presentation', () => {
     expect(blocks.map((block) => block.id)).toEqual(['operations:reasoning', 'phase', 'operations:third']);
     expect(blocks[0].items.map((entry) => entry.id)).toEqual(['reasoning', 'first', 'second']);
     expect(blocks[0].presentation).toMatchObject({
-      title: '已查找设定文件，已读取设定正文',
+      title: '已查找设定文件、已读取设定正文',
       icon: 'search-setting',
     });
     expect(blocks[1].text).toBe('继续检查变量。');
     expect(blocks[2].presentation.title).toBe('已查找变量');
+  });
+
+  it('previews the first two distinct operation names and truncates longer groups', () => {
+    const blocks = processBlocks([
+      item({ id: 'settings', toolName: 'eleckoi_glob_setting_files' }),
+      item({ id: 'variables', toolName: 'eleckoi_glob_variables' }),
+      item({ id: 'run', toolName: 'tool' }),
+      item({ id: 'read', toolName: 'eleckoi_read_variables' }),
+    ]);
+
+    expect(blocks[0].presentation.title).toBe('已查找设定文件、已查找变量…');
   });
 
   it('keeps a completed reasoning-only group upright and summarized once', () => {
@@ -47,6 +58,34 @@ describe('agent process detail presentation', () => {
       presentation: { title: '思考过程', icon: 'reasoning', status: 'complete' },
     });
     expect(blocks[0].items).toEqual([first, second]);
+  });
+
+  it('keeps compaction attempts separate from surrounding model work', () => {
+    const first = item({ id: 'first', toolName: 'eleckoi_read_variables' });
+    const compaction = item({ id: 'compact', kind: 'compaction', toolName: '', summary: '上下文已自动压缩' });
+    const reasoning = item({ id: 'reasoning', kind: 'reasoning', toolName: 'reasoning', detail: '继续生成。' });
+
+    const blocks = processBlocks([first, compaction, reasoning]);
+    expect(blocks).toHaveLength(3);
+    expect(blocks.map((block) => block.items.map((entry) => entry.id))).toEqual([
+      ['first'], ['compact'], ['reasoning'],
+    ]);
+    expect(blocks[1].presentation.title).toBe('上下文已自动压缩');
+  });
+
+  it('uses the live item as the concise group status instead of concatenating every prior title', () => {
+    const first = item({ id: 'first', toolName: 'eleckoi_glob_setting_files' });
+    const second = item({
+      id: 'reasoning', kind: 'reasoning', toolName: 'reasoning', status: 'running',
+      detail: '正在整理。', completedAtMillis: undefined,
+    });
+
+    const blocks = processBlocks([first, second]);
+    expect(blocks[0].presentation).toMatchObject({
+      title: '正在思考',
+      icon: 'reasoning',
+      status: 'running',
+    });
   });
 
   it('keeps delegated child work out of the parent timeline', () => {
@@ -110,5 +149,27 @@ describe('agent process detail presentation', () => {
     expect(setting.specialized.entries[0]).toMatchObject({ groupPath: '人物', readStrategy: 'normal' });
     expect(variable.target).toBe('/世界/当前地点');
     expect(variable.specialized.entries[0]).toMatchObject({ current: '樱川高中', updateRule: '场景切换时更新' });
+  });
+
+  it('falls back to tool arguments when patch and plan results omit their entries', () => {
+    const variablePatch = processItemDetails(item({
+      toolName: 'eleckoi_apply_variable_patch',
+      arguments: JSON.stringify({ operations: [{ op: 'replace', path: '/世界/地点', value: '新地点' }] }),
+      summary: JSON.stringify({ applied_operations: 1 }),
+    }));
+    const settingPatch = processItemDetails(item({
+      toolName: 'eleckoi_apply_setting_patch',
+      arguments: JSON.stringify({ op: 'edit_file', path: '世界/地点', detail: '更新地点' }),
+      summary: JSON.stringify({ applied_operations: 1 }),
+    }));
+    const plan = processItemDetails(item({
+      toolName: 'update_plan',
+      arguments: JSON.stringify({ steps: [{ title: '继续剧情', status: 'pending' }] }),
+      summary: JSON.stringify({ status: 'ok' }),
+    }));
+
+    expect(variablePatch.specialized.operations).toMatchObject([{ op: 'replace', path: '/世界/地点' }]);
+    expect(settingPatch.specialized.operations).toMatchObject([{ op: 'edit_file', path: '世界/地点' }]);
+    expect(plan.specialized.steps).toMatchObject([{ title: '继续剧情', status: 'pending' }]);
   });
 });

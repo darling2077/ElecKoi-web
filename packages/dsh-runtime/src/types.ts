@@ -1,9 +1,12 @@
 export type DshReasoningEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type DshReasoningEfforts = Partial<Record<DshReasoningEffort, string | null>>
 
 export interface DshModelIdentity {
+  provider: string
   baseUrl: string
   model: string
   apiFormat: 'openai-completions' | 'openai-responses' | 'anthropic-messages' | 'google-generative-ai'
+  reasoningEfforts?: DshReasoningEfforts | false | undefined
 }
 
 export interface DshModelSettings extends DshModelIdentity {

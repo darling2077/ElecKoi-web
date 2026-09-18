@@ -1,5 +1,7 @@
 import {
+  cancelChatStream,
   createChat as createChatSession,
+  getChat,
   listenAgentProcess,
   listenChatStreamDelta,
   sendChatMessage,
@@ -33,11 +35,11 @@ export async function runChatMessageSend(options) {
   setIsSending(true);
   setStatus(draftImages.length ? "正在处理图片..." : "正在回复...");
   let assistantId = "";
+  let targetSessionId = sessionId;
 
   try {
     const encodedImages = await Promise.all(draftImages.map(encodeImageDraft));
     throwIfAborted(controller.signal);
-    let targetSessionId = sessionId;
     if (!targetSessionId) {
       if (!chatCharacter.character_id) throw new Error("请先从角色设定中双击角色进入聊天");
       const characterName = chatCharacter.assistant_name || chatCharacter.character_name || "新对话";
@@ -91,12 +93,14 @@ export async function runChatMessageSend(options) {
     updatePendingReply({ id: assistantId, conversationId: targetSessionId, role: "assistant", content: "", variableStateJson: '{}', pending: true, created_at: createdAt });
     requestScrollToEnd("smooth");
     const result = await sendChatMessage(payload, requestId);
-    if (requestRef.current !== activeRequest) return;
     if (result.cancelled) {
-      reconcileChatMessages(result.chat);
-      setStatus("已停止");
+      if (requestRef.current === null || requestRef.current === activeRequest) {
+        reconcileChatMessages(result.chat);
+      }
+      if (requestRef.current === activeRequest) setStatus("已停止");
       return;
     }
+    if (requestRef.current !== activeRequest) return;
     setSessionId(result.session_id);
     reconcileChatMessages(result.chat);
     setChatCharacter(normalizeLatestChatCharacter(result.chat || {}));
@@ -105,7 +109,21 @@ export async function runChatMessageSend(options) {
     setStatus("回复完成");
   } catch (error) {
     if (requestRef.current === activeRequest && !isAbortError(error)) {
-      commitPendingError(assistantId);
+      let reconciled = false;
+      if (targetSessionId) {
+        try {
+          const durable = await getChat(targetSessionId);
+          if (requestRef.current === activeRequest) {
+            reconcileChatMessages(durable.chat);
+            setChatCharacter(normalizeLatestChatCharacter(durable.chat || {}));
+            reconciled = true;
+          }
+        } catch {
+          // Keep the original send failure visible if refreshing durable state also fails.
+        }
+      }
+      if (requestRef.current !== activeRequest) return;
+      if (!reconciled) commitPendingError(assistantId);
       const message = getErrorMessage(error, "发送失败");
       setStatus(message);
       notify?.("error", message);
@@ -117,6 +135,36 @@ export async function runChatMessageSend(options) {
       setIsSending(false);
     }
   }
+}
+
+export function stopChatMessageSend({
+  requestRef,
+  setIsSending,
+  setStatus,
+  settlePendingReply,
+  notify,
+  cancelRequest = cancelChatStream,
+}) {
+  const activeRequest = requestRef.current;
+  if (!activeRequest || activeRequest.stopping) return false;
+
+  activeRequest.stopping = true;
+  requestRef.current = null;
+  activeRequest.controller?.abort?.();
+  activeRequest.unlisten?.();
+  settlePendingReply?.();
+  setIsSending?.(false);
+  setStatus("已停止");
+  if (!activeRequest.requestId) {
+    return true;
+  }
+
+  void cancelRequest(activeRequest.requestId).catch((error) => {
+    const message = getErrorMessage(error, "停止生成失败");
+    if (requestRef.current === null) setStatus(message);
+    notify?.("error", message);
+  });
+  return true;
 }
 
 export function getErrorMessage(error, fallback) {

@@ -104,6 +104,11 @@ export const characterCollectionSchema = z.object({
 
 export const modelApiFormatSchema = z.enum(['chat_completions', 'responses', 'anthropic_messages', 'google_gemini'])
 export const modelProviderIdSchema = z.enum(['custom', 'deepseek', 'zhipu', 'zai', 'moonshot', 'openai_image', 'novelai_image'])
+export const modelReasoningEffortSchema = z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
+export const modelReasoningEffortsSchema = z.partialRecord(
+  modelReasoningEffortSchema,
+  z.string().trim().min(1).nullable()
+).refine((value) => Object.keys(value).length > 0, '至少声明一个推理档位。')
 
 export const modelOptionSchema = z.object({
   id: z.string().min(1),
@@ -114,7 +119,8 @@ export const modelOptionSchema = z.object({
   maxOutputTokens: z.number().int().min(1).max(4_000_000).nullable().optional(),
   temperature: z.number().min(0).max(2).nullable().optional(),
   topP: z.number().min(0).max(1).nullable().optional(),
-  reasoningEffort: z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']).nullable().optional(),
+  reasoningEfforts: z.union([z.literal(false), modelReasoningEffortsSchema]).nullable().optional(),
+  reasoningEffort: modelReasoningEffortSchema.nullable().optional(),
   supportsImageInput: z.boolean().optional()
 }).strict().superRefine((option, context) => {
   const capacity = option.contextWindowTokens

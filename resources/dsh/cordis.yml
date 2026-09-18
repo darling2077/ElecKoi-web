@@ -1,52 +1,60 @@
-# ElecKoi-owned DeepSeek Harness JSON-RPC runtime composition.
-# stdout is reserved for the SDK protocol; runtime diagnostics must use stderr.
+# ElecKoi overlay for the official DSH sdk profile.
+# The shipped dsh-base and dsh-sdk-app bundles own the runtime graph; this file
+# only supplies product configuration and ElecKoi's session bridges.
 
-- id: agent-presets
-  name: '@deepseek-ai/dsh-agent-presets'
+- id: system-prompt
   config:
-    default: !!js process.env.ELECKOI_AGENT_PRESET ?? 'agent-preset-standard'
-    includeUserRoot: true
-
-# The stock JSON-RPC server creates an Agent without a setup hook. This bridge
-# mounts the selected ElecKoi preset before that Agent is published.
-- id: agent-preset-bridge
-  name: './agent-preset-bridge.mjs'
+    personaPrefix: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are ElecKoi.'
+    personaSuffix: ''
 
 - id: attachment-local
-  name: '@deepseek-ai/dsh-attachment-local'
   config:
     dshHome: !!js process.env.DSH_HOME
     maxImageBytes: 20971520
     maxImagesPerMessage: 4
     maxMessageImageBytes: 20971520
 
-- id: llm-pi-ai
-  name: '@deepseek-ai/dsh-llm-pi-ai'
+- id: session-persistence-jsonl
   config:
-    providers: !!js JSON.parse(process.env.ELECKOI_DSH_PROVIDERS ?? '{}')
+    root: !!js process.env.DSH_SESSION_ROOT
+    compression: none
 
-# Product history is projected only at the provider boundary. It must never be
-# appended to DSH's durable event log as if it happened again in this session.
-- id: request-context
-  name: './request-context.mjs'
+- id: sandbox-policy
+  config:
+    mode: workspace-write
+    workspaceRoot: !!js process.env.DSH_CWD ?? process.cwd()
 
-# Web search is one DSH capability seam with an explicit provider per runtime.
+- id: approval
+  config:
+    policy: never
+
+- id: permission
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      eleckoi-workspace:
+        sandbox: workspace-write
+        approval: never
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+    defaultPreset: eleckoi-workspace
+
 - id: web
-  name: '@deepseek-ai/dsh-web'
   config:
     searchProvider: !!js process.env.DSH_WEB_SEARCH_PROVIDER ?? 'deepseek-official'
     fetchProvider: http
 
 - id: web-search-deepseek
-  name: '@deepseek-ai/dsh-web-search-deepseek'
   config:
     apiKeyEnv: ELECKOI_NATIVE_WEB_SEARCH_API_KEY
 
-- id: web-search-tavily
-  name: './tavily-web-search.mjs'
-
 - id: web-fetch-http
-  name: '@deepseek-ai/dsh-web-fetch-http'
   config:
     maxUrlLength: 2048
     maxResponseBytes: 5000000
@@ -54,93 +62,71 @@
     timeoutMs: 35000
     maxRedirects: 5
 
-- id: tool-call-timeout-policy
-  name: '@deepseek-ai/dsh-tool-call-timeout-policy'
-
-# Windows-local command execution and managed subprocess trees.
-- id: subprocess
-  name: '@deepseek-ai/dsh-subprocess-local'
-
-- id: pwsh
-  name: '@deepseek-ai/dsh-pwsh-local'
-  config:
-    cwd: !!js process.env.DSH_CWD ?? process.cwd()
-    timeoutMs: 120000
-    maxTimeoutMs: 600000
-
-- id: shell-env
-  name: '@deepseek-ai/dsh-shell-env'
-
-# Character chat follows the current Android policy: high-risk operations are
-# audited and rejected instead of opening an interactive grant surface.
-- id: user-approval
-  name: '@deepseek-ai/dsh-user-approval'
-  config:
-    policy: never
-
-# The full UI-less agent spine owns sessions, tools, skills, jobs, goals,
-# system-prompt assembly, retries, invariants and the concrete agent loop.
-- id: agent-spine
-  name: '@deepseek-ai/dsh-agent-spine-demo'
-  config:
-    includeHarnessIdentity: false
-    includeRuntimeContext: true
-    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are ElecKoi, a helpful desktop AI assistant.'
-    dshHome: !!js process.env.DSH_HOME
-    maxParallelToolCalls: 4
-    workspaceContext: false
-    skills:
-      enabled: true
-    toolBash: false
-    toolJobs: {}
-    goals: {}
-
-# DSH keeps its event-sourced runtime state; ElecKoi SQLite remains the
-# authoritative product database shown to the Renderer.
-- id: sessions
-  name: '@deepseek-ai/dsh-session-persistence-jsonl'
-  config:
-    root: !!js process.env.DSH_SESSION_ROOT
-    compression: none
-
-- id: session-checkpoints
-  name: '@deepseek-ai/dsh-session-checkpoint-policy'
-
-- id: session-projection
-  name: '@deepseek-ai/dsh-session-projection'
-
-# In-process subagents: continuable spawn plus one-shot history-preserving fork.
-- id: subagent
-  name: '@deepseek-ai/dsh-subagent'
-
-- id: subagent-spawn
-  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
-  config:
-    providerName: spawn
-
-- id: subagent-fork
-  name: '@deepseek-ai/dsh-subagent-fork-in-process'
-  config:
-    providerName: fork
-
-# Model-authored workflows dispatch child agents through the same spawn provider.
-- id: workflow-worker
-  name: '@deepseek-ai/dsh-workflow-worker-thread'
-  config:
-    provider: spawn
-
-# Workspace file tools and the observe-before-edit policy.
-- id: fs-local
-  name: '@deepseek-ai/dsh-fs-local'
-  config:
-    cwd: !!js process.env.DSH_CWD ?? process.cwd()
-
-# Long-session context accounting. Compaction is part of the selected preset.
-- id: token-meter
-  name: '@deepseek-ai/dsh-token-meter'
-
-# Start the transport only after every host registry and adapter is available.
 - id: sdk-jsonrpc-server
-  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
   config:
     maxTokensAsSuccess: true
+
+# The SDK base profile keeps model-facing rows for a process-wide agent. ElecKoi
+# composes them per Session through Agent Presets, matching DSH's own multi-
+# session profile: host registries stay loaded while global tool rows are
+# disabled so preset-scoped configuration and policy remain authoritative.
+- id: tool-bash
+  disabled: true
+- id: tool-pwsh
+  disabled: true
+- id: tool-jobs
+  disabled: true
+- id: tool-fs
+  disabled: true
+- id: tool-fs-search
+  disabled: true
+- id: skill-filesystem
+  disabled: true
+- id: tool-skill
+  disabled: true
+- id: command-goal
+  disabled: true
+- id: tool-goal
+  disabled: true
+- id: plan-mode
+  disabled: true
+- id: compaction-basic
+  disabled: true
+- id: command-compact
+  disabled: true
+- id: tool-result-pruner
+  disabled: true
+- id: tool-subagent-control
+  disabled: true
+- id: tool-subagent-list-agents
+  disabled: true
+- id: tool-subagent
+  disabled: true
+- id: tool-subagent-fork
+  disabled: true
+- id: workflow-worker-thread
+  disabled: true
+- id: tool-workflow
+  disabled: true
+- id: tool-ralph
+  disabled: true
+- id: agent-instructions
+  disabled: true
+- id: tool-todo
+  disabled: true
+- id: tool-web
+  disabled: true
+
+- insert:
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: !!js process.env.ELECKOI_AGENT_PRESET ?? 'agent-preset-standard'
+        includeShippedRoot: false
+        includeUserRoot: true
+
+    - id: agent-preset-bridge
+      name: './agent-preset-bridge.mjs'
+
+    - id: web-search-tavily
+      name: './tavily-web-search.mjs'

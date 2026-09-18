@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { SessionFormatEvent, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
+import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { agentTrajectorySnapshotSchema } from '../../../src/shared/contracts/agent/trajectory'
 import { readDshTrajectory } from '../src/trajectory'
 import {
@@ -28,18 +30,32 @@ describe('trajectory context ledger', () => {
     const conversationStateRoot = join(sessionLogRoot, 'conversation-a')
     const directory = join(sessionLogRoot, 'project-context', runtimeThreadId)
     mkdirSync(directory, { recursive: true })
-    writeFileSync(join(directory, 'session.jsonl'), [
-      { type: 'session', version: 0, id: runtimeThreadId, createdAt: 1_000, cwd: 'D:\\workspace' },
-      { type: 'turn/start', time: 1_100, data: { turn: 1 } },
-      { type: 'step/start', time: 1_110, data: { turn: 1, step: 1 } },
-      { type: 'user/message', time: 1_120, data: { content: [{ type: 'text', text: '问题一' }], source: { kind: 'user' } } },
-      { type: 'user/message', time: 1_125, data: { content: [{ type: 'text', text: '通用背景内容' }], source: { kind: 'plugin', plugin: 'eleckoi-conversation-context', label: '缓存区', sections: [{ name: '缓存设定 · 通用背景' }] } } },
-      { type: 'assistant/message', time: 1_130, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '回答一' }] } } },
-      { type: 'turn/start', time: 2_100, data: { turn: 2 } },
-      { type: 'step/start', time: 2_110, data: { turn: 2, step: 1 } },
-      { type: 'user/message', time: 2_120, data: { content: [{ type: 'text', text: '问题二' }], source: { kind: 'user' } } },
-      { type: 'assistant/message', time: 2_130, data: { turn: 2, step: 1, message: { content: [{ type: 'text', text: '回答二' }] } } }
-    ].map((row) => JSON.stringify(row)).join('\n') + '\n')
+    const events = [
+      trajectoryEvent(0, 'turn/start', 1_100, { turn: 1 }),
+      trajectoryEvent(1, 'step/start', 1_110, { turn: 1, step: 1 }),
+      trajectoryEvent(2, 'user/message', 1_120, { content: [{ type: 'text', text: '问题一' }], source: { kind: 'user' } }, 'append'),
+      trajectoryEvent(3, 'user/message', 1_125, { content: [{ type: 'text', text: '通用背景内容' }], source: { kind: 'plugin', plugin: 'eleckoi-conversation-context', label: '缓存区', sections: [{ name: '缓存设定 · 通用背景' }] } }, 'append'),
+      trajectoryEvent(4, 'assistant/message', 1_130, { turn: 1, step: 1, message: { content: [{ type: 'text', text: '回答一' }] } }, 'append'),
+      trajectoryEvent(5, 'turn/start', 2_100, { turn: 2 }),
+      trajectoryEvent(6, 'step/start', 2_110, { turn: 2, step: 1 }),
+      trajectoryEvent(7, 'user/message', 2_120, { content: [{ type: 'text', text: '问题二' }], source: { kind: 'user' } }, 'append'),
+      trajectoryEvent(8, 'assistant/message', 2_130, { turn: 2, step: 1, message: { content: [{ type: 'text', text: '回答二' }] } }, 'append')
+    ]
+    const rows = [
+      sessionFormatCatalog.encodeCurrentHeader({
+        version: sessionFormatCatalog.currentVersion,
+        id: runtimeThreadId,
+        createdAt: 1_000,
+        cwd: 'D:\\workspace',
+        isSeeded: false,
+        delegationDepth: 0
+      }, 0),
+      ...events.map((event) => sessionFormatCatalog.encodeCurrentEvent(event))
+    ]
+    writeFileSync(
+      join(directory, `session.v${sessionFormatCatalog.currentVersion}.jsonl`),
+      rows.map((row) => JSON.stringify(row)).join('\n') + '\n'
+    )
     const entries = [{
       key: 'definition-a', id: 'setting-a', title: '缓存设定 · 通用背景', source: '缓存区',
       anchor: 'insert_point_1', role: 'user' as const, content: '通用背景内容'
@@ -61,3 +77,13 @@ describe('trajectory context ledger', () => {
     expect(() => agentTrajectorySnapshotSchema.parse({ conversationId: 'conversation-a', ...page })).not.toThrow()
   })
 })
+
+function trajectoryEvent(
+  seq: number,
+  type: string,
+  time: number,
+  data: SessionFormatJsonObject,
+  surfaceOp?: 'append'
+): SessionFormatEvent {
+  return { seq, type, time, data, ...(surfaceOp === undefined ? {} : { surfaceOp }) }
+}

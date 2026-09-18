@@ -57,7 +57,7 @@ export function ModelConfigDetail({
               automaticContextWindow={parameterEditor.automaticContextWindow}
               effectiveContextWindow={parameterEditor.effectiveContextWindow}
               parameterError={parameterEditor.parameterError}
-              reasoningEfforts={parameterEditor.modelCapabilities.reasoningEfforts}
+              modelCapabilities={parameterEditor.modelCapabilities}
               onChange={parameterEditor.onUpdateModelOption}
             />
           )}

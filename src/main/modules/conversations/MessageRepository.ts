@@ -181,11 +181,20 @@ export class MessageRepository {
       }))
   }
 
-  latestRuntimeThreadId(conversationId: string): string | undefined {
+  latestCompletedRuntimeThreadId(conversationId: string): string | undefined {
     const row = this.store.native.prepare(`SELECT r.runtimeThreadId
       FROM agent_responses r JOIN agent_branch_turns p ON p.turnId=r.turnId
       JOIN agent_conversations c ON c.activeBranchId=p.branchId
       WHERE r.conversationId=? AND c.id=? AND r.status='completed' AND r.runtimeThreadId<>''
+      ORDER BY p.sequence DESC, r.responseIndex DESC LIMIT 1`).get(conversationId, conversationId) as { runtimeThreadId: string } | undefined
+    return row?.runtimeThreadId || undefined
+  }
+
+  latestRuntimeThreadId(conversationId: string): string | undefined {
+    const row = this.store.native.prepare(`SELECT r.runtimeThreadId
+      FROM agent_responses r JOIN agent_branch_turns p ON p.turnId=r.turnId
+      JOIN agent_conversations c ON c.activeBranchId=p.branchId
+      WHERE r.conversationId=? AND c.id=? AND r.runtimeThreadId<>''
       ORDER BY p.sequence DESC, r.responseIndex DESC LIMIT 1`).get(conversationId, conversationId) as { runtimeThreadId: string } | undefined
     return row?.runtimeThreadId || undefined
   }

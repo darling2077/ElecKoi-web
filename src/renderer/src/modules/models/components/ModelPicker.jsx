@@ -9,7 +9,11 @@ import {
   DshSearchIcon,
 } from "../../../ui/icons/dshComposerIcons.jsx";
 import { useModelCapabilities } from "../hooks/useModelCapabilities.js";
-import { reasoningOptions } from "../model/modelReasoningOptions.js";
+import {
+  customReasoningOptions,
+  reasoningOptions,
+  withCustomReasoningEffort,
+} from "../model/modelReasoningOptions.js";
 
 function configName(config) {
   return String(config?.name || "").trim() || "未命名";
@@ -30,6 +34,12 @@ function modelItems(config, modelOptionsByKey) {
   return [...byId.values()];
 }
 
+export function configDefaultModel(config, modelOptionsByKey) {
+  const configured = String(config?.model || "").trim();
+  if (configured) return configured;
+  return modelItems(config, modelOptionsByKey)[0]?.id || "";
+}
+
 function emptyModelsText(config) {
   if (!config) return "没有模型配置";
   if (!String(config.api_key || "").trim()) return "请先在模型库补全连接";
@@ -42,6 +52,7 @@ function parameterDraft(option) {
     contextWindowTokens: option?.contextWindowTokens ?? "",
     autoCompactTokenLimit: option?.autoCompactTokenLimit ?? "",
     maxOutputTokens: option?.maxOutputTokens ?? "",
+    reasoningEfforts: option?.reasoningEfforts ?? null,
     reasoningEffort: option?.reasoningEffort || "",
     temperature: option?.temperature ?? "",
     topP: option?.topP ?? "",
@@ -73,6 +84,7 @@ function normalizedParameters(draft, automaticContextWindow) {
     contextWindowTokens,
     autoCompactTokenLimit,
     maxOutputTokens,
+    reasoningEfforts: draft.reasoningEfforts,
     reasoningEffort: draft.reasoningEffort || null,
     temperature,
     topP,
@@ -145,7 +157,10 @@ export function ModelPicker({
   const selectedOption = selectedOptions.find((item) => item.id === parameterModelId) || null;
   const [draft, setDraft] = useState(() => parameterDraft(selectedOption));
   const modelCapabilities = useModelCapabilities(selectedConfig, parameterModelId);
-  const reasoningEffortOptions = reasoningOptions(modelCapabilities.reasoningEfforts, "跟随模型");
+  const usesCustomReasoningList = modelCapabilities.source === "provider_default" || modelCapabilities.source === "explicit_profile";
+  const reasoningEffortOptions = usesCustomReasoningList
+    ? customReasoningOptions(draft.reasoningEfforts != null)
+    : reasoningOptions(modelCapabilities.reasoningEfforts);
   const selectedReasoningEffort = reasoningEffortOptions.some((item) => item.id === draft.reasoningEffort)
     ? draft.reasoningEffort
     : "";
@@ -182,6 +197,17 @@ export function ModelPicker({
     setFocusedConfigId(config.id);
   }
 
+  function chooseConfig(config) {
+    const modelId = configDefaultModel(config, modelOptionsByKey);
+    setFocusedConfigId(config.id);
+    setQuery("");
+    if (!modelId) {
+      onNotify?.("error", "这个配置还没有可用模型");
+      return;
+    }
+    chooseModel(config, modelId);
+  }
+
   function followMainModel() {
     onSelect?.({ capability: "chat", configId: "", model: "" });
     setTab("models");
@@ -203,6 +229,15 @@ export function ModelPicker({
     const next = { ...draft, ...patch };
     setDraft(next);
     if (persist) saveParameters(next);
+  }
+
+  function updateReasoningEffort(value) {
+    updateDraft({
+      ...(usesCustomReasoningList
+        ? { reasoningEfforts: withCustomReasoningEffort(draft.reasoningEfforts, value) }
+        : {}),
+      reasoningEffort: value,
+    }, true);
   }
 
   function saveParameters(nextDraft = draft) {
@@ -296,16 +331,28 @@ export function ModelPicker({
                         {group.provider.label}
                       </h3>
                       {group.items.map((config) => (
-                        <button
-                          type="button"
+                        <div
                           key={config.id}
-                          className={focusedConfig?.id === config.id ? "active" : ""}
-                          aria-pressed={selectedConfig?.id === config.id}
-                          onClick={() => { setFocusedConfigId(config.id); setQuery(""); }}
+                          className={`chat-model-config-row${focusedConfig?.id === config.id ? " active" : ""}`}
                         >
-                          <ModelSelectionIndicator selected={selectedConfig?.id === config.id} />
-                          <span className="chat-model-config-copy"><strong>{configName(config)}</strong><small>{config.model || "未选择模型"}</small></span>
-                        </button>
+                          <button
+                            type="button"
+                            className="chat-model-config-select"
+                            aria-label={`使用配置 ${configName(config)}`}
+                            aria-pressed={selectedConfig?.id === config.id}
+                            onClick={() => chooseConfig(config)}
+                          >
+                            <ModelSelectionIndicator selected={selectedConfig?.id === config.id} />
+                          </button>
+                          <button
+                            type="button"
+                            className="chat-model-config-open"
+                            aria-label={`查看配置 ${configName(config)} 的模型`}
+                            onClick={() => { setFocusedConfigId(config.id); setQuery(""); }}
+                          >
+                            <span className="chat-model-config-copy"><strong>{configName(config)}</strong><small>{config.model || "未选择模型"}</small></span>
+                          </button>
+                        </div>
                       ))}
                     </section>
                   )) : <p className="chat-model-empty">没有聊天模型配置</p>}
@@ -338,7 +385,7 @@ export function ModelPicker({
                   <ParameterSwitch label="此模型支持图片" checked={draft.supportsImageInput} onChange={(checked) => updateDraft({ supportsImageInput: checked }, true)} />
                 </ParameterGroup>
                 <ParameterGroup title="推理">
-                  <ParameterSelect label="推理强度" value={selectedReasoningEffort} options={reasoningEffortOptions} onChange={(value) => updateDraft({ reasoningEffort: value }, true)} />
+                  <ParameterSelect label="推理强度" disabled={!usesCustomReasoningList && modelCapabilities.reasoningEfforts.length === 0} value={selectedReasoningEffort} options={reasoningEffortOptions} onChange={updateReasoningEffort} />
                 </ParameterGroup>
                 <ParameterGroup title="上限">
                   <ParameterNumber label="上下文窗口" value={draft.contextWindowTokens} placeholder={automaticContextWindow} min={4096} max={4_000_000} onChange={(value) => updateDraft({ contextWindowTokens: value })} onCommit={saveParameters} />
@@ -371,8 +418,8 @@ function ParameterGroup({ title, children }) {
   return <section className="chat-model-parameter-group"><h3>{title}</h3><div>{children}</div></section>;
 }
 
-function ParameterSelect({ label, value, options, onChange }) {
-  return <label className="chat-model-parameter-row"><span>{label}</span><select value={value} onChange={(event) => onChange(event.target.value)}>{options.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>;
+function ParameterSelect({ label, value, options, disabled, onChange }) {
+  return <label className="chat-model-parameter-row"><span>{label}</span><select disabled={disabled} value={value} onChange={(event) => onChange(event.target.value)}>{options.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>;
 }
 
 function ParameterSwitch({ label, checked, onChange }) {

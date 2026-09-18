@@ -135,9 +135,10 @@ function waitForReply(sessionId, message, requestId = "", command = "command.age
     let runId = "";
     const queuedTerminalEvents = [];
     const disposers = [];
+    const streamRequest = requestId ? { requestId, runId: "" } : null;
     const cleanup = () => {
       disposeAll(disposers);
-      if (!requestId || streamRequestBySession.get(sessionId) === requestId) {
+      if (!streamRequest || streamRequestBySession.get(sessionId) === streamRequest) {
         streamRequestBySession.delete(sessionId);
       }
     };
@@ -175,7 +176,7 @@ function waitForReply(sessionId, message, requestId = "", command = "command.age
     disposers.push(
       desktopClient.on("agent.output.delta", (event) => {
         if (event.conversationId !== sessionId || event.runId !== runId || !requestId) return;
-        if (streamRequestBySession.get(sessionId) !== requestId) return;
+        if (streamRequestBySession.get(sessionId) !== streamRequest) return;
         for (const listener of streamDeltaListeners) {
           listener({ request_id: requestId, session_id: sessionId, delta: event.delta });
         }
@@ -185,7 +186,7 @@ function waitForReply(sessionId, message, requestId = "", command = "command.age
       }),
       desktopClient.on("agent.process.updated", (event) => {
         if (event.conversationId !== sessionId || event.runId !== runId || !requestId) return;
-        if (streamRequestBySession.get(sessionId) !== requestId) return;
+        if (streamRequestBySession.get(sessionId) !== streamRequest) return;
         for (const listener of processListeners) listener({ request_id: requestId, session_id: sessionId, message_id: event.messageId, item: event.item });
       }),
       desktopClient.on("agent.run.finished", (event) => {
@@ -193,13 +194,15 @@ function waitForReply(sessionId, message, requestId = "", command = "command.age
       }),
     );
 
-    if (requestId) streamRequestBySession.set(sessionId, requestId);
+    if (streamRequest) streamRequestBySession.set(sessionId, streamRequest);
     desktopClient.request(command, {
       conversationId: sessionId,
+      requestId,
       ...(command === "command.agent.start" ? { text: message, ...(commandPayload.images?.length ? { images: commandPayload.images } : {}) } : commandPayload),
     }).then((accepted) => {
       if (settled) return;
       runId = accepted.runId;
+      if (streamRequest) streamRequest.runId = runId;
       const queued = queuedTerminalEvents.find(({ event }) => event.runId === runId);
       if (queued) handleTerminalEvent(queued.type, queued.event);
     }).catch((error) => {
@@ -221,9 +224,14 @@ export async function readChatImage(conversationId, attachmentId) {
 }
 
 export async function cancelChatStream(requestId) {
-  const entry = [...streamRequestBySession.entries()].find(([, value]) => value === requestId);
+  const entry = [...streamRequestBySession.entries()].find(([, value]) => value.requestId === requestId);
   if (!entry) return;
-  await desktopClient.request("command.agent.cancel", { conversationId: entry[0] });
+  const [conversationId, streamRequest] = entry;
+  await desktopClient.request("command.agent.cancel", {
+    conversationId,
+    requestId: streamRequest.requestId,
+    ...(streamRequest.runId ? { runId: streamRequest.runId } : {}),
+  });
 }
 
 export async function listenChatStreamDelta(handler) {

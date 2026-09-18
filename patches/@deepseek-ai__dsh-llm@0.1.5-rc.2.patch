@@ -1,8 +1,8 @@
 diff --git a/lib/index.js b/lib/index.js
-index 61e6d90e7da02099362ba0b74e8c4c80d095a4e5..9d616864c3384702a9bdf21dfe1e5efd2ce0bf86 100644
+index 4ed780ee0705e97345de1adf4d7f79ad0b8ec5bd..a32e5885390cddfea8199a65b82349135f4315f7 100644
 --- a/lib/index.js
 +++ b/lib/index.js
-@@ -66,7 +66,7 @@ const AGENT_LOOP_REQUESTS = /* @__PURE__ */ new WeakSet();
+@@ -350,7 +350,7 @@ const AGENT_LOOP_REQUESTS = /* @__PURE__ */ new WeakSet();
  * @returns whether every field (including the `stop` list, element-wise) matches.
  */
  function callConfigEquals(a, b) {
@@ -12,7 +12,7 @@ index 61e6d90e7da02099362ba0b74e8c4c80d095a4e5..9d616864c3384702a9bdf21dfe1e5efd
  	return a.stop.length === b.stop.length && a.stop.every((s, i) => s === b.stop?.[i]);
  }
 diff --git a/lib/types/call-config.d.ts b/lib/types/call-config.d.ts
-index b157e27d6f4e64190c5d0a3ab9c27c9ad4e4b6b3..2ad3d1250830b79d7e6aeb7ea0a82fbce80634bd 100644
+index 006624d680cf8ad7eee9cdaee8b2d10f75562701..d1f22c05acbf4aee090b25aa6085992409b509c8 100644
 --- a/lib/types/call-config.d.ts
 +++ b/lib/types/call-config.d.ts
 @@ -18,6 +18,7 @@ export interface LlmCallConfig {
@@ -23,23 +23,11 @@ index b157e27d6f4e64190c5d0a3ab9c27c9ad4e4b6b3..2ad3d1250830b79d7e6aeb7ea0a82fbc
      maxTokens?: number;
      stop?: string[];
  }
-diff --git a/lib/types/call-config.js b/lib/types/call-config.js
-index 75b0874d14f31e02f4bb3bf8d76208d883657be9..6f1a323d1634d219987ec8599a6300e6d085494f 100644
---- a/lib/types/call-config.js
-+++ b/lib/types/call-config.js
-@@ -20,6 +20,7 @@ export function callConfigEquals(a, b) {
-         || a.model !== b.model
-         || a.reasoningEffort !== b.reasoningEffort
-         || a.temperature !== b.temperature
-+        || a.topP !== b.topP
-         || a.maxTokens !== b.maxTokens)
-         return false;
-     if (a.stop === undefined || b.stop === undefined)
 diff --git a/lib/types/types.d.ts b/lib/types/types.d.ts
-index 66c50682a7b3aa9af0131a6ec0e6359892c1d848..8d5d54f45ffc408417b22981f635fab2423a84d0 100644
+index f71a3e919091f47accf9c40e739db7cc2c4f5c7e..c6bb59d8496db568463c7447f67ba1047cbe9ee7 100644
 --- a/lib/types/types.d.ts
 +++ b/lib/types/types.d.ts
-@@ -346,6 +346,8 @@ export interface GenerateOptions {
+@@ -422,6 +422,8 @@ export interface GenerateOptions {
      /** Tool schemas (adapters map to the provider's `tools` field). */
      tools?: ToolSchema[];
      temperature?: number;

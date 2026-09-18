@@ -51,6 +51,15 @@ describe('agent preset repository', () => {
       'built-in-hidden-tool-timeline',
       'built-in-roleplay-history-compaction'
     ])
+    expect(initial.promptPositions).toContainEqual(expect.objectContaining({
+      id: 'hidden-tool-timeline',
+      anchor: 'insert_point_5',
+      side: 'after_setting_position'
+    }))
+    expect(initial.entries.find((entry) => entry.kind === 'hidden_tool_timeline')).toMatchObject({
+      position: 'insert_point_5',
+      promptPositionId: 'hidden-tool-timeline'
+    })
     const timestamp = new Date().toISOString()
     const saved = repository.save({
       ...initial,
@@ -89,7 +98,7 @@ describe('agent preset repository', () => {
     expect(repository.disabledToolGroupIds()).not.toContain('builtin:web')
     expect(repository.runtimeContext()?.entries.some((entry) => entry.kind === 'history_compaction')).toBe(false)
     expect(repository.runtimeContext()?.entries.find((entry) => entry.kind === 'hidden_tool_timeline')).toMatchObject({
-      content: expect.stringContaining('<roleplay_output_protocol>')
+      content: expect.stringContaining('最终可见回复必须且只能使用一对 <FINAL> 与 </FINAL> 标签完整包裹')
     })
     expect(repository.runtimeContext()?.entries.find((entry) => entry.id.endsWith(':prompt-1'))).toMatchObject({
       id: `agent-preset:${saved.id}:prompt-1`,
@@ -143,6 +152,21 @@ describe('agent preset repository', () => {
       insertRole: 'assistant',
       order: 7
     })
+  })
+
+  it('preserves a user-edited hidden timeline prompt', () => {
+    const repository = harness()
+    repository.ensureInitialized()
+    const initial = repository.active()
+    const saved = repository.save({
+      ...initial,
+      entries: initial.entries.map((entry) => entry.kind === 'hidden_tool_timeline'
+        ? { ...entry, content: '用户自定义工具时间线协议。' }
+        : entry)
+    })
+
+    expect(saved.entries.find((entry) => entry.kind === 'hidden_tool_timeline')?.content)
+      .toBe('用户自定义工具时间线协议。')
   })
 
   it('moves presets out of a deleted user group without creating a fallback group', () => {

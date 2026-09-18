@@ -2,6 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { SessionFormatEvent, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
+import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { projectDshTrajectory, readDshTrajectory } from '@eleckoi/dsh-runtime'
 
 const temporaryDirectories: string[] = []
@@ -89,17 +91,22 @@ describe('DSH trajectory projection', () => {
     const runtimeThreadId = 'thread-a'
     const directory = join(root, 'project-a', runtimeThreadId)
     mkdirSync(directory, { recursive: true })
-    const rows = [
-      { type: 'session', version: 0, id: runtimeThreadId, createdAt: 1_000, cwd: 'D:\\workspace' },
-      { type: 'turn/start', data: { turn: 1 } },
-      { type: 'step/start', data: { turn: 1, step: 1 } },
-      { type: 'request/header', data: { header: { system: '系统提示词' }, reason: 'initial' } },
-      { type: 'user/message', data: { content: [{ type: 'text', text: '问题' }], source: { kind: 'user' } } },
-      { type: 'tool/call', data: { turn: 1, step: 1, callId: 'call-a', name: 'read', arguments: '{}' } },
-      { type: 'tool/result', data: { turn: 1, step: 1, message: { source: { callId: 'call-a' }, content: [] } } },
-      { type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '回答' }] } } }
-    ]
-    writeFileSync(join(directory, 'session.jsonl'), `${rows.map((row) => JSON.stringify(row)).join('\n')}\n{"partial":`)
+    const rows = currentSessionRows(runtimeThreadId, 1_000, [
+      event(0, 'turn/start', { turn: 1 }, 1_010),
+      event(1, 'step/start', { turn: 1, step: 1 }, 1_020),
+      event(2, 'request/header', {
+        header: { config: { provider: 'deepseek-official', model: 'deepseek-chat' } },
+        reason: 'initial'
+      }, 1_030),
+      event(3, 'user/message', { content: [{ type: 'text', text: '问题' }], source: { kind: 'user' } }, 1_040, 'append'),
+      event(4, 'tool/call', { turn: 1, step: 1, callId: 'call-a', name: 'read', arguments: '{}' }, 1_050),
+      event(5, 'tool/result', { turn: 1, step: 1, message: { source: { callId: 'call-a' }, content: [] } }, 1_060, 'append'),
+      event(6, 'assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: '回答' }] } }, 1_070, 'append')
+    ])
+    writeFileSync(
+      join(directory, `session.v${sessionFormatCatalog.currentVersion}.jsonl`),
+      `${rows.map((row) => JSON.stringify(row)).join('\n')}\n{"partial":`
+    )
 
     const latest = readDshTrajectory(root, runtimeThreadId, { limit: 2 })
     expect(latest.records.map((record) => record.kind)).toEqual(['tool', 'assistant'])
@@ -142,6 +149,31 @@ describe('DSH trajectory projection', () => {
 
 })
 
-function event(seq: number, type: string, data: Record<string, unknown>, time: number) {
-  return { seq, type, data, time }
+function event(
+  seq: number,
+  type: string,
+  data: SessionFormatJsonObject,
+  time: number,
+  surfaceOp?: 'append'
+): SessionFormatEvent {
+  return { seq, type, data, time, ...(surfaceOp === undefined ? {} : { surfaceOp }) }
+}
+
+function currentSessionRows(
+  id: string,
+  createdAt: number,
+  events: ReturnType<typeof event>[]
+): unknown[] {
+  const header = {
+    version: sessionFormatCatalog.currentVersion,
+    id,
+    createdAt,
+    cwd: 'D:\\workspace',
+    isSeeded: false,
+    delegationDepth: 0
+  }
+  return [
+    sessionFormatCatalog.encodeCurrentHeader(header, 0),
+    ...events.map((item) => sessionFormatCatalog.encodeCurrentEvent(item))
+  ]
 }

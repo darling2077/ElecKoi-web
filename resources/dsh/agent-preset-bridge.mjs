@@ -14,15 +14,18 @@ export function apply(ctx) {
   const originalCreate = ctx.agents.create
   const originalResume = ctx.agents.resume
   const wrappedCreate = function (options) {
-    const child = options.meta?.origin === 'subagent'
-    const sourceSessionId = child ? options.meta?.parentSession : options.sessionId
+    const child = options.parentAgent !== undefined || options.meta?.origin === 'subagent'
+    const sourceSessionId = child
+      ? options.parentAgent?.session?.id ?? options.meta?.parentSession
+      : options.sessionId
     if (!sourceSessionId) throw new Error('ElecKoi subagent is missing its parent Session id')
     const snapshot = readSessionSnapshot(snapshotRoot, sourceSessionId)
     const nextOptions = composeSessionOptions(ctx, options, snapshotRoot, sourceSessionId, snapshot, child, false)
     return originalCreate.call(ctx.agents, nextOptions)
   }
   const wrappedResume = function (options) {
-    const sourceSessionId = options.resumeSessionId
+    const child = options.parentAgent !== undefined
+    const sourceSessionId = child ? options.parentAgent?.session?.id : options.resumeSessionId
     if (!sourceSessionId) return originalResume.call(ctx.agents, options)
     let snapshot
     try {
@@ -33,7 +36,7 @@ export function apply(ctx) {
     }
     return originalResume.call(
       ctx.agents,
-      composeSessionOptions(ctx, options, snapshotRoot, sourceSessionId, snapshot, false, true)
+      composeSessionOptions(ctx, options, snapshotRoot, sourceSessionId, snapshot, child, true)
     )
   }
 
@@ -58,12 +61,15 @@ function composeSessionOptions(ctx, options, snapshotRoot, sourceSessionId, snap
     ...resuming || child ? {} : {
       meta: { ...(options.meta ?? {}), agentPreset: snapshot.mountedPresetId }
     },
-    setup: async (agentCtx) => {
-      if (!child) await ctx.agentPresets.mount(agentCtx, snapshot.mountedPresetId)
-      const transaction = await originalSetup?.(agentCtx)
+    setup: async (agentCtx, agent) => {
+      // DSH 0.1.5 re-parents the Agent scope when a preset is mounted. Every
+      // ElecKoi-owned effect must therefore be registered before that bind;
+      // registering an effect afterwards correctly fails on the retired scope.
       installRequestConfig(agentCtx, snapshotRoot, sourceSessionId, child)
       if (!child) installConversationContext(agentCtx, snapshotRoot, sourceSessionId)
       applyDisabledPolicy(agentCtx, snapshot.disabledToolGroupIds)
+      const transaction = await originalSetup?.(agentCtx, agent)
+      if (!child) await ctx.agentPresets.mount(agentCtx, snapshot.mountedPresetId)
       return transaction
     }
   }

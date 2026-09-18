@@ -8,7 +8,7 @@ export function ChatImageGallery({ images = [], conversationId = "", compact = f
     <div className={`chat-image-gallery${compact ? " compact" : ""}`} aria-label={compact ? "待发送图片" : "消息图片"}>
       {images.map((image) => (
         <ChatImage
-          key={image.localId || image.attachmentId}
+          key={image.renderKey || image.localId || image.attachmentId}
           image={image}
           conversationId={conversationId}
           compact={compact}
@@ -24,9 +24,16 @@ function ChatImage({ image, conversationId, compact, onRemove }) {
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    setSource(image.previewUrl || image.dataUrl || "");
+    const immediateSource = image.previewUrl || image.dataUrl || "";
     setFailed(false);
-    if (image.previewUrl || image.dataUrl || !conversationId || !image.attachmentId) return undefined;
+    if (immediateSource) {
+      setSource(immediateSource);
+      return undefined;
+    }
+    if (!conversationId || !image.attachmentId) {
+      setSource("");
+      return undefined;
+    }
     let active = true;
     readChatImage(conversationId, image.attachmentId)
       .then((url) => { if (active) setSource(url); })

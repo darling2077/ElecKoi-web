@@ -12,6 +12,7 @@ import {
   modelConfigSchema,
   modelOptionSchema,
   modelProviderIdSchema,
+  modelReasoningEffortsSchema,
   personaSchema
 } from '../entities/schemas'
 import {
@@ -292,10 +293,16 @@ export const requestContracts = {
   })),
   'command.models.test_connection': defineRoute(modelConfigSchema, z.object({ ok: z.literal(true) })),
   'query.agent.model_capabilities': defineRoute(
-    z.object({ baseUrl: z.string(), model: z.string(), apiFormat: modelApiFormatSchema }),
+    z.object({
+      provider: modelProviderIdSchema,
+      baseUrl: z.string(),
+      model: z.string(),
+      apiFormat: modelApiFormatSchema,
+      reasoningEfforts: z.union([z.literal(false), modelReasoningEffortsSchema]).optional()
+    }),
     z.object({
       provider: z.string().nullable(),
-      source: z.enum(['dsh_catalog', 'provider_default']),
+      source: z.enum(['dsh_catalog', 'explicit_profile', 'provider_default']),
       reasoningEfforts: z.array(z.enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']))
     })
   ),
@@ -330,6 +337,7 @@ export const requestContracts = {
   'command.agent.start': defineRoute(
     z.object({
       conversationId: z.string().min(1),
+      requestId: z.string().min(1),
       text: z.string(),
       images: z.array(encodedChatImageAttachmentSchema).max(4).optional()
     }).refine((input) => input.text.trim().length > 0 || Boolean(input.images?.length), {
@@ -343,11 +351,20 @@ export const requestContracts = {
     })
   ),
   'command.agent.cancel': defineRoute(
-    z.object({ conversationId: z.string().min(1) }),
+    z.object({
+      conversationId: z.string().min(1),
+      requestId: z.string().min(1),
+      runId: z.string().min(1).optional()
+    }),
     z.object({ cancelled: z.boolean() })
   ),
   'command.agent.regenerate': defineRoute(
-    z.object({ conversationId: z.string().min(1), targetMessageId: z.string().min(1), replacementMessage: z.string().nullable().optional() }),
+    z.object({
+      conversationId: z.string().min(1),
+      requestId: z.string().min(1),
+      targetMessageId: z.string().min(1),
+      replacementMessage: z.string().nullable().optional()
+    }),
     z.object({ accepted: z.literal(true), conversationId: z.string(), runId: z.string(), messageId: z.string() })
   ),
   'query.agent.inspect': defineRoute(

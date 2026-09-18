@@ -12,6 +12,8 @@ export function useModelCapabilities(config, model = config?.model) {
   const baseUrl = String(config?.base_url || "").trim();
   const modelId = String(model || "").trim();
   const apiFormat = String(config?.api_format || "");
+  const modelOption = (config?.model_options || []).find((item) => String(item?.id || "").trim() === modelId);
+  const reasoningProfile = JSON.stringify(modelOption?.reasoningEfforts ?? null);
 
   useEffect(() => {
     let current = true;
@@ -23,7 +25,7 @@ export function useModelCapabilities(config, model = config?.model) {
       .then((value) => { if (current) setCapabilities(value); })
       .catch(() => { if (current) setCapabilities(emptyCapabilities); });
     return () => { current = false; };
-  }, [baseUrl, modelId, apiFormat]);
+  }, [baseUrl, modelId, apiFormat, reasoningProfile]);
 
   return capabilities;
 }

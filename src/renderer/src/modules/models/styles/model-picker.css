@@ -175,6 +175,7 @@
 }
 
 .chat-model-provider-group > button,
+.chat-model-config-row,
 .chat-model-list > button {
   display: flex;
   align-items: center;
@@ -185,21 +186,61 @@
   text-align: left;
 }
 
-.chat-model-provider-group > button {
+.chat-model-provider-group > button,
+.chat-model-config-row {
   justify-content: flex-start;
-  gap: 9px;
   min-height: 48px;
+}
+
+.chat-model-provider-group > button {
+  gap: 9px;
   padding: 7px 10px;
 }
 
 .chat-model-provider-group > button:hover,
+.chat-model-config-row:hover,
 .chat-model-list > button:hover {
   background: var(--control-bg-hover);
 }
 
 .chat-model-provider-group > button.active,
+.chat-model-config-row.active,
 .chat-model-list > button.active {
   background: color-mix(in srgb, var(--blue) 12%, var(--surface-raised));
+}
+
+.chat-model-config-select,
+.chat-model-config-open {
+  align-self: stretch;
+  border: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.chat-model-config-select {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  flex: 0 0 46px;
+  border-radius: 9px 0 0 9px;
+}
+
+.chat-model-config-open {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  flex: 1;
+  padding: 7px 10px 7px 0;
+  border-radius: 0 9px 9px 0;
+  text-align: left;
+}
+
+.chat-model-config-select:focus-visible,
+.chat-model-config-open:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid color-mix(in srgb, var(--blue) 44%, transparent);
+  outline-offset: -2px;
 }
 
 .chat-model-config-copy {
@@ -396,6 +437,11 @@
 }
 
 .chat-model-number-control > input[type="number"]:disabled {
+  background: var(--field-disabled);
+  color: var(--soft-text);
+}
+
+.chat-model-parameter-row select:disabled {
   background: var(--field-disabled);
   color: var(--soft-text);
 }

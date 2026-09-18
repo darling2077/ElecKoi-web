@@ -56,6 +56,7 @@ export function createConversationSeed(snapshot, modelSelection) {
     append('assistant/message', {
       turn,
       step: 1,
+      stream: [],
       message: createAssistantMessage({
         content: [{ type: 'text', text }],
         source: {
@@ -92,27 +93,35 @@ export function installConversationContext(agentCtx, snapshotRoot, sourceSession
     order: 10,
     text: () => renderRuntimeContext(read().conversationContext)
   })
+  const disposeStepProjection = agentCtx.on('agent/pre-step', async ({ step, signal }, next) => {
+    const decision = await next()
+    if (decision.kind === 'reject' || signal.aborted || step !== 1) return decision
+    return {
+      ...decision,
+      messages: projectModelMessages(decision.messages, read().conversationContext)
+    }
+  })
   return () => {
+    disposeStepProjection()
     disposeContext()
     disposeInstructions()
   }
 }
 
-/** Project product history and prompt positions into one transient model request. */
+/** Place current-turn prompt entries into DSH's durable admitted message batch. */
 export function projectModelMessages(messages, context) {
-  const projectedHistory = projectProductHistory(messages, context)
   const injections = settingInjections(context)
   const before = injections.filter((entry) => entry.anchor === 'insert_point_3')
   const after = injections.filter((entry) => entry.anchor === 'insert_point_4' || entry.anchor === 'insert_point_5')
-  if (before.length === 0 && after.length === 0) return projectedHistory
-  const currentUserIndex = findCurrentUserIndex(projectedHistory)
-  if (currentUserIndex < 0) return projectedHistory
+  if (before.length === 0 && after.length === 0) return messages
+  const currentUserIndex = findCurrentUserIndex(messages)
+  if (currentUserIndex < 0) return messages
   return [
-    ...projectedHistory.slice(0, currentUserIndex),
+    ...messages.slice(0, currentUserIndex),
     ...before.map(contextMessage),
-    projectedHistory[currentUserIndex],
+    messages[currentUserIndex],
     ...after.map(contextMessage),
-    ...projectedHistory.slice(currentUserIndex + 1)
+    ...messages.slice(currentUserIndex + 1)
   ]
 }
 

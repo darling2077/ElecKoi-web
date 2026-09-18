@@ -1,6 +1,5 @@
-import { closeSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { createRequire } from 'node:module'
 import { dirname, isAbsolute, join, relative } from 'node:path'
 import {
   DeepSeekHarness,
@@ -9,7 +8,14 @@ import {
   type HarnessNotification
 } from '@deepseek-ai/dsh-sdk-client'
 import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
-import { commitPreparedImageFile, prepareImageFile, readImageFile } from '@deepseek-ai/dsh-attachment-local'
+import {
+  commitPreparedImageFile,
+  DEFAULT_NORMALIZED_IMAGE_MAX_BYTES,
+  DEFAULT_NORMALIZED_IMAGE_MAX_DIMENSION,
+  DEFAULT_NORMALIZED_IMAGE_MAX_PIXELS,
+  prepareImageFile,
+  readImageFile
+} from '@deepseek-ai/dsh-attachment-local'
 import { DshProcessProjector, DshReplyProjector, finalReplyText } from './notifications'
 import {
   createDshProviderCatalog,
@@ -54,7 +60,11 @@ const imageLimits: ImageAttachmentLimits = {
   maxImageDimension: 8192,
   mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
 }
-const imageNormalizationPolicy = { maxDimension: 2048, maxBytes: 4 * 1024 * 1024 }
+const imageNormalizationPolicy = {
+  maxPixels: DEFAULT_NORMALIZED_IMAGE_MAX_PIXELS,
+  maxDimension: DEFAULT_NORMALIZED_IMAGE_MAX_DIMENSION,
+  maxBytes: DEFAULT_NORMALIZED_IMAGE_MAX_BYTES
+}
 
 interface ActiveRun {
   cancelled: boolean
@@ -63,11 +73,12 @@ interface ActiveRun {
 
 export class DshRuntime {
   private readonly activeRuns = new Map<string, ActiveRun>()
+  private readonly startingRuns = new Map<string, ActiveRun>()
+  private readonly cancellationTasks = new Map<string, Promise<void>>()
   private readonly conversationSessions = new Map<string, string>()
   private readonly generationStatsProjectors = new Map<string, DshGenerationStatsProjector>()
   private readonly trajectoryEvents = new Map<string, DshSessionEventRecord[]>()
   private readonly trajectoryContextTurns = new Set<string>()
-  private readonly runtimeBin: string
   private harness: DeepSeekHarness | undefined
   private harnessKey = ''
   private harnessStartTask: Promise<DeepSeekHarness> | undefined
@@ -79,8 +90,6 @@ export class DshRuntime {
     mkdirSync(join(options.runtimeDataRoot, 'home'), { recursive: true })
     mkdirSync(join(options.runtimeDataRoot, 'sessions'), { recursive: true })
     mkdirSync(join(options.runtimeDataRoot, 'session-snapshots'), { recursive: true })
-    this.runtimeBin = createRequire(import.meta.url)
-      .resolve('@deepseek-ai/dsh-sdk-jsonrpc-demo/packaged-bin')
   }
 
   async prepareImages(images: DshEncodedImageAttachment[]): Promise<DshImageAttachmentRef[]> {
@@ -136,7 +145,9 @@ export class DshRuntime {
     webSearch?: DshWebSearchSettings,
     subagentSettings?: DshModelSettings
   ): Promise<'complete' | 'cancelled'> {
-    if (this.activeRuns.has(conversationId)) throw new Error('这个对话仍有回复正在生成。')
+    if (this.activeRuns.has(conversationId) || this.startingRuns.has(conversationId)) {
+      throw new Error('这个对话仍有回复正在生成。')
+    }
     const selectedAgentPreset = agentPreset ?? defaultAgentPreset()
     const selectedWebSearch = webSearch ?? defaultWebSearchSettings()
     const effectiveSubagentSettings = subagentSettings ?? settings
@@ -147,10 +158,15 @@ export class DshRuntime {
     ])
     const mainBinding = resolveDshProviderBinding(catalog, settings)
     const subagentBinding = resolveDshProviderBinding(catalog, effectiveSubagentSettings)
-    const harness = await this.ensureHarness(catalog, selectedWebSearch, settings)
     const run: ActiveRun = { cancelled: false, runtimeThreadId }
-    this.activeRuns.set(conversationId, run)
+    this.startingRuns.set(conversationId, run)
     try {
+      await this.waitForCancellationBarrier(conversationId)
+      if (run.cancelled) return 'cancelled'
+      const harness = await this.ensureHarness(catalog, selectedWebSearch, settings)
+      if (run.cancelled) return 'cancelled'
+      this.startingRuns.delete(conversationId)
+      this.activeRuns.set(conversationId, run)
       const sessionRoot = join(this.options.runtimeDataRoot, 'sessions', safeConversationDirectory(conversationId))
       mkdirSync(sessionRoot, { recursive: true })
       if (discardRuntimeThreadIds.length > 0) {
@@ -259,23 +275,51 @@ export class DshRuntime {
       if (run.cancelled) return 'cancelled'
       throw error
     } finally {
+      if (this.startingRuns.get(conversationId) === run) this.startingRuns.delete(conversationId)
       if (this.activeRuns.get(conversationId) === run) this.activeRuns.delete(conversationId)
     }
   }
 
   async stop(conversationId: string): Promise<boolean> {
+    const starting = this.startingRuns.get(conversationId)
+    if (starting !== undefined) {
+      starting.cancelled = true
+      this.startingRuns.delete(conversationId)
+      return true
+    }
     const run = this.activeRuns.get(conversationId)
     if (run === undefined) return false
     run.cancelled = true
+    if (this.activeRuns.get(conversationId) === run) this.activeRuns.delete(conversationId)
     const harness = this.harness
-    if (harness !== undefined) {
+    const cancellation = (async () => {
+      if (harness === undefined) return
       try {
         await harness.client.request('session/cancel', { sessionId: run.runtimeThreadId })
       } catch (error) {
         if (!(error instanceof TransportClosedError)) throw error
       }
+    })()
+    this.cancellationTasks.set(conversationId, cancellation)
+    try {
+      await cancellation
+      return true
+    } finally {
+      if (this.cancellationTasks.get(conversationId) === cancellation) {
+        this.cancellationTasks.delete(conversationId)
+      }
     }
-    return true
+  }
+
+  private async waitForCancellationBarrier(conversationId: string): Promise<void> {
+    const cancellation = this.cancellationTasks.get(conversationId)
+    if (cancellation === undefined) return
+    try {
+      await cancellation
+    } catch {
+      // The previous cancellation is reported by its caller. A fresh runtime
+      // thread can still start after the old cancellation has settled.
+    }
   }
 
   async disposeConversation(conversationId: string, runtimeThreadIds: readonly string[] = []): Promise<void> {
@@ -326,16 +370,20 @@ export class DshRuntime {
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
+    for (const run of this.startingRuns.values()) run.cancelled = true
     for (const run of this.activeRuns.values()) run.cancelled = true
     await Promise.allSettled([
       ...(this.harnessStartTask === undefined ? [] : [this.harnessStartTask]),
-      ...(this.recoveryTask === undefined ? [] : [this.recoveryTask])
+      ...(this.recoveryTask === undefined ? [] : [this.recoveryTask]),
+      ...this.cancellationTasks.values()
     ])
     const harness = this.harness
     this.harness = undefined
     this.harnessKey = ''
     if (harness !== undefined) await harness.close()
     this.activeRuns.clear()
+    this.startingRuns.clear()
+    this.cancellationTasks.clear()
     this.conversationSessions.clear()
     this.trajectoryEvents.clear()
     this.generationStatsProjectors.clear()
@@ -346,6 +394,7 @@ export class DshRuntime {
     const agentPreset = defaultAgentPreset()
     const settings: DshModelSettings = {
       configId: 'eleckoi-runtime-health-check',
+      provider: 'deepseek',
       apiKey: 'eleckoi-runtime-health-check',
       baseUrl: 'https://api.deepseek.com',
       model: 'deepseek-chat',
@@ -371,37 +420,69 @@ export class DshRuntime {
     defaultSettings: DshModelSettings
   ): DeepSeekHarness {
     const binding = resolveDshProviderBinding(catalog, defaultSettings)
+    const runtimePatchPath = this.materializeRuntimePatch(catalog)
     const harness = new DeepSeekHarness({
-      launch: {
-        command: this.options.executablePath,
-        args: [this.runtimeBin, this.options.configPath],
-        cwd: this.options.workspaceRoot,
-        env: {
-          ...process.env,
-          ELECTRON_RUN_AS_NODE: '1',
-          ELECKOI_DSH_PROVIDERS: JSON.stringify(catalog.providers),
-          ...catalog.credentials,
-          DSH_MODEL: binding.model,
-          DSH_SYSTEM_PROMPT: 'You are ElecKoi.',
-          DSH_CWD: this.options.workspaceRoot,
-          DSH_HOME: join(this.options.runtimeDataRoot, 'home'),
-          DSH_SESSION_ROOT: join(this.options.runtimeDataRoot, 'sessions'),
-          ELECKOI_SESSION_SNAPSHOT_ROOT: join(this.options.runtimeDataRoot, 'session-snapshots'),
-          DSH_WEB_SEARCH_PROVIDER: webSearch.mode === 'tavily' ? 'tavily' : 'deepseek-official',
-          ELECKOI_NATIVE_WEB_SEARCH_API_KEY: officialDeepSeekWebSearchApiKey(defaultSettings),
-          ELECKOI_WEB_SEARCH_MAX_RESULTS: String(webSearch.maxResults),
-          ELECKOI_TAVILY_API_KEY: webSearch.tavilyApiKey,
-          DSH_TELEMETRY_DISABLED: '1'
-        },
-        shutdownTimeoutMs: 1500,
-        disposeEofGraceMs: 2500,
-        disposeGraceMs: 1500
+      profile: 'sdk',
+      patches: [this.options.configPath, runtimePatchPath],
+      dshHome: join(this.options.runtimeDataRoot, 'home'),
+      processCwd: this.options.workspaceRoot,
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        ...catalog.credentials,
+        DSH_MODEL: binding.model,
+        DSH_SYSTEM_PROMPT: 'You are ElecKoi.',
+        DSH_CWD: this.options.workspaceRoot,
+        DSH_SESSION_ROOT: join(this.options.runtimeDataRoot, 'sessions'),
+        ELECKOI_SESSION_SNAPSHOT_ROOT: join(this.options.runtimeDataRoot, 'session-snapshots'),
+        DSH_WEB_SEARCH_PROVIDER: webSearch.mode === 'tavily' ? 'tavily' : 'deepseek-official',
+        ELECKOI_NATIVE_WEB_SEARCH_API_KEY: officialDeepSeekWebSearchApiKey(defaultSettings),
+        ELECKOI_WEB_SEARCH_MAX_RESULTS: String(webSearch.maxResults),
+        ELECKOI_TAVILY_API_KEY: webSearch.tavilyApiKey,
+        DSH_PERMISSION_MODE: 'workspace-write',
+        DSH_TELEMETRY_DISABLED: '1'
       },
+      shutdownTimeoutMs: 1500,
+      disposeEofGraceMs: 2500,
+      disposeGraceMs: 1500,
       cwd: this.options.workspaceRoot,
       provider: binding.provider,
       model: binding.model
     })
     return harness
+  }
+
+  /**
+   * DSH patch files are configuration documents, not JavaScript containers.
+   * Materializing the provider dictionaries as literal JSON keeps the complete
+   * route set on the official llm-pi-ai / llm-deepseek configuration path.
+   */
+  private materializeRuntimePatch(catalog: DshProviderCatalog): string {
+    const deepseek = catalog.deepseek ?? {
+      apiKeyEnv: 'ELECKOI_DEEPSEEK_API_KEY',
+      baseURL: 'https://api.deepseek.com',
+      defaultContextWindow: 1_000_000,
+      models: []
+    }
+    const document = [
+      { id: 'llm-pi-ai', config: { providers: catalog.providers } },
+      {
+        id: 'llm-deepseek',
+        config: {
+          apiKeyEnv: deepseek.apiKeyEnv,
+          baseURL: deepseek.baseURL,
+          defaultContextWindow: deepseek.defaultContextWindow,
+          models: deepseek.models
+        }
+      }
+    ]
+    const content = `${JSON.stringify(document, null, 2)}\n`
+    const fingerprint = createHash('sha256').update(content).digest('hex').slice(0, 16)
+    const directory = join(this.options.runtimeDataRoot, 'generated-config')
+    const path = join(directory, `providers-${fingerprint}.patch.yml`)
+    mkdirSync(directory, { recursive: true })
+    writeAtomically(path, content)
+    return path
   }
 
   private async ensureHarness(
@@ -412,6 +493,7 @@ export class DshRuntime {
     if (this.closed) throw new Error('DSH 运行时已经关闭。')
     const key = JSON.stringify({
       providers: catalog.providers,
+      deepseek: catalog.deepseek,
       credentials: catalog.credentials,
       webSearch,
       nativeWebSearchKey: officialDeepSeekWebSearchApiKey(defaultSettings)
@@ -486,6 +568,7 @@ export class DshRuntime {
       this.harness = recovered
       this.harnessKey = JSON.stringify({
         providers: catalog.providers,
+        deepseek: catalog.deepseek,
         credentials: catalog.credentials,
         webSearch,
         nativeWebSearchKey: officialDeepSeekWebSearchApiKey(defaultSettings)
@@ -691,7 +774,7 @@ function resolveCompactionPolicy(mainSettings: DshModelSettings | undefined): {
   retention: string
 } {
   if (mainSettings?.autoCompactTokenLimit === undefined) {
-    return { thresholdRatio: '0.8', retention: 'retainRatio: 0.16' }
+    return { thresholdRatio: '0.8', retention: 'retainTokens: 0' }
   }
   const { autoCompactTokenLimit, contextWindow } = mainSettings
   if (!Number.isInteger(contextWindow) || contextWindow <= 0) {
@@ -702,7 +785,7 @@ function resolveCompactionPolicy(mainSettings: DshModelSettings | undefined): {
   }
   return {
     thresholdRatio: String(autoCompactTokenLimit / contextWindow),
-    // 绝对触发阈值不推导另一套固定保留比例，交给 DSH 选择平衡切点。
+    // 触发阈值不推导另一套固定保留比例，交给 DSH 选择平衡切点。
     retention: 'retainTokens: 0'
   }
 }
@@ -773,6 +856,8 @@ function decodeImage(image: DshEncodedImageAttachment): SaveImageAttachment {
 function publicImageError(error: unknown): string {
   const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
   if (code === 'IMAGE_TOO_LARGE') return '图片大小超过限制。'
+  if (code === 'IMAGE_TOO_MANY_PIXELS') return '图片像素总量超过 6400 万，请缩小后重试。'
+  if (code === 'IMAGE_DIMENSION_TOO_LARGE') return '图片宽或高不能超过 8192 像素，请缩小后重试。'
   if (code === 'IMAGE_TYPE_MISMATCH' || code === 'INVALID_IMAGE') return '无法识别这张图片，请重新选择 PNG、JPEG、WebP 或 GIF。'
   return '图片处理失败，请重新添加。'
 }
@@ -812,24 +897,45 @@ function persistGenerationStats(sessionRoot: string, runtimeThreadId: string, pr
   renameSync(temporary, path)
 }
 
-/** Mirrors Android's discardSessions for obsolete branches after regeneration. */
+/** Removes obsolete DSH session artifacts after regeneration. */
 function discardPersistedRuntimeThreads(sessionRoot: string, threadIds: string[], selectedThreadId: string): void {
-  const discarded = new Set(threadIds.filter((id) => id !== selectedThreadId && /^[A-Za-z0-9._-]{1,160}$/.test(id)))
+  const discarded = new Set(threadIds.filter((id) => id.length > 0 && id !== selectedThreadId))
   if (discarded.size === 0) return
   const root = realpathSync(sessionRoot)
   for (const project of readdirSync(root, { withFileTypes: true })) {
     if (!project.isDirectory() || project.isSymbolicLink()) continue
     const projectPath = join(root, project.name)
-    for (const threadId of discarded) {
-      const candidate = join(projectPath, threadId)
-      if (!existsSync(candidate) || lstatSync(candidate).isSymbolicLink() || !lstatSync(candidate).isDirectory()) continue
+    for (const session of readdirSync(projectPath, { withFileTypes: true })) {
+      if (!session.isDirectory() || session.isSymbolicLink()) continue
+      const candidate = join(projectPath, session.name)
       const resolved = realpathSync(candidate)
       if (!isDescendant(root, resolved)) continue
-      const log = join(resolved, 'session.jsonl')
-      if (!existsSync(log) || storedSessionId(log) !== threadId) continue
+      const storedId = latestStoredSessionId(resolved)
+      if (storedId === undefined || !discarded.has(storedId)) continue
       rmSync(resolved, { recursive: true, force: true })
     }
   }
+}
+
+function latestStoredSessionId(sessionDirectory: string): string | undefined {
+  const logs = readdirSync(sessionDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && !entry.isSymbolicLink())
+    .map((entry) => ({ name: entry.name, version: sessionLogVersion(entry.name) }))
+    .filter((entry): entry is { name: string; version: number } => entry.version !== undefined)
+    .sort((left, right) => right.version - left.version)
+  for (const log of logs) {
+    const id = storedSessionId(join(sessionDirectory, log.name))
+    if (id !== undefined) return id
+  }
+  return undefined
+}
+
+function sessionLogVersion(filename: string): number | undefined {
+  if (filename === 'session.jsonl') return 0
+  const match = /^session\.v([1-9]\d*)\.jsonl$/.exec(filename)
+  if (match === null) return undefined
+  const version = Number(match[1])
+  return Number.isSafeInteger(version) ? version : undefined
 }
 
 function storedSessionId(logPath: string): string | undefined {

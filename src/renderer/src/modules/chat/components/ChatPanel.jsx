@@ -20,6 +20,7 @@ import {
   resolveChatDisplayProfile,
 } from "../../appearance/index.js";
 import { findLatestRegenerateTargetMessageId } from "../model/chatRegeneration.js";
+import { retainVisibleGenerationStats } from "./GenerationStats.jsx";
 
 export function ChatPanel({
   hasActiveChat,
@@ -125,7 +126,9 @@ export function ChatPanel({
       .then((stats) => { if (active) setGenerationStats(stats); })
       .catch(() => {});
     const dispose = listenGenerationStatsEvent((event) => {
-      if (active && event.conversationId === conversationId) setGenerationStats(event.stats);
+      if (active && event.conversationId === conversationId) {
+        setGenerationStats((previous) => retainVisibleGenerationStats(previous, event.stats));
+      }
     });
     return () => {
       active = false;
@@ -458,7 +461,7 @@ function VirtualizedMessageList({
 }) {
   const activeMessageIndex = messages.findIndex((message) => message.pending);
   const getItemKey = useCallback(
-    (index) => messages[index]?.id || `${messages[index]?.role || "message"}-${messages[index]?.created_at || index}`,
+    (index) => messages[index]?.renderKey || messages[index]?.id || `${messages[index]?.role || "message"}-${messages[index]?.created_at || index}`,
     [messages],
   );
   const rangeExtractor = useCallback((range) => {

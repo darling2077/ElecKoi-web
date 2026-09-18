@@ -67,7 +67,8 @@ describe('custom position editing', () => {
   });
   it('builds one drag guide from fixed references and independent custom nodes', () => {
     const beforeHistory = { ...position, id: 'before', name: '人物状态', anchor: 'insert_point_2', side: 'before_setting_position', order: 1 };
-    const rows = positionManagementRows([beforeHistory, position]);
+    const hiddenToolTimeline = { ...position, id: 'hidden-tool-timeline', name: '隐藏工具时间线', anchor: 'insert_point_5', side: 'after_setting_position', order: 1 };
+    const rows = positionManagementRows([beforeHistory, position, hiddenToolTimeline]);
     expect(rows.map((row) => row.key)).toEqual([
       'fixed:instructions',
       'slot:insert_point_1',
@@ -81,6 +82,7 @@ describe('custom position editing', () => {
       'slot:insert_point_4',
       'fixed-group:tool-flow',
       'slot:insert_point_5',
+      'custom:hidden-tool-timeline',
     ]);
   });
   it('derives anchor and order from dragging without changing entry content', () => {

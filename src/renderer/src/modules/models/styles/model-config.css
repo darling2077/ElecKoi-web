@@ -1475,6 +1475,7 @@ button.model-group-row:hover {
   line-height: 1.5;
 }
 
+
 .model-headers-editor {
   display: grid;
   gap: 10px;
@@ -1542,4 +1543,5 @@ button.model-group-row:hover {
   .model-header-row {
     grid-template-columns: 1fr 1fr 36px;
   }
+
 }

@@ -149,7 +149,7 @@ function ChatDisplaySettings({
   const textColorOptions = [
     { key: "italics", label: "斜体文本" },
     { key: "underline", label: "下划线文本" },
-    { key: "quote", label: "引用文本" },
+    { key: "quote", label: "引号内文本" },
   ];
 
   const slider = (label, key, min, max, step = 1, suffix = "px") => (

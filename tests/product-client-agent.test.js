@@ -6,6 +6,35 @@ afterEach(() => {
 })
 
 describe('Renderer Agent request tracking', () => {
+  it('releases the composer immediately while cancellation continues in the background', async () => {
+    const cancel = vi.fn(async () => ({ cancelled: true }))
+    const { stopChatMessageSend } = await import('../src/renderer/src/modules/chat/hooks/chatMessageSend.js')
+    const activeRequest = {
+      controller: { abort: vi.fn() },
+      unlisten: vi.fn(),
+      requestId: 'request-1',
+    }
+    const requestRef = { current: activeRequest }
+    const setIsSending = vi.fn()
+    const setStatus = vi.fn()
+    const settlePendingReply = vi.fn()
+
+    expect(stopChatMessageSend({
+      requestRef,
+      setIsSending,
+      setStatus,
+      settlePendingReply,
+      cancelRequest: cancel,
+    })).toBe(true)
+    expect(requestRef.current).toBeNull()
+    expect(activeRequest.controller.abort).toHaveBeenCalledOnce()
+    expect(activeRequest.unlisten).toHaveBeenCalledOnce()
+    expect(settlePendingReply).toHaveBeenCalledOnce()
+    expect(setIsSending).toHaveBeenCalledWith(false)
+    expect(cancel).toHaveBeenCalledWith('request-1')
+    expect(setStatus).toHaveBeenCalledWith('已停止')
+  })
+
   it('requests older chat pages through the typed gateway and keeps message sequence metadata', async () => {
     const request = vi.fn(async (name, input) => {
       expect(name).toBe('query.conversations.messages')
@@ -60,6 +89,7 @@ describe('Renderer Agent request tracking', () => {
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith('command.agent.start', {
         conversationId: 'conversation-1',
+        requestId: 'request-1',
         text: '你好',
         images: [image]
       })
@@ -70,7 +100,9 @@ describe('Renderer Agent request tracking', () => {
 
     await cancelChatStream('request-1')
     expect(request).toHaveBeenCalledWith('command.agent.cancel', {
-      conversationId: 'conversation-1'
+      conversationId: 'conversation-1',
+      requestId: 'request-1',
+      runId: 'run-1'
     })
 
     for (const listener of listeners.get('agent.run.failed') || []) {
@@ -118,7 +150,11 @@ describe('Renderer Agent request tracking', () => {
     await expect(oldReply).resolves.toMatchObject({ cancelled: true })
 
     await cancelChatStream('request-new')
-    expect(request).toHaveBeenCalledWith('command.agent.cancel', { conversationId: 'conversation-1' })
+    expect(request).toHaveBeenCalledWith('command.agent.cancel', {
+      conversationId: 'conversation-1',
+      requestId: 'request-new',
+      runId: 'run-new'
+    })
 
     for (const listener of [...(listeners.get('agent.run.failed') || [])]) {
       listener({ conversationId: 'conversation-1', runId: 'run-new', message: 'new run failed for test' })

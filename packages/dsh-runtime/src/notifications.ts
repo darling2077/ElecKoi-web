@@ -8,10 +8,39 @@ import type { DshProcessItem } from './types'
  */
 export class DshReplyProjector {
   private readonly streams = new Map<string, FinalReplyStream>()
+  private readonly liveAttempts = new Map<string, AssistantAttempt>()
 
   constructor(private readonly rootSessionId = '') {}
 
   project(notification: HarnessNotification): string | undefined {
+    if (notification.method === AssistantStreamMethod) {
+      const sessionId = string(notification.params.sessionId)
+      if (this.rootSessionId && sessionId !== this.rootSessionId) return undefined
+      const frame = asRecord(notification.params.frame)
+      const attemptKey = assistantAttemptKey(sessionId, frame)
+      if (!attemptKey) return undefined
+      if (frame?.type === 'start') {
+        const turn = number(frame.turn)
+        const step = number(frame.step)
+        if (turn !== undefined && step !== undefined) {
+          this.liveAttempts.set(attemptKey, { sessionId, turn, step })
+        }
+        return undefined
+      }
+      const attempt = this.liveAttempts.get(attemptKey)
+      if (frame?.type === 'end') {
+        this.liveAttempts.delete(attemptKey)
+        if (attempt) this.streams.delete(assistantStepKeyFromAttempt(attempt))
+        return undefined
+      }
+      if (frame?.type !== 'chunk' || !attempt) return undefined
+      const chunk = asRecord(frame.chunk)
+      if (chunk?.type !== 'text-delta' || typeof chunk.text !== 'string') return undefined
+      const key = assistantStepKeyFromAttempt(attempt)
+      const stream = this.streams.get(key) ?? new FinalReplyStream()
+      this.streams.set(key, stream)
+      return stream.accept(chunk.text) || undefined
+    }
     if (notification.method !== 'session.event') return undefined
     if (this.rootSessionId && string(notification.params.sessionId) !== this.rootSessionId) return undefined
     const event = asRecord(notification.params.event)
@@ -134,6 +163,21 @@ function assistantStepKey(notification: HarnessNotification, data: Record<string
   return `${string(notification.params.sessionId)}:${number(data.turn) ?? 'turn'}:${number(data.step) ?? 'step'}`
 }
 
+function assistantStepKeyFromAttempt(attempt: AssistantAttempt): string {
+  return `${attempt.sessionId}:${attempt.turn}:${attempt.step}`
+}
+
+function assistantAttemptKey(sessionId: string, frame: Record<string, unknown> | undefined): string | undefined {
+  const attemptId = string(frame?.attemptId)
+  return attemptId ? `${sessionId}:${attemptId}` : undefined
+}
+
+interface AssistantAttempt {
+  sessionId: string
+  turn: number
+  step: number
+}
+
 function removeLeadingLineBreak(value: string): string {
   return value.replace(/^(?:\r\n|\r|\n)/, '')
 }
@@ -160,17 +204,22 @@ function partialFinalCloseLength(value: string): number {
 
 const FinalOpenTag = '<FINAL>'
 const FinalCloseTag = '</FINAL>'
+const AssistantStreamMethod = 'agent.assistant-stream'
 
 /** Stateful projection of DSH's append-only notifications into ElecKoi's stable process items. */
 export class DshProcessProjector {
   private readonly tools = new Map<string, DshProcessItem>()
+  private readonly completedTools = new Map<string, DshProcessItem>()
+  private readonly completedHiddenToolIds = new Set<string>()
   private readonly compactions = new Map<string, DshProcessItem>()
   private readonly approvals = new Map<string, DshProcessItem>()
   private readonly reasoning = new Map<string, DshProcessItem>()
   private readonly reasoningEmittedAt = new Map<string, number>()
+  private readonly completedReasoning = new Set<string>()
   private readonly hiddenTools = new Set<string>()
   private readonly pendingSubagentCalls = new Map<string, string[]>()
   private readonly subagentLineageBySession = new Map<string, string[]>()
+  private readonly liveAttempts = new Map<string, AssistantAttempt>()
 
   constructor(
     private readonly rootSessionId = '',
@@ -185,6 +234,38 @@ export class DshProcessProjector {
     if (notification.method === 'subagent.finished') {
       this.subagentLineageBySession.delete(string(notification.params.childSessionId))
       return undefined
+    }
+    if (notification.method === AssistantStreamMethod) {
+      const sessionId = string(notification.params.sessionId)
+      const lineage = this.sessionLineage(sessionId)
+      if (lineage === undefined) return undefined
+      const frame = asRecord(notification.params.frame)
+      const attemptKey = assistantAttemptKey(sessionId, frame)
+      if (!attemptKey) return undefined
+      if (frame?.type === 'start') {
+        const turn = number(frame.turn)
+        const step = number(frame.step)
+        if (turn !== undefined && step !== undefined) {
+          this.liveAttempts.set(attemptKey, { sessionId, turn, step })
+        }
+        return undefined
+      }
+      const attempt = this.liveAttempts.get(attemptKey)
+      if (frame?.type === 'end') {
+        this.liveAttempts.delete(attemptKey)
+        const outcome = asRecord(frame.outcome)
+        const cancelled = attempt && outcome?.kind === 'abandoned'
+          ? this.cancelAttemptReasoning(attempt, Date.now())
+          : undefined
+        const parentId = lineage.at(-1)
+        return cancelled && parentId && !cancelled.parentId ? { ...cancelled, parentId } : cancelled
+      }
+      const chunk = asRecord(frame?.chunk)
+      if (frame?.type !== 'chunk' || chunk === undefined || !attempt) return undefined
+      const data = { turn: attempt.turn, step: attempt.step, chunk }
+      const projected = this.assistantChunk(notification, data, number(frame.time) ?? Date.now())
+      const parentId = lineage.at(-1)
+      return projected && parentId && !projected.parentId ? { ...projected, parentId } : projected
     }
     if (notification.method !== 'session.event') return undefined
     const sessionId = string(notification.params.sessionId)
@@ -273,7 +354,7 @@ export class DshProcessProjector {
     let completedReasoning: DshProcessItem | undefined
     if (reasoningIndex >= 0) {
       const id = reasoningItemId(notification, data, reasoningIndex)
-      if (this.reasoning.has(id)) {
+      if (!this.completedReasoning.has(id)) {
         completedReasoning = this.completeReasoning(id, string(content[reasoningIndex]?.text), time)
       }
     }
@@ -296,7 +377,22 @@ export class DshProcessProjector {
     }
     this.reasoning.delete(id)
     this.reasoningEmittedAt.delete(id)
+    this.completedReasoning.add(id)
     return item
+  }
+
+  private cancelAttemptReasoning(attempt: AssistantAttempt, time: number): DshProcessItem | undefined {
+    const prefix = `reasoning-${assistantStepKeyFromAttempt(attempt)}:`
+    const currentEntry = [...this.reasoning.entries()].reverse().find(([id]) => id.startsWith(prefix))
+    if (!currentEntry) return undefined
+    const [id, current] = currentEntry
+    this.reasoning.delete(id)
+    this.reasoningEmittedAt.delete(id)
+    return {
+      ...current,
+      status: 'cancelled',
+      completedAtMillis: time
+    }
   }
 
   private assistantNarrative(data: Record<string, unknown>, time: number): DshProcessItem | undefined {
@@ -373,6 +469,8 @@ export class DshProcessProjector {
   private toolStarted(data: Record<string, unknown>, time: number): DshProcessItem | undefined {
     const id = string(data.callId)
     if (!id) return undefined
+    this.completedTools.delete(id)
+    this.completedHiddenToolIds.delete(id)
     const name = string(data.name)
     if (isCodeTransport(name)) {
       this.hiddenTools.add(id)
@@ -394,8 +492,13 @@ export class DshProcessProjector {
     const source = asRecord(message?.source)
     const id = string(source?.callId) || string(resultBlock?.toolCallId)
     if (!id) return undefined
-    if (this.hiddenTools.delete(id)) return undefined
-    const current = this.tools.get(id)
+    if (this.completedHiddenToolIds.has(id)) return undefined
+    if (this.hiddenTools.delete(id)) {
+      this.completedHiddenToolIds.add(id)
+      return undefined
+    }
+    const current = this.tools.get(id) ?? this.completedTools.get(id)
+    if (!current) return undefined
     const error = asRecord(data.error)
     const isError = error !== undefined || resultBlock?.isError === true || resultBlock?.isError === 'true'
     const summary = toolResultText(message?.content)
@@ -412,12 +515,14 @@ export class DshProcessProjector {
       delegatedModel: current?.delegatedModel
     }
     this.tools.delete(id)
+    this.completedTools.set(id, item)
     return item
   }
 
   private codeToolStarted(data: Record<string, unknown>, time: number): DshProcessItem | undefined {
     const id = string(data.subCallId)
     if (!id) return undefined
+    this.completedTools.delete(id)
     const name = string(data.name)
     const item: DshProcessItem = {
       id,
@@ -437,9 +542,10 @@ export class DshProcessProjector {
   private codeToolCompleted(data: Record<string, unknown>, time: number): DshProcessItem | undefined {
     const id = string(data.subCallId)
     if (!id) return undefined
-    const current = this.tools.get(id)
+    const current = this.tools.get(id) ?? this.completedTools.get(id)
+    if (!current) return undefined
     this.tools.delete(id)
-    return {
+    const item: DshProcessItem = {
       id,
       kind: current?.kind ?? toolKind(string(data.name)),
       status: data.isError === true ? 'error' : 'complete',
@@ -451,6 +557,8 @@ export class DshProcessProjector {
       completedAtMillis: time,
       parentId: current?.parentId ?? (string(data.parentCallId) || string(data.rootCallId) || undefined)
     }
+    this.completedTools.set(id, item)
+    return item
   }
 
   private compactionStarted(data: Record<string, unknown>, time: number): DshProcessItem | undefined {

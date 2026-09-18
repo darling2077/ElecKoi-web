@@ -1,5 +1,6 @@
 export type ModelApiFormat = 'chat_completions' | 'responses' | 'anthropic_messages' | 'google_gemini'
 export type ModelReasoningEffort = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export type ModelReasoningEfforts = Partial<Record<ModelReasoningEffort, string | null>>
 export type ModelProviderId = 'custom' | 'deepseek' | 'zhipu' | 'zai' | 'moonshot' | 'openai_image' | 'novelai_image'
 
 export interface ModelOption {
@@ -11,6 +12,7 @@ export interface ModelOption {
   maxOutputTokens?: number | null | undefined
   temperature?: number | null | undefined
   topP?: number | null | undefined
+  reasoningEfforts?: ModelReasoningEfforts | false | null | undefined
   reasoningEffort?: ModelReasoningEffort | null | undefined
   supportsImageInput?: boolean | undefined
 }
@@ -33,6 +35,7 @@ export interface ModelConfig {
 
 export interface RuntimeModelSettings {
   configId: string
+  provider: ModelProviderId
   apiKey: string
   baseUrl: string
   model: string
@@ -45,6 +48,7 @@ export interface RuntimeModelSettings {
   maxTokens?: number | undefined
   temperature?: number | undefined
   topP?: number | undefined
+  reasoningEfforts?: ModelReasoningEfforts | false | undefined
   reasoningEffort?: ModelReasoningEffort | undefined
   supportsImageInput: boolean
   proxyUrl?: string | undefined

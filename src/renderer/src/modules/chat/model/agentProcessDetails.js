@@ -29,6 +29,16 @@ export function processBlocks(items) {
       if (text?.trim()) blocks.push({ type: 'narrative', id: item.id, text });
       continue;
     }
+    if (item?.kind === 'compaction') {
+      flushOperations();
+      blocks.push({
+        type: 'operations',
+        id: `operations:${item.id}`,
+        items: [item],
+        presentation: processOperationGroupPresentation([item]),
+      });
+      continue;
+    }
     if (item?.kind === 'reasoning' || item?.toolName === 'reasoning') {
       const text = firstText(item.detail, item.summary);
       if (text || item.status === 'running') pendingOperations.push(item);
@@ -46,7 +56,7 @@ export function processOperationGroupPresentation(items) {
     item?.kind === 'reasoning' || item?.toolName === 'reasoning' ? [index] : []
   )));
   const onlyReasoning = items.length > 0 && reasoningIndexes.size === items.length;
-  const titles = uniqueStrings(presentations.flatMap((entry, index) => reasoningIndexes.has(index) ? [] : [entry.title]));
+  const operationPresentations = presentations.filter((_entry, index) => !reasoningIndexes.has(index));
   const status = items.some((item) => item.status === 'running')
     ? 'running'
     : items.some((item) => item.status === 'error')
@@ -54,11 +64,28 @@ export function processOperationGroupPresentation(items) {
       : items.some((item) => item.status === 'cancelled')
         ? 'cancelled'
         : 'complete';
+  const runningIndex = items.findLastIndex((item) => item.status === 'running');
+  const runningPresentation = runningIndex >= 0 ? presentations[runningIndex] : null;
+  const primary = onlyReasoning
+    ? presentations.at(-1) || { title: '思考过程', icon: 'reasoning' }
+    : runningPresentation
+      || (operationPresentations.length === 1 ? operationPresentations[0] : null);
+  const title = primary?.title
+    || (status === 'error' ? '部分操作失败'
+      : status === 'cancelled' ? '操作已取消'
+        : operationGroupTitle(operationPresentations));
   return {
-    title: onlyReasoning ? '思考过程' : titles.join('，'),
-    icon: onlyReasoning ? 'reasoning' : operationGroupIcon(presentations),
+    title,
+    icon: primary?.icon || (onlyReasoning ? 'reasoning' : operationGroupIcon(operationPresentations)),
     status,
   };
+}
+
+function operationGroupTitle(presentations) {
+  const titles = uniqueStrings(presentations.map((entry) => entry.title));
+  if (!titles.length) return '已完成操作';
+  const preview = titles.slice(0, 2).join('、');
+  return titles.length > 2 ? `${preview}…` : preview;
 }
 
 function operationGroupIcon(presentations) {
@@ -114,15 +141,15 @@ function specializedResult(toolName, result, args) {
     return { type: 'variables', entries: arrayOf(result.variables).map(variableEntry).filter(Boolean) };
   }
   if (toolName === 'eleckoi_apply_variable_patch') {
-    const operations = arrayOf(result.operations).length ? arrayOf(result.operations) : arrayOf(parseValue(argumentsValue)?.operations);
+    const operations = arrayOf(result.operations).length ? arrayOf(result.operations) : arrayOf(args?.operations);
     return { type: 'operations', operations: operations.map(operation).filter(Boolean), applied: numberValue(result.applied_operations) };
   }
   if (toolName === 'eleckoi_apply_setting_patch' || toolName === 'eleckoi_apply_setting_mutations') {
-    const operations = arrayOf(result.operations).length ? arrayOf(result.operations) : [parseValue(argumentsValue)].filter((value) => value && typeof value === 'object');
+    const operations = arrayOf(result.operations).length ? arrayOf(result.operations) : [args].filter((value) => value && typeof value === 'object');
     return { type: 'operations', operations: operations.map(operation).filter(Boolean), applied: numberValue(result.applied_operations) };
   }
   if (toolName === 'update_plan' || toolName === 'update_roleplay_plan' || toolName === 'todo_write') {
-    const steps = arrayOf(result.steps).length ? arrayOf(result.steps) : arrayOf(result.plan).length ? arrayOf(result.plan) : arrayOf(parseValue(argumentsValue)?.steps);
+    const steps = arrayOf(result.steps).length ? arrayOf(result.steps) : arrayOf(result.plan).length ? arrayOf(result.plan) : arrayOf(args?.steps);
     if (steps.length) return { type: 'plan', steps: steps.map(planStep).filter(Boolean) };
   }
   return null;

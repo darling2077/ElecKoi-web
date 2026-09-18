@@ -6,6 +6,28 @@ export const HIDDEN_TOOL_TIMELINE_PROMPT_POSITION_ID = 'hidden-tool-timeline'
 export const HISTORY_COMPACTION_ENTRY_ID = 'built-in-roleplay-history-compaction'
 export const HISTORY_COMPACTION_ENTRY_TITLE = '自动压缩摘要模板'
 
+const LEGACY_DEFAULT_HIDDEN_TOOL_TIMELINE_CONTENT = `<roleplay_output_protocol>
+tool_phase:
+  setting_library:
+    preflight: "若设定库工具可用，最终回复前先用 eleckoi_glob_setting_files 浏览设定文件，并用 eleckoi_read_setting_files 读取结果中的 required_entries"
+    search: "按本轮扮演需要使用 eleckoi_grep_setting_files 检索角色与世界设定；允许按需继续搜索"
+    empty_result: "没有可用设定时停止查询，直接进入最终回复"
+    no_repeat: "不得用相同条件重复无结果的查询"
+  plot_variables:
+    empty_result: "未发现变量时忽略并继续；不得反复查询"
+  visible_output: "仅允许原生 Tool Call"
+  forbidden:
+    - "角色对白"
+    - "叙事"
+    - "动作描写"
+    - "过程说明"
+    - "其他可见文字"
+final_phase:
+  format: "<FINAL>本轮完整的最终扮演回复</FINAL>"
+  before_final: "禁止输出任何可见文字"
+  after_final: "禁止再调用原生工具"
+</roleplay_output_protocol>`
+
 export const DEFAULT_HIDDEN_TOOL_TIMELINE_CONTENT = `<roleplay_output_protocol>
 tool_phase:
   setting_library:
@@ -23,6 +45,7 @@ tool_phase:
     - "过程说明"
     - "其他可见文字"
 final_phase:
+  mandatory: "最终可见回复必须且只能使用一对 <FINAL> 与 </FINAL> 标签完整包裹；缺少任一标签、使用多对标签或把任何正文写在标签外，都不符合本协议"
   format: "<FINAL>本轮完整的最终扮演回复</FINAL>"
   before_final: "禁止输出任何可见文字"
   after_final: "禁止再调用原生工具"
@@ -62,8 +85,8 @@ export function withRequiredAgentPresetPromptPositions(
   const required = {
     id: HIDDEN_TOOL_TIMELINE_PROMPT_POSITION_ID,
     name: HIDDEN_TOOL_TIMELINE_ENTRY_TITLE,
-    anchor: 'insert_point_4' as const,
-    side: 'before_setting_position' as const,
+    anchor: 'insert_point_5' as const,
+    side: 'after_setting_position' as const,
     order: 1,
     createdAt: timestamp,
     updatedAt: timestamp
@@ -107,7 +130,7 @@ function hiddenToolTimelineEntry(existing?: SettingLibraryEntry): SettingLibrary
     kind: 'hidden_tool_timeline' as const,
     content: DEFAULT_HIDDEN_TOOL_TIMELINE_CONTENT,
     triggerMode: 'always' as const,
-    position: 'insert_point_4' as const,
+    position: 'insert_point_5' as const,
     promptPositionId: HIDDEN_TOOL_TIMELINE_PROMPT_POSITION_ID,
     insertRole: 'user' as const
   }
@@ -116,6 +139,9 @@ function hiddenToolTimelineEntry(existing?: SettingLibraryEntry): SettingLibrary
     id: HIDDEN_TOOL_TIMELINE_ENTRY_ID,
     kind: 'hidden_tool_timeline',
     groupId: '',
+    content: source.content.trim() === LEGACY_DEFAULT_HIDDEN_TOOL_TIMELINE_CONTENT.trim()
+      ? DEFAULT_HIDDEN_TOOL_TIMELINE_CONTENT
+      : source.content,
     treeViewOrder: Number.MIN_SAFE_INTEGER
   }
 }

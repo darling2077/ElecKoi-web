@@ -1,12 +1,11 @@
 import {
   existsSync,
-  lstatSync,
   readFileSync,
   readdirSync,
   realpathSync
 } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
-import { decodeStorageRecord } from '@deepseek-ai/dsh-session'
+import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { readTrajectoryContextActivations } from './trajectoryContext'
 
 export type DshTrajectoryRecordKind =
@@ -108,26 +107,43 @@ export function readDshTrajectory(
   const empty = emptyPage(runtimeThreadId)
   const located = locateSessionLog(sessionLogRoot, runtimeThreadId)
   if (located === undefined && liveEvents.length === 0) return empty
-  const source = located === undefined ? '' : readFileSync(located, 'utf8')
-  const lines = source ? source.split(/\r?\n/) : []
-  const header = located === undefined ? {} : parseHeader(lines[0], runtimeThreadId)
+  let header: DshSessionHeader = {}
   const events: DshSessionEventRecord[] = []
-  const finalLineIndex = source.endsWith('\n') || source.endsWith('\r') ? lines.length : lines.length - 1
-
-  for (let index = 1; index < lines.length; index += 1) {
-    const line = lines[index]?.trim()
-    if (!line) continue
-    let stored: unknown
+  if (located !== undefined) {
+    const source = readFileSync(located, 'utf8')
+    const lines = source.split(/\r?\n/)
+    const headerValue = parseJsonLine(lines[0], 'DSH 轨迹日志缺少有效的会话头。')
+    let restore: ReturnType<typeof sessionFormatCatalog.createRestore>
     try {
-      stored = JSON.parse(line)
+      restore = sessionFormatCatalog.createRestore(headerValue, {
+        recovery: 'recoverable',
+        validation: 'transformed'
+      })
     } catch (error) {
-      if (index === finalLineIndex) break
-      throw new Error('DSH 轨迹日志包含损坏的记录。', { cause: error })
+      throw new Error('DSH 轨迹日志缺少有效的会话头。', { cause: error })
+    }
+    if (restore.header.id !== runtimeThreadId) throw new Error('DSH 轨迹日志缺少有效的会话头。')
+    header = restore.header
+    const finalLineIndex = source.endsWith('\n') || source.endsWith('\r') ? lines.length : lines.length - 1
+
+    for (let index = 1; index < lines.length; index += 1) {
+      const line = lines[index]?.trim()
+      if (!line) continue
+      let stored: unknown
+      try {
+        stored = JSON.parse(line)
+      } catch (error) {
+        if (index === finalLineIndex) break
+        throw new Error('DSH 轨迹日志包含损坏的记录。', { cause: error })
+      }
+      try {
+        restore.decodeRow(stored)
+      } catch (error) {
+        throw new Error('DSH 轨迹日志中的流式记录无法解码。', { cause: error })
+      }
     }
     try {
-      for (const event of decodeStorageRecord(stored)) {
-        if (isRecord(event)) events.push(event)
-      }
+      events.push(...restore.finish().events)
     } catch (error) {
       throw new Error('DSH 轨迹日志中的流式记录无法解码。', { cause: error })
     }
@@ -590,37 +606,54 @@ function emptyPage(runtimeThreadId: string): DshTrajectoryPage {
 }
 
 function locateSessionLog(sessionRoot: string, runtimeThreadId: string): string | undefined {
-  if (!/^[A-Za-z0-9._-]{1,160}$/.test(runtimeThreadId) || !existsSync(sessionRoot)) return undefined
+  if (!runtimeThreadId || !existsSync(sessionRoot)) return undefined
   const root = realpathSync(sessionRoot)
   for (const project of readdirSync(root, { withFileTypes: true })) {
     if (!project.isDirectory() || project.isSymbolicLink()) continue
-    const sessionDirectory = join(root, project.name, runtimeThreadId)
-    if (!existsSync(sessionDirectory)) continue
-    const stat = lstatSync(sessionDirectory)
-    if (!stat.isDirectory() || stat.isSymbolicLink()) continue
-    const resolved = realpathSync(sessionDirectory)
-    const relativePath = relative(root, resolved)
-    if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) continue
-    const candidate = join(resolved, 'session.jsonl')
-    if (!existsSync(candidate) || !lstatSync(candidate).isFile()) continue
-    const firstLine = readFileSync(candidate, 'utf8').split(/\r?\n/, 1)[0]
-    try {
-      const header = JSON.parse(firstLine ?? '') as DshSessionHeader
-      if (header.type === 'session' && header.id === runtimeThreadId) return candidate
-    } catch {
-      continue
+    const projectDirectory = join(root, project.name)
+    for (const session of readdirSync(projectDirectory, { withFileTypes: true })) {
+      if (!session.isDirectory() || session.isSymbolicLink()) continue
+      const resolved = realpathSync(join(projectDirectory, session.name))
+      const relativePath = relative(root, resolved)
+      if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) continue
+      const candidate = latestSessionLog(resolved)
+      if (candidate === undefined) continue
+      try {
+        const firstLine = readFileSync(candidate, 'utf8').split(/\r?\n/, 1)[0]
+        const result = sessionFormatCatalog.readHeader(JSON.parse(firstLine ?? ''))
+        if (result.status !== 'malformed' && result.status !== 'unsupported' && result.header.id === runtimeThreadId) {
+          return candidate
+        }
+      } catch {
+        continue
+      }
     }
   }
   return undefined
 }
 
-function parseHeader(line: string | undefined, runtimeThreadId: string): DshSessionHeader {
+function latestSessionLog(directory: string): string | undefined {
+  const candidates = readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && !entry.isSymbolicLink())
+    .map((entry) => ({ name: entry.name, version: sessionLogVersion(entry.name) }))
+    .filter((entry): entry is { name: string; version: number } => entry.version !== undefined)
+    .sort((left, right) => right.version - left.version)
+  return candidates[0] === undefined ? undefined : join(directory, candidates[0].name)
+}
+
+function sessionLogVersion(filename: string): number | undefined {
+  if (filename === 'session.jsonl') return 0
+  const match = /^session\.v([1-9]\d*)\.jsonl$/.exec(filename)
+  if (match === null) return undefined
+  const version = Number(match[1])
+  return Number.isSafeInteger(version) ? version : undefined
+}
+
+function parseJsonLine(line: string | undefined, message: string): unknown {
   try {
-    const header = JSON.parse(line ?? '') as DshSessionHeader
-    if (header.type !== 'session' || header.id !== runtimeThreadId) throw new Error('会话标识不匹配。')
-    return header
+    return JSON.parse(line ?? '')
   } catch (error) {
-    throw new Error('DSH 轨迹日志缺少有效的会话头。', { cause: error })
+    throw new Error(message, { cause: error })
   }
 }
 

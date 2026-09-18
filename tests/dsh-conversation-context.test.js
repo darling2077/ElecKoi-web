@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { describe, expect, it, vi } from 'vitest'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
   createConversationSeed,
+  installConversationContext,
   projectProductHistory,
   projectModelMessages,
   renderRuntimeContext,
@@ -40,6 +44,7 @@ describe('DSH conversation context', () => {
     expect(seed.filter((event) => event.type === 'step/end')).toHaveLength(2)
     expect(seed.filter((event) => event.type === 'user/message').map((event) => text(event.data))).toEqual(['上一问'])
     expect(seed.filter((event) => event.type === 'assistant/message').map((event) => text(event.data.message))).toEqual(['开场', '上一答'])
+    expect(seed.filter((event) => event.type === 'assistant/message').every((event) => Array.isArray(event.data.stream))).toBe(true)
     expect(JSON.stringify(seed)).not.toContain('最新用户输入')
     expect(seed.filter((event) => event.type === 'assistant/message')[0].data.message.source).toEqual({
       kind: 'model',
@@ -60,6 +65,57 @@ describe('DSH conversation context', () => {
 
     expect(projected.map(text)).toEqual(['输入前', '最新用户输入', '输入后', '工具后'])
     expect([projected[0], projected[2], projected[3]].every((message) => message.source?.plugin === 'eleckoi-conversation-context')).toBe(true)
+  })
+
+  it('admits current-turn prompt entries through the DSH pre-step waterfall', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'eleckoi-conversation-context-'))
+    const sessionId = 'session-context-test'
+    writeFileSync(join(root, `${sessionId}.json`), JSON.stringify({
+      model: { systemPrompt: '' },
+      conversationContext: {
+        history: [{ role: 'assistant', content: '不应重复写入本轮批次' }],
+        settingLibrary: {
+          entries: [setting('hidden-timeline', '<roleplay_output_protocol>必须使用 FINAL</roleplay_output_protocol>', 'insert_point_4', 1)],
+          promptPositions: []
+        }
+      }
+    }))
+    const handlers = new Map()
+    const disposers = []
+    const agentCtx = {
+      systemPrompt: {
+        section: vi.fn(() => { const dispose = vi.fn(); disposers.push(dispose); return dispose }),
+        context: vi.fn(() => { const dispose = vi.fn(); disposers.push(dispose); return dispose })
+      },
+      on: vi.fn((event, handler) => {
+        handlers.set(event, handler)
+        const dispose = vi.fn(); disposers.push(dispose); return dispose
+      })
+    }
+    const dispose = installConversationContext(agentCtx, root, sessionId)
+    const latest = createUserMessage({
+      content: [{ type: 'text', text: '最新用户输入' }],
+      source: { kind: 'user' }
+    })
+    const signal = new AbortController().signal
+    const firstStep = await handlers.get('agent/pre-step')(
+      { step: 1, signal },
+      async () => ({ kind: 'enter', messages: [latest] })
+    )
+    const laterStep = await handlers.get('agent/pre-step')(
+      { step: 2, signal },
+      async () => ({ kind: 'enter', messages: [latest] })
+    )
+
+    expect(firstStep.messages.map(text)).toEqual([
+      '最新用户输入',
+      '<roleplay_output_protocol>必须使用 FINAL</roleplay_output_protocol>'
+    ])
+    expect(JSON.stringify(firstStep.messages)).not.toContain('不应重复写入本轮批次')
+    expect(laterStep.messages).toEqual([latest])
+    dispose()
+    expect(disposers.every((item) => item.mock.calls.length === 1)).toBe(true)
+    rmSync(root, { recursive: true, force: true })
   })
 
   it('replaces provider-native history before the current input', () => {

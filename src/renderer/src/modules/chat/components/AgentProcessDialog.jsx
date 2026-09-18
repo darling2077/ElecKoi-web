@@ -24,6 +24,7 @@ export function AgentProcessDialog({ message, reasoningDisplayMode = 'collapsed'
   );
   const duration = durationText(items);
   const hasFinal = message?.status === 'complete' && Boolean(message?.content?.trim());
+  const showingDetails = Boolean(selectedGroup || selectedItem);
 
   useEffect(() => {
     const closeOnEscape = (event) => {
@@ -41,11 +42,24 @@ export function AgentProcessDialog({ message, reasoningDisplayMode = 'collapsed'
     else setSelectedGroupId('');
   };
 
+  const selectOverviewBlock = (block) => {
+    const directItem = block.items.length === 1 && block.items[0]?.kind === 'compaction'
+      ? block.items[0]
+      : null;
+    if (directItem) {
+      setSelectedGroupId('');
+      setSelectedItemPath([directItem.id]);
+      return;
+    }
+    setSelectedItemPath([]);
+    setSelectedGroupId(block.id);
+  };
+
   return createPortal(<div className="agent-process-backdrop" role="presentation" onMouseDown={onClose}>
-    <section className="agent-process-dialog" role="dialog" aria-modal="true" aria-label={selectedGroup ? '详情' : '处理过程'} onMouseDown={(event) => event.stopPropagation()}>
+    <section className="agent-process-dialog" role="dialog" aria-modal="true" aria-label={showingDetails ? '详情' : '处理过程'} onMouseDown={(event) => event.stopPropagation()}>
       <header>
-        {selectedGroup ? <button type="button" className="agent-process-back" onClick={goBack} aria-label="返回"><MessageChevronLeftIcon /></button> : <span />}
-        <h2>{selectedGroup ? '详情' : `处理过程${duration ? ` · ${duration}` : ''}`}</h2>
+        {showingDetails ? <button type="button" className="agent-process-back" onClick={goBack} aria-label="返回"><MessageChevronLeftIcon /></button> : <span />}
+        <h2>{showingDetails ? '详情' : `处理过程${duration ? ` · ${duration}` : ''}`}</h2>
         <button type="button" className="agent-process-close" onClick={onClose} aria-label="关闭"><DshCloseIcon /></button>
       </header>
       {selectedItem
@@ -69,17 +83,17 @@ export function AgentProcessDialog({ message, reasoningDisplayMode = 'collapsed'
             blocks={blocks}
             hasFinal={hasFinal}
             scrollPositions={scrollPositionsRef.current}
-            onSelectGroup={setSelectedGroupId}
+            onSelectBlock={selectOverviewBlock}
           />}
     </section>
   </div>, document.body);
 }
 
-function ProcessOverview({ blocks, hasFinal, scrollPositions, onSelectGroup }) {
+function ProcessOverview({ blocks, hasFinal, scrollPositions, onSelectBlock }) {
   return <ProcessScrollPane className="agent-process-groups" scrollKey="overview" scrollPositions={scrollPositions}>
     <div className="agent-process-timeline">{blocks.map((block) => {
       if (block.type === 'narrative') return <p className="agent-process-phase" key={block.id}>{block.text}</p>;
-      return <button type="button" className="agent-process-item agent-process-group" key={block.id} onClick={() => onSelectGroup(block.id)}>
+      return <button type="button" className="agent-process-item agent-process-group" key={block.id} onClick={() => onSelectBlock(block)}>
         <span className={`agent-process-glyph status-${block.presentation.status}`}>
           <AgentProcessIcon name={block.presentation.icon} size={block.presentation.icon === 'reasoning' ? 27 : 22} animated={block.presentation.status === 'running'} />
         </span>
@@ -90,8 +104,11 @@ function ProcessOverview({ blocks, hasFinal, scrollPositions, onSelectGroup }) {
       </button>;
     })}</div>
     {hasFinal ? <div className="agent-process-protocol">
-      <h3>输出协议</h3>
-      <div><code>&lt;FINAL&gt;</code><span>已识别</span></div>
+      <span className="agent-process-glyph"><AgentProcessIcon name="check" size={22} /></span>
+      <div className="agent-process-protocol-content">
+        <h3>输出协议</h3>
+        <div><code>&lt;FINAL&gt;</code><span>已识别</span></div>
+      </div>
     </div> : null}
   </ProcessScrollPane>;
 }

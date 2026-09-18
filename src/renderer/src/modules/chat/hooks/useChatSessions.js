@@ -33,7 +33,7 @@ import { useConversationMessages } from "./useConversationMessages.js";
 import { useChatHistoryPaging } from "./useChatHistoryPaging.js";
 import { useAuthorFrontendActions } from "./useAuthorFrontendActions.js";
 import { useChatInputImages } from "./useChatInputImages.js";
-import { getErrorMessage, isAbortError, runChatMessageSend, throwIfAborted, upsertProcess } from "./chatMessageSend.js";
+import { getErrorMessage, isAbortError, runChatMessageSend, stopChatMessageSend, throwIfAborted, upsertProcess } from "./chatMessageSend.js";
 
 export function useChatSessions({ persona, characters, modelConfigs, language, setStatus, setActiveSectionState, notify }) {
   const [sessions, setSessions] = useState([]);
@@ -315,10 +315,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
   }
 
   function stopSend() {
-    abortActiveRequest();
-    settlePendingReply();
-    setIsSending(false);
-    setStatus("已停止");
+    stopChatMessageSend({ requestRef, setIsSending, setStatus, settlePendingReply, notify });
   }
 
   function sendMessage(event, inputOverride) {
@@ -415,12 +412,14 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
       activeRequest.unlisten = () => { unlistenDelta(); unlistenProcess(); };
       throwIfAborted(controller.signal);
       result = await regenerateChatMessage(sessionId, payload, requestId);
-      if (requestRef.current !== activeRequest) return;
       if (result.cancelled) {
-        reconcileChatMessages(result.chat);
-        setStatus("已停止");
+        if (requestRef.current === null || requestRef.current === activeRequest) {
+          reconcileChatMessages(result.chat);
+        }
+        if (requestRef.current === activeRequest) setStatus("已停止");
         return;
       }
+      if (requestRef.current !== activeRequest) return;
       reconcileChatMessages(result.chat);
       setChatCharacter(normalizeLatestChatCharacter(result.chat || {}));
       await refreshSessionsOnly();

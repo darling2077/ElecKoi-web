@@ -6,6 +6,7 @@ import {
   formatDuration,
   formatTokens,
   generationStatGroups,
+  retainVisibleGenerationStats,
 } from '../src/renderer/src/modules/chat/components/GenerationStats.jsx';
 
 describe('generation statistics display', () => {
@@ -43,11 +44,96 @@ describe('generation statistics display', () => {
 
   it('formats context occupancy and compact values', () => {
     expect(contextOccupancy({ projectedTokens: 18_700, contextWindow: 1_000_000 })).toEqual({
-      percent: 2,
+      percent: 1.87,
+      percentLabel: '2',
       usedTokens: 18_700,
       contextWindow: 1_000_000,
     });
+    expect(contextOccupancy({ projectedTokens: 2_800, contextWindow: 1_000_000 })).toMatchObject({
+      percent: 0.28,
+      percentLabel: '0.3',
+    });
     expect(formatTokens(18_700)).toBe('18.7K');
     expect(formatDuration(162_000)).toBe('2m42s');
+  });
+
+  it('keeps the statistics strip and context meter stable while a regenerated run warms up', () => {
+    const previous = {
+      turns: 1,
+      steps: 2,
+      llmMs: 12_000,
+      toolMs: 200,
+      ttftMs: 800,
+      ttftSteps: 1,
+      decodeMs: 4_000,
+      decodeTokens: 300,
+      tokenUsage: {
+        uncachedInputTokens: 1_000,
+        outputTokens: 300,
+        cacheReadTokens: 2_000,
+        cacheWriteTokens: 0,
+      },
+      contextPressure: { projectedTokens: 4_200, contextWindow: 1_000_000 },
+      contextBreakdown: { systemTokens: 0, toolsTokens: 551, messageTokens: 1_400 },
+    };
+    const warmingUp = {
+      turns: 0,
+      steps: 0,
+      llmMs: 0,
+      toolMs: 0,
+      ttftMs: 0,
+      ttftSteps: 0,
+      decodeMs: 0,
+      decodeTokens: 0,
+      tokenUsage: {
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      },
+      contextPressure: {},
+      contextBreakdown: { systemTokens: 0, toolsTokens: 0, messageTokens: 0 },
+    };
+
+    const retained = retainVisibleGenerationStats(previous, warmingUp);
+
+    expect(generationStatGroups(retained)).toEqual(generationStatGroups(previous));
+    expect(contextOccupancy(retained.contextPressure)).toEqual(contextOccupancy(previous.contextPressure));
+    expect(retained.contextBreakdown).toEqual(previous.contextBreakdown);
+  });
+
+  it('replaces each retained section as soon as its new values are visible', () => {
+    const previous = {
+      turns: 1,
+      steps: 1,
+      llmMs: 1_000,
+      toolMs: 0,
+      ttftMs: 200,
+      ttftSteps: 1,
+      decodeMs: 800,
+      decodeTokens: 40,
+      tokenUsage: { uncachedInputTokens: 100, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      contextPressure: { projectedTokens: 1_000, contextWindow: 10_000 },
+      contextBreakdown: { systemTokens: 100, toolsTokens: 100, messageTokens: 800 },
+    };
+    const next = {
+      ...previous,
+      turns: 0,
+      steps: 0,
+      llmMs: 0,
+      ttftMs: 0,
+      ttftSteps: 0,
+      decodeMs: 0,
+      decodeTokens: 0,
+      tokenUsage: { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+      contextPressure: { projectedTokens: 2_000, contextWindow: 10_000 },
+      contextBreakdown: { systemTokens: 200, toolsTokens: 200, messageTokens: 1_600 },
+    };
+
+    const retained = retainVisibleGenerationStats(previous, next);
+
+    expect(generationStatGroups(retained)).toEqual(generationStatGroups(previous));
+    expect(contextOccupancy(retained.contextPressure)?.usedTokens).toBe(2_000);
+    expect(retained.contextBreakdown).toEqual(next.contextBreakdown);
   });
 });

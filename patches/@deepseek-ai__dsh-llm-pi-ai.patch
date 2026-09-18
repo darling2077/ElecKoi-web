@@ -1,0 +1,12 @@
+diff --git a/lib/index.js b/lib/index.js
+index e06cf8d5faf9755710420623908478c704b225b8..e7e753684c330f0917bdb96185134b69def4fb94 100644
+--- a/lib/index.js
++++ b/lib/index.js
+@@ -1867,6 +1867,7 @@ var PiAiAdapter = class extends LlmAdapter {
+ 				const iterator = toStreamChunks(snapshot.models.streamSimple(model, context, {
+ 					...profileOptions(profile, reasoning, apiKey),
+ 					...options.temperature === void 0 ? {} : { temperature: options.temperature },
++					...options.topP === void 0 ? {} : { topP: options.topP },
+ 					...options.maxTokens === void 0 ? {} : { maxTokens: options.maxTokens },
+ 					...options.sessionId === void 0 ? {} : { sessionId: String(options.sessionId) },
+ 					signal: watchdog.signal,

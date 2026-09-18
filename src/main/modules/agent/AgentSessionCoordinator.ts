@@ -31,8 +31,10 @@ import {
 interface ActiveRun {
   conversationId: string
   runId: string
+  requestId: string
   messageId: string
   cancelled: boolean
+  terminalCommitted: boolean
   accumulated: string
   sequence: number
   runtimeThreadId: string
@@ -45,8 +47,15 @@ interface ActiveRun {
 }
 
 interface PreparingRun {
+  runId: string
+  requestId: string
   cancelled: boolean
   done: Promise<void>
+}
+
+interface ExpectedRunIdentity {
+  requestId: string
+  runId?: string | undefined
 }
 
 export interface AgentSessionDependencies {
@@ -72,13 +81,20 @@ export class AgentSessionCoordinator {
   private readonly activeRuns = new Map<string, ActiveRun>()
   private readonly preparingRuns = new Map<string, PreparingRun>()
   private readonly deletingConversations = new Set<string>()
+  private readonly freshRuntimeConversations = new Set<string>()
 
   constructor(private readonly dependencies: AgentSessionDependencies) {}
 
-  start(conversationId: string, text: string, images: EncodedChatImageAttachment[] = []) {
+  start(
+    conversationId: string,
+    text: string,
+    images: EncodedChatImageAttachment[] = [],
+    requestId: string = randomUUID()
+  ) {
     const trimmed = text.trim()
     if (trimmed.length === 0 && images.length === 0) throw new Error('消息或图片不能同时为空。')
     this.assertCanStart(conversationId)
+    const runId = randomUUID()
 
     const settings = this.dependencies.models.resolve(this.dependencies.userSettings.read('models.active'), '')
     if (images.length > 0 && !settings.supportsImageInput) throw new Error('当前模型未声明图片输入能力。')
@@ -86,9 +102,11 @@ export class AgentSessionCoordinator {
     const storedText = metadata.characterId && this.dependencies.regexRules
       ? this.dependencies.regexRules.transform(metadata.characterId, trimmed, 'UserInput', 'Stored')
       : trimmed
-    if (images.length === 0) return this.startPrepared(conversationId, storedText, settings, [])
+    if (images.length === 0) {
+      return this.startPrepared(conversationId, storedText, settings, [], runId, requestId)
+    }
     if (!this.dependencies.runtime.prepareImages) throw new Error('图片运行时尚未就绪。')
-    const preparing: PreparingRun = { cancelled: false, done: Promise.resolve() }
+    const preparing: PreparingRun = { runId, requestId, cancelled: false, done: Promise.resolve() }
     this.preparingRuns.set(conversationId, preparing)
     const operation = this.dependencies.runtime.prepareImages(images)
       .then((prepared) => {
@@ -98,7 +116,7 @@ export class AgentSessionCoordinator {
         }
         this.preparingRuns.delete(conversationId)
         try {
-          return this.startPrepared(conversationId, storedText, settings, prepared)
+          return this.startPrepared(conversationId, storedText, settings, prepared, runId, requestId)
         } catch (error) {
           this.discardPreparedImages(prepared)
           throw error
@@ -122,17 +140,19 @@ export class AgentSessionCoordinator {
     conversationId: string,
     storedText: string,
     settings: ReturnType<ModelRepository['resolve']>,
-    inputImages: ChatUserImageAttachment[]
+    inputImages: ChatUserImageAttachment[],
+    runId: string,
+    requestId: string
   ) {
     this.assertCanStart(conversationId)
-    const runId = randomUUID()
     const agentPreset = this.dependencies.agentPresets?.runtimeSelection()
     const subagentSelection = this.dependencies.agentPresets?.subagentModelSelection()
     const subagentSettings = subagentSelection
       ? this.dependencies.models.resolveExact(subagentSelection.configId, subagentSelection.model, '')
       : undefined
+    const forceFreshRuntime = this.freshRuntimeConversations.delete(conversationId)
     const runtimeThreadId = runtimeThreadForPreset(
-      this.dependencies.messages.latestRuntimeThreadId(conversationId),
+      forceFreshRuntime ? undefined : this.dependencies.messages.latestCompletedRuntimeThreadId(conversationId),
       agentPreset
     )
     const createdMessages = this.dependencies.database.withWriteTx((database) => {
@@ -152,8 +172,10 @@ export class AgentSessionCoordinator {
     const active: ActiveRun = {
       conversationId,
       runId,
+      requestId,
       messageId: createdMessages.assistant.id,
       cancelled: false,
+      terminalCommitted: false,
       accumulated: '',
       sequence: 0,
       done: Promise.resolve(),
@@ -171,7 +193,12 @@ export class AgentSessionCoordinator {
     return { accepted: true as const, conversationId, runId, messageId: createdMessages.assistant.id }
   }
 
-  regenerate(conversationId: string, targetMessageId: string, replacementMessage?: string) {
+  regenerate(
+    conversationId: string,
+    targetMessageId: string,
+    replacementMessage?: string,
+    requestId: string = randomUUID()
+  ) {
     this.assertCanStart(conversationId)
     const settings = this.dependencies.models.resolve(this.dependencies.userSettings.read('models.active'), '')
     const metadata = this.dependencies.conversations.getMetadata(conversationId)
@@ -186,11 +213,15 @@ export class AgentSessionCoordinator {
     const subagentSettings = subagentSelection
       ? this.dependencies.models.resolveExact(subagentSelection.configId, subagentSelection.model, '')
       : undefined
-    const runtimeThreadId = runtimeThreadForPreset(prepared.runtimeThreadId, agentPreset)
+    const forceFreshRuntime = this.freshRuntimeConversations.delete(conversationId)
+    const runtimeThreadId = runtimeThreadForPreset(
+      forceFreshRuntime ? undefined : prepared.runtimeThreadId,
+      agentPreset
+    )
     const assistantMessage = this.dependencies.messages.create(conversationId, 'assistant', '', 'streaming', undefined, runtimeThreadId)
     this.dependencies.generations.start(runId, conversationId, assistantMessage.id)
     const active: ActiveRun = {
-      conversationId, runId, messageId: assistantMessage.id, cancelled: false, accumulated: '', sequence: 0,
+      conversationId, runId, requestId, messageId: assistantMessage.id, cancelled: false, terminalCommitted: false, accumulated: '', sequence: 0,
       done: Promise.resolve(), checkpointAt: 0, checkpointLength: 0, runtimeThreadId,
       discardRuntimeThreadIds: prepared.obsoleteRuntimeThreadIds,
       agentPreset,
@@ -207,19 +238,28 @@ export class AgentSessionCoordinator {
     return { accepted: true as const, conversationId, runId, messageId: assistantMessage.id }
   }
 
-  async cancel(conversationId: string): Promise<{ cancelled: boolean }> {
+  async cancel(
+    conversationId: string,
+    expected?: ExpectedRunIdentity
+  ): Promise<{ cancelled: boolean }> {
     const preparing = this.preparingRuns.get(conversationId)
     if (preparing !== undefined) {
+      if (!matchesExpectedRun(preparing, expected)) return { cancelled: false }
       preparing.cancelled = true
       this.emitState(conversationId, 'stopping')
       return { cancelled: true }
     }
     const active = this.activeRuns.get(conversationId)
     if (active === undefined) return { cancelled: false }
+    if (!matchesExpectedRun(active, expected)) return { cancelled: false }
     active.cancelled = true
+    this.freshRuntimeConversations.add(conversationId)
     this.emitState(conversationId, 'stopping')
-    await this.dependencies.runtime.cancel(conversationId)
-    await active.done
+    const runtimeCancellation = this.dependencies.runtime.cancel(conversationId)
+    this.finishCancelled(active)
+    void runtimeCancellation.catch((error) => {
+      this.dependencies.logger?.error({ err: error, conversationId }, 'Agent 后台取消失败')
+    })
     return { cancelled: true }
   }
 
@@ -297,7 +337,7 @@ export class AgentSessionCoordinator {
   }
 
   generationStats(conversationId: string) {
-    const runtimeThreadId = this.dependencies.messages.latestRuntimeThreadId(conversationId)
+    const runtimeThreadId = this.dependencies.messages.latestCompletedRuntimeThreadId(conversationId)
     return {
       conversationId,
       stats: runtimeThreadId && this.dependencies.runtime.generationStats
@@ -332,6 +372,7 @@ export class AgentSessionCoordinator {
     await Promise.all(conversationIds.map((id) => this.dependencies.runtime.cancel(id)))
     await Promise.all([...this.activeRuns.values()].map((active) => active.done))
     this.deletingConversations.clear()
+    this.freshRuntimeConversations.clear()
   }
 
   private assertCanStart(conversationId: string): void {
@@ -477,6 +518,7 @@ export class AgentSessionCoordinator {
         }
       })
 
+      if (active.terminalCommitted) return
       const status = active.cancelled || result === 'cancelled' ? 'cancelled' : 'complete'
       const rawContent = finalContent || active.accumulated
       if (status === 'complete' && rawContent.trim().length === 0) {
@@ -485,6 +527,7 @@ export class AgentSessionCoordinator {
       const content = regexRules
         ? transformCollectionSurface(rawContent, regexRules, 'AiOutput', 'Stored')
         : rawContent
+      active.terminalCommitted = true
       const message = this.dependencies.database.withWriteTx((database) => {
         const committedVariableState = status === 'complete' && finalVariableState && this.dependencies.variableStates
           ? this.dependencies.variableStates.replaceCurrent(active.conversationId, finalVariableState, database)
@@ -523,22 +566,9 @@ export class AgentSessionCoordinator {
       })
       this.emitState(active.conversationId, 'idle')
     } catch (error) {
+      if (active.terminalCommitted) return
       if (active.cancelled) {
-        const cancelledContent = regexRules
-          ? transformCollectionSurface(active.accumulated, regexRules, 'AiOutput', 'Stored')
-          : active.accumulated
-        const message = this.dependencies.database.withWriteTx((database) => {
-          const finished = this.dependencies.messages.finish(active.messageId, cancelledContent, 'cancelled', database)
-          this.dependencies.generations.finish(active.runId, 'cancelled')
-          this.dependencies.conversations.touch(active.conversationId, cancelledContent, database)
-          return finished
-        })
-        this.dependencies.gateway.broadcast('agent.run.finished', {
-          conversationId: active.conversationId,
-          runId: active.runId,
-          message
-        })
-        this.emitState(active.conversationId, 'idle')
+        this.finishCancelled(active)
         return
       }
       const diagnosticMessage = errorMessage(error)
@@ -550,6 +580,7 @@ export class AgentSessionCoordinator {
         runtimeThreadId: active.runtimeThreadId
       }, 'Agent 运行失败')
       const messageText = publicRuntimeErrorMessage(diagnosticMessage)
+      active.terminalCommitted = true
       const message = this.dependencies.database.withWriteTx((database) => {
         const errorContent = regexRules
           ? transformCollectionSurface(active.accumulated, regexRules, 'AiOutput', 'Stored')
@@ -584,6 +615,33 @@ export class AgentSessionCoordinator {
     this.dependencies.gateway.broadcast('agent.state.changed', payload)
   }
 
+  private finishCancelled(active: ActiveRun): void {
+    if (active.terminalCommitted) return
+    active.terminalCommitted = true
+    const metadata = this.dependencies.conversations.getMetadata(active.conversationId)
+    const regexRules = metadata.characterId && this.dependencies.regexRules
+      ? this.dependencies.regexRules.get(metadata.characterId)
+      : undefined
+    const content = regexRules
+      ? transformCollectionSurface(active.accumulated, regexRules, 'AiOutput', 'Stored')
+      : active.accumulated
+    const message = this.dependencies.database.withWriteTx((database) => {
+      const finished = this.dependencies.messages.finish(active.messageId, content, 'cancelled', database)
+      this.dependencies.generations.finish(active.runId, 'cancelled')
+      this.dependencies.conversations.touch(active.conversationId, content, database)
+      return finished
+    })
+    if (this.activeRuns.get(active.conversationId) === active) {
+      this.activeRuns.delete(active.conversationId)
+    }
+    this.dependencies.gateway.broadcast('agent.run.finished', {
+      conversationId: active.conversationId,
+      runId: active.runId,
+      message
+    })
+    this.emitState(active.conversationId, 'idle')
+  }
+
   private emitMessagesChanged(
     conversationId: string,
     reason: 'sent' | 'edited' | 'deleted' | 'regenerated',
@@ -604,6 +662,15 @@ function runtimeThreadForPreset(
   if (!preset) return currentRuntimeThreadId ?? randomUUID()
   const prefix = `preset_${safeRuntimeSegmentPart(preset.id)}_${safeRuntimeSegmentPart(preset.versionId)}_`
   return currentRuntimeThreadId?.startsWith(prefix) ? currentRuntimeThreadId : `${prefix}${randomUUID()}`
+}
+
+function matchesExpectedRun(
+  run: Pick<ActiveRun, 'runId' | 'requestId'> | Pick<PreparingRun, 'runId' | 'requestId'>,
+  expected?: ExpectedRunIdentity
+): boolean {
+  if (!expected) return true
+  if (run.requestId !== expected.requestId) return false
+  return expected.runId === undefined || run.runId === expected.runId
 }
 
 function safeRuntimeSegmentPart(value: string): string {

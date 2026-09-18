@@ -52,14 +52,19 @@ export const agentPlugin = {
     const unregisterDeleteParticipant = ctx.conversations.registerDeleteParticipant(sessions)
 
     const unregister = [
-      ctx.desktopGateway.register('command.agent.start', ({ conversationId, text, images }) => (
-        sessions.start(conversationId, text, images)
+      ctx.desktopGateway.register('command.agent.start', ({ conversationId, requestId, text, images }) => (
+        sessions.start(conversationId, text, images, requestId)
       )),
-      ctx.desktopGateway.register('command.agent.cancel', ({ conversationId }) => (
-        sessions.cancel(conversationId)
+      ctx.desktopGateway.register('command.agent.cancel', ({ conversationId, requestId, runId }) => (
+        sessions.cancel(conversationId, { requestId, runId })
       )),
-      ctx.desktopGateway.register('command.agent.regenerate', ({ conversationId, targetMessageId, replacementMessage }) => (
-        sessions.regenerate(conversationId, targetMessageId, replacementMessage === null ? undefined : replacementMessage)
+      ctx.desktopGateway.register('command.agent.regenerate', ({ conversationId, requestId, targetMessageId, replacementMessage }) => (
+        sessions.regenerate(
+          conversationId,
+          targetMessageId,
+          replacementMessage === null ? undefined : replacementMessage,
+          requestId
+        )
       )),
       ctx.desktopGateway.register('command.conversations.messages.delete_from', ({ conversationId, messageId }) => (
         sessions.deleteMessagesFrom(conversationId, messageId)

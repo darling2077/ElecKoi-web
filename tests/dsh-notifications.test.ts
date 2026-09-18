@@ -11,6 +11,25 @@ function sessionEvent(type: string, data: Record<string, unknown>, time: number,
   } as never
 }
 
+function assistantStream(frame: Record<string, unknown>, sessionId = 'session-a') {
+  return {
+    method: 'agent.assistant-stream',
+    params: { sessionId, frame }
+  } as never
+}
+
+function assistantStreamStart(attemptId: string, turn: number, step: number, sessionId = 'session-a') {
+  return assistantStream({ type: 'start', attemptId, revision: 1, turn, step }, sessionId)
+}
+
+function assistantStreamChunk(attemptId: string, index: number, time: number, chunk: Record<string, unknown>, sessionId = 'session-a') {
+  return assistantStream({ type: 'chunk', attemptId, revision: index + 2, index, time, chunk }, sessionId)
+}
+
+function assistantStreamEnd(attemptId: string, outcome: Record<string, unknown>, sessionId = 'session-a') {
+  return assistantStream({ type: 'end', attemptId, revision: 99, index: 1, outcome }, sessionId)
+}
+
 describe('DSH process projection', () => {
   it('keeps tool-bound assistant text in the process slot instead of the reply body', () => {
     const projector = new DshReplyProjector()
@@ -99,6 +118,25 @@ describe('DSH process projection', () => {
     }, 240))).toBeUndefined()
   })
 
+  it('streams FINAL content across the increasing revisions emitted by DSH 0.1.5', () => {
+    const projector = new DshReplyProjector('session-a')
+    expect(projector.project(assistantStreamStart('reply-attempt', 6, 2))).toBeUndefined()
+    expect(projector.project(assistantStreamChunk('reply-attempt', 0, 500,
+      { type: 'text-delta', index: 1, text: '<' }))).toBeUndefined()
+    expect(projector.project(assistantStreamChunk('reply-attempt', 1, 510,
+      { type: 'text-delta', index: 1, text: 'FINAL>第一段' }))).toBe('第一段')
+    expect(projector.project(assistantStreamChunk('reply-attempt', 2, 520,
+      { type: 'text-delta', index: 1, text: '正文。' }))).toBe('正文。')
+    expect(projector.project(sessionEvent('assistant/message', {
+      turn: 6,
+      step: 2,
+      message: { id: 'assistant-final', content: [{ type: 'text', text: '<FINAL>第一段正文。</FINAL>' }] }
+    }, 530))).toBeUndefined()
+    expect(projector.project(assistantStreamEnd('reply-attempt', {
+      kind: 'committed', eventType: 'assistant/message', seq: 9
+    }))).toBeUndefined()
+  })
+
   it('removes the FINAL envelope from persisted reply text', () => {
     expect(finalReplyText('<FINAL>\n最终回复。\n</FINAL>')).toBe('最终回复。')
     expect(finalReplyText('没有协议标记的最终回复。')).toBe('没有协议标记的最终回复。')
@@ -177,6 +215,90 @@ describe('DSH process projection', () => {
       detail: '先读取设定。完成。',
       startedAtMillis: 200,
       completedAtMillis: 340
+    })
+    expect(projector.project(sessionEvent('assistant/message', {
+      turn: 4,
+      step: 2,
+      message: {
+        id: 'assistant-reasoned',
+        content: [
+          { type: 'reasoning', text: '先读取设定。完成。' },
+          { type: 'text', text: '最终回复。' }
+        ]
+      }
+    }, 350))).toBeUndefined()
+  })
+
+  it('projects reasoning delivered only in the completed assistant message', () => {
+    const projector = new DshProcessProjector()
+    expect(projector.project(sessionEvent('assistant/message', {
+      turn: 5,
+      step: 1,
+      message: {
+        id: 'assistant-final-only-reasoning',
+        content: [
+          { type: 'reasoning', text: '先判断用户意图。' },
+          { type: 'text', text: '你好。' }
+        ]
+      }
+    }, 400))).toMatchObject({
+      id: 'reasoning-session-a:5:1:0',
+      kind: 'reasoning',
+      status: 'complete',
+      summary: '先判断用户意图。',
+      detail: '先判断用户意图。',
+      startedAtMillis: 400,
+      completedAtMillis: 400
+    })
+  })
+
+  it('projects reasoning live from the transient assistant stream used by DSH 0.1.5', () => {
+    const projector = new DshProcessProjector('session-a')
+    expect(projector.project(assistantStreamStart('reasoning-attempt', 7, 3))).toBeUndefined()
+    expect(projector.project(assistantStreamChunk('reasoning-attempt', 0, 600,
+      { type: 'block-start', index: 0, blockType: 'reasoning' }))).toMatchObject({
+      id: 'reasoning-session-a:7:3:0',
+      status: 'running',
+      startedAtMillis: 600
+    })
+    expect(projector.project(assistantStreamChunk('reasoning-attempt', 1, 660,
+      { type: 'reasoning-delta', index: 0, text: '继续生成最终回复。' }))).toMatchObject({
+      id: 'reasoning-session-a:7:3:0',
+      status: 'running',
+      detail: '继续生成最终回复。'
+    })
+    expect(projector.project(sessionEvent('assistant/message', {
+      turn: 7,
+      step: 3,
+      message: {
+        id: 'assistant-reasoned',
+        content: [{ type: 'reasoning', text: '继续生成最终回复。' }, { type: 'text', text: '正文。' }]
+      }
+    }, 680))).toMatchObject({
+      id: 'reasoning-session-a:7:3:0',
+      status: 'complete'
+    })
+    expect(projector.project(assistantStreamEnd('reasoning-attempt', {
+      kind: 'committed', eventType: 'assistant/message', seq: 10
+    }))).toBeUndefined()
+  })
+
+  it('keeps each live attempt on its DSH start-frame step instead of reusing one unknown slot', () => {
+    const projector = new DshProcessProjector('session-a')
+    expect(projector.project(assistantStreamStart('attempt-one', 8, 1))).toBeUndefined()
+    expect(projector.project(assistantStreamChunk('attempt-one', 0, 700,
+      { type: 'block-start', index: 0, blockType: 'reasoning' }))).toMatchObject({
+      id: 'reasoning-session-a:8:1:0'
+    })
+    expect(projector.project(assistantStreamEnd('attempt-one', { kind: 'abandoned' }))).toMatchObject({
+      id: 'reasoning-session-a:8:1:0',
+      status: 'cancelled'
+    })
+
+    expect(projector.project(assistantStreamStart('attempt-two', 8, 2))).toBeUndefined()
+    expect(projector.project(assistantStreamChunk('attempt-two', 0, 800,
+      { type: 'block-start', index: 0, blockType: 'reasoning' }))).toMatchObject({
+      id: 'reasoning-session-a:8:2:0'
     })
   })
 
@@ -282,6 +404,53 @@ describe('DSH process projection', () => {
       status: 'complete',
       delegatedModel: 'child-model'
     })
+  })
+
+  it('preserves tool identity when compaction replaces a completed tool result', () => {
+    const projector = new DshProcessProjector('session-a')
+    expect(projector.project(sessionEvent('tool/call', {
+      callId: 'call-read-settings',
+      name: 'eleckoi_read_setting_files',
+      arguments: { paths: ['世界/当前地点'] }
+    }, 100))).toMatchObject({
+      id: 'call-read-settings',
+      status: 'running',
+      toolName: 'eleckoi_read_setting_files'
+    })
+
+    const result = (text: string, time: number) => sessionEvent('tool/result', {
+      message: {
+        source: { kind: 'tool', callId: 'call-read-settings' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-read-settings',
+          content: [{ type: 'text', text }]
+        }]
+      }
+    }, time)
+    expect(projector.project(result('{"status":"ok","files":[{"path":"世界/当前地点","content":"正文"}]}', 150))).toMatchObject({
+      id: 'call-read-settings',
+      status: 'complete',
+      toolName: 'eleckoi_read_setting_files',
+      startedAtMillis: 100
+    })
+    expect(projector.project(result('{"status":"ok","files":[{"path":"世界/当前地点","content":"[内容已压缩]"}]}', 200))).toMatchObject({
+      id: 'call-read-settings',
+      status: 'complete',
+      toolName: 'eleckoi_read_setting_files',
+      startedAtMillis: 100,
+      completedAtMillis: 200
+    })
+  })
+
+  it('does not expose an orphan tool result with a meaningless generic title', () => {
+    const projector = new DshProcessProjector('session-a')
+    expect(projector.project(sessionEvent('tool/result', {
+      message: {
+        source: { kind: 'tool', callId: 'call-orphan' },
+        content: [{ type: 'tool-result', toolCallId: 'call-orphan', content: '完成' }]
+      }
+    }, 100))).toBeUndefined()
   })
 
   it('does not project unknown sessions into the root reply or process timeline', () => {

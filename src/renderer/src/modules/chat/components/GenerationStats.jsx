@@ -2,6 +2,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const RADIUS = 5.5;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+const GENERATION_LINE_FIELDS = [
+  "turns",
+  "steps",
+  "llmMs",
+  "toolMs",
+  "ttftMs",
+  "ttftSteps",
+  "decodeMs",
+  "decodeTokens",
+  "tokenUsage",
+];
 
 export function GenerationStatsLine({ stats }) {
   const groups = useMemo(() => generationStatGroups(stats), [stats]);
@@ -61,8 +72,8 @@ export function ContextMeter({ stats }) {
       <button
         type="button"
         className="context-meter-trigger"
-        aria-label={`上下文已用 ${context.percent}%`}
-        title={`上下文已用 ${context.percent}%`}
+        aria-label={`上下文已用 ${context.percentLabel}%`}
+        title={`上下文已用 ${context.percentLabel}%`}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
@@ -82,7 +93,7 @@ export function ContextMeter({ stats }) {
       {open ? (
         <div className="context-meter-panel" role="dialog" aria-label="上下文已用">
           <div className="context-meter-heading">
-            <span>上下文已用 <strong>{context.percent}%</strong></span>
+            <span>上下文已用 <strong>{context.percentLabel}%</strong></span>
             <b>{`~${formatTokens(context.usedTokens)} / ${formatTokens(context.contextWindow)}`}</b>
           </div>
           <div className="context-meter-bar" aria-hidden="true">
@@ -186,11 +197,30 @@ function roundedIntegerPercent(cacheReadTokens, denominator) {
 export function contextOccupancy(pressure) {
   const usedTokens = pressure?.projectedTokens ?? pressure?.pressureTokens;
   if (usedTokens == null || pressure?.contextWindow == null) return null;
+  const percent = Math.min(100, Math.round(usedTokens / pressure.contextWindow * 1_000_000) / 10_000);
   return {
-    percent: Math.min(100, Math.round(usedTokens / pressure.contextWindow * 100)),
+    percent,
+    percentLabel: percent > 0 && percent < 0.1
+      ? "<0.1"
+      : String(percent < 1 ? Math.round(percent * 10) / 10 : Math.round(percent)),
     usedTokens,
     contextWindow: pressure.contextWindow,
   };
+}
+
+export function retainVisibleGenerationStats(previous, next) {
+  if (!previous) return next ?? null;
+  if (!next) return previous;
+
+  const retained = { ...next };
+  if (!generationStatGroups(next).length && generationStatGroups(previous).length) {
+    for (const field of GENERATION_LINE_FIELDS) retained[field] = previous[field];
+  }
+  if (!contextOccupancy(next.contextPressure) && contextOccupancy(previous.contextPressure)) {
+    retained.contextPressure = previous.contextPressure;
+    retained.contextBreakdown = previous.contextBreakdown;
+  }
+  return retained;
 }
 
 export function formatTokens(value) {
