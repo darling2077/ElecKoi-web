@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ExportIcon, ImportIcon, PencilIcon, PlusIcon, TrashIcon } from "../../../ui/icons/index.jsx";
 import { DshSearchField } from "../../../ui/ui/DshSearchField.jsx";
+import { GroupAssignmentMenu } from "../../../ui/ui/GroupAssignmentMenu.jsx";
 import { openCharacterEditorWindow } from "../window/openCharacterEditorWindow.js";
 import { AddGroupDialog } from "./AddGroupDialog.jsx";
 import { CharacterCard } from "./CharacterCard.jsx";
@@ -20,6 +21,7 @@ export function CharacterManager({ characters, persona, onSaveGroups, onDeleteCh
   const [deleteMode, setDeleteMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
   const [groupMenu, setGroupMenu] = useState(null);
+  const [cardGroupMenu, setCardGroupMenu] = useState(null);
   const [groupDialog, setGroupDialog] = useState(null);
   const [groupDraft, setGroupDraft] = useState("");
   const [importOpen, setImportOpen] = useState(false);
@@ -61,6 +63,7 @@ export function CharacterManager({ characters, persona, onSaveGroups, onDeleteCh
       if (event.type === "keydown" && event.key !== "Escape") return;
       if (event.type !== "keydown" && exportControlRef.current?.contains(event.target)) return;
       setGroupMenu(null);
+      setCardGroupMenu(null);
       setExportOpen(false);
     }
     window.addEventListener("pointerdown", closeMenus);
@@ -83,6 +86,7 @@ export function CharacterManager({ characters, persona, onSaveGroups, onDeleteCh
     event.preventDefault();
     event.stopPropagation();
     if (group) setSelectedGroup(group);
+    setCardGroupMenu(null);
     setGroupMenu({
       group,
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 164)),
@@ -94,6 +98,29 @@ export function CharacterManager({ characters, persona, onSaveGroups, onDeleteCh
     setGroupDialog({ mode, group });
     setGroupDraft(group);
     setGroupMenu(null);
+    setCardGroupMenu(null);
+  }
+
+  function openCardGroupMenu(event, character) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (deleteMode) return;
+    setSelectedCharacterId(character.id);
+    setGroupMenu(null);
+    setExportOpen(false);
+    setCardGroupMenu({ character, x: event.clientX, y: event.clientY });
+  }
+
+  async function moveCharacterToGroup(group) {
+    const character = cardGroupMenu?.character;
+    if (!character || characterGroup(character) === group) return;
+    setError("");
+    try {
+      await onSaveGroups(groups, [{ characterId: character.id, group }]);
+      setCardGroupMenu(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "移动角色卡失败，请重试。");
+    }
   }
 
   async function saveGroup() {
@@ -263,6 +290,7 @@ export function CharacterManager({ characters, persona, onSaveGroups, onDeleteCh
                   selected={selectedSet.has(character.id)}
                   onClick={deleteMode ? toggleSelected : setSelectedCharacterId}
                   onDoubleClick={deleteMode ? undefined : openCharacterEditorWindow}
+                  onContextMenu={deleteMode ? undefined : openCardGroupMenu}
                 />
               ))}
             </div>
@@ -280,6 +308,17 @@ export function CharacterManager({ characters, persona, onSaveGroups, onDeleteCh
             </>
           ) : null}
         </div>
+      ) : null}
+
+      {cardGroupMenu ? (
+        <GroupAssignmentMenu
+          x={cardGroupMenu.x}
+          y={cardGroupMenu.y}
+          label={`移动${characterName(cardGroupMenu.character)}到分组`}
+          currentGroupId={characterGroup(cardGroupMenu.character)}
+          groups={groups.map((group) => ({ id: group, name: group }))}
+          onMove={moveCharacterToGroup}
+        />
       ) : null}
 
       {groupDialog ? (

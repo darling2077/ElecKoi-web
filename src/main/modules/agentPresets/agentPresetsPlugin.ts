@@ -44,6 +44,11 @@ export const agentPresetsPlugin = {
         changed()
         return catalog
       }),
+      ctx.desktopGateway.register('command.agent_presets.groups.assign', ({ presetId, groupId }) => {
+        const catalog = agentPresets.assignGroup(presetId, groupId)
+        changed()
+        return catalog
+      }),
       ctx.desktopGateway.register('command.agent_presets.groups.delete', ({ groupId }) => {
         const catalog = agentPresets.deleteGroup(groupId)
         changed()

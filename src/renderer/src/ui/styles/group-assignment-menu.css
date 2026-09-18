@@ -1,0 +1,58 @@
+.group-assignment-menu {
+  position: fixed;
+  z-index: 320;
+  display: grid;
+  width: 212px;
+  max-height: min(420px, calc(100vh - 16px));
+  padding: 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-raised);
+  color: var(--text);
+  box-shadow: 0 8px 24px color-mix(in srgb, #000 18%, transparent);
+}
+
+.group-assignment-menu-targets {
+  display: grid;
+  max-height: 336px;
+  margin-top: 4px;
+  padding-top: 4px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  scrollbar-width: thin;
+}
+
+.group-assignment-menu button {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text);
+  text-align: left;
+  font-size: 14px;
+}
+
+.group-assignment-menu button:hover:not(:disabled),
+.group-assignment-menu button:focus-visible {
+  background: var(--control-bg-hover);
+}
+
+.group-assignment-menu button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.group-assignment-menu button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.group-assignment-menu svg {
+  width: 18px;
+  height: 18px;
+}

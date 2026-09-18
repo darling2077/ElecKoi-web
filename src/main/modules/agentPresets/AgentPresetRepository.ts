@@ -468,6 +468,16 @@ export class AgentPresetRepository {
     return this.catalog()
   }
 
+  assignGroup(presetId: string, groupId: string): AgentPresetCatalog {
+    if (!this.exists(presetId)) throw new Error('找不到这个预设。')
+    const catalog = this.catalog()
+    if (groupId && !catalog.groups.some((group) => group.id === groupId)) {
+      throw new Error('找不到这个分组。')
+    }
+    this.store.db.update(agentPresets).set({ libraryGroupId: groupId }).where(eq(agentPresets.id, presetId)).run()
+    return this.catalog()
+  }
+
   deleteGroup(groupId: string): AgentPresetCatalog {
     const catalog = this.catalog()
     const target = catalog.groups.find((item) => item.id === groupId)

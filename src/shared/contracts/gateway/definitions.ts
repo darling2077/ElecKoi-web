@@ -131,7 +131,7 @@ export const requestContracts = {
   'command.characters.update': defineRoute(characterRecordSchema, characterCollectionSchema),
   'command.character_groups.save': defineRoute(z.object({
     groups: z.array(z.string()),
-    assignments: z.array(z.object({ characterId: z.string().min(1), group: z.string().min(1) }))
+    assignments: z.array(z.object({ characterId: z.string().min(1), group: z.string() }))
   }), characterCollectionSchema),
   'command.characters.delete': defineRoute(
     z.object({ characterIds: z.array(z.string()) }),
@@ -264,6 +264,10 @@ export const requestContracts = {
   ),
   'command.agent_presets.groups.rename': defineRoute(
     z.object({ groupId: z.string().min(1), name: z.string().max(60) }),
+    agentPresetCatalogSchema
+  ),
+  'command.agent_presets.groups.assign': defineRoute(
+    z.object({ presetId: z.string().min(1), groupId: z.string().max(120) }),
     agentPresetCatalogSchema
   ),
   'command.agent_presets.groups.delete': defineRoute(

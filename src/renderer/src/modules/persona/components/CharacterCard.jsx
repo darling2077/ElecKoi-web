@@ -3,7 +3,7 @@ import { assetSrc } from "../../../app/services/assets.js";
 import { Avatar } from "../../../ui/ui/Avatar.jsx";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-export function CharacterCard({ character, active, artworkAspectRatio = 0.76, authorName = "用户", authorAvatar = "", selectable = false, selected = false, onClick, onDoubleClick }) {
+export function CharacterCard({ character, active, artworkAspectRatio = 0.76, authorName = "用户", authorAvatar = "", selectable = false, selected = false, onClick, onDoubleClick, onContextMenu }) {
   const name = characterName(character);
   const cover = characterCover(character);
   const resolvedCover = assetSrc(cover);
@@ -43,6 +43,7 @@ export function CharacterCard({ character, active, artworkAspectRatio = 0.76, au
       type="button"
       onClick={() => onClick(character.id)}
       onDoubleClick={onDoubleClick ? () => onDoubleClick(character.id) : undefined}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, character) : undefined}
       aria-pressed={selectable ? selected : undefined}
       title={onDoubleClick ? "双击编辑角色" : undefined}
     >

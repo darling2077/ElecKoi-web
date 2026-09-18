@@ -36,6 +36,10 @@ export function renamePresetGroup(groupId, name) {
   return desktopClient.request('command.agent_presets.groups.rename', { groupId, name });
 }
 
+export function assignPresetGroup(presetId, groupId) {
+  return desktopClient.request('command.agent_presets.groups.assign', { presetId, groupId });
+}
+
 export function deletePresetGroup(groupId) {
   return desktopClient.request('command.agent_presets.groups.delete', { groupId });
 }

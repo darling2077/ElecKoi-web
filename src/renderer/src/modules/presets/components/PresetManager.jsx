@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar } from '../../../ui/ui/Avatar.jsx';
 import { DshSearchField } from '../../../ui/ui/DshSearchField.jsx';
+import { GroupAssignmentMenu } from '../../../ui/ui/GroupAssignmentMenu.jsx';
 import { ExportIcon, ImportIcon, PencilIcon, PlusIcon, TrashIcon } from '../../../ui/icons/index.jsx';
 import defaultPresetAvatar from '../../../assets/eleckoi-app-icon.png';
-import { createPresetGroup, deletePreset, deletePresetGroup, renamePresetGroup } from '../api/presetApi.js';
+import { assignPresetGroup, createPresetGroup, deletePreset, deletePresetGroup, renamePresetGroup } from '../api/presetApi.js';
 
 const ALL_PRESETS = '全部预设';
 
@@ -12,6 +13,7 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
   const [editingGroupId, setEditingGroupId] = useState('');
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupMenu, setGroupMenu] = useState(null);
+  const [presetGroupMenu, setPresetGroupMenu] = useState(null);
   const [keyword, setKeyword] = useState('');
   const [deleteMode, setDeleteMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -36,6 +38,7 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
     function closeGroupMenu(event) {
       if (event.type === 'keydown' && event.key !== 'Escape') return;
       setGroupMenu(null);
+      setPresetGroupMenu(null);
     }
     window.addEventListener('pointerdown', closeGroupMenu);
     window.addEventListener('keydown', closeGroupMenu);
@@ -69,6 +72,7 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
     event.preventDefault();
     event.stopPropagation();
     if (group) onSelectGroup(group.id);
+    setPresetGroupMenu(null);
     setGroupMenu({
       group,
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 164)),
@@ -81,6 +85,30 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
     setGroupDraft(group?.name || '');
     setGroupDialogOpen(true);
     setGroupMenu(null);
+    setPresetGroupMenu(null);
+  }
+
+  function openPresetGroupMenu(event, preset) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (deleteMode) return;
+    onSelectPreset(preset.id);
+    setGroupMenu(null);
+    setExportOpen(false);
+    setPresetGroupMenu({ preset, x: event.clientX, y: event.clientY });
+  }
+
+  async function movePresetToGroup(groupId) {
+    const preset = presetGroupMenu?.preset;
+    if (!preset || preset.libraryGroupId === groupId) return;
+    setError('');
+    try {
+      await assignPresetGroup(preset.id, groupId);
+      setPresetGroupMenu(null);
+      await onRefresh(preset.id);
+    } catch (cause) {
+      setError(cause?.message || '移动预设失败');
+    }
   }
 
   async function addGroup() {
@@ -178,7 +206,7 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
           const removable = preset.id !== 'agent-preset-standard';
           const selected = selectedSet.has(preset.id);
           return <article className={`preset-manager-card${preset.id === selectedPresetId ? ' is-current' : ''}${deleteMode && removable ? ' is-selectable' : ''}${selected ? ' is-delete-selected' : ''}`} key={preset.id}>
-            <button type="button" className="preset-manager-card-open" aria-pressed={deleteMode && removable ? selected : undefined} onClick={() => deleteMode ? (removable && togglePreset(preset.id)) : onSelectPreset(preset.id)}>
+            <button type="button" className="preset-manager-card-open" aria-pressed={deleteMode && removable ? selected : undefined} onClick={() => deleteMode ? (removable && togglePreset(preset.id)) : onSelectPreset(preset.id)} onContextMenu={deleteMode ? undefined : (event) => openPresetGroupMenu(event, preset)}>
               {deleteMode && removable ? <span className="preset-manager-card-check" aria-hidden="true" /> : null}
               <Avatar src={preset.profile.authorAvatarPath || defaultPresetAvatar} name={preset.name} className="preset-manager-avatar" />
               <strong>{preset.name}</strong><small>{preset.profile.authorName || '未填写作者'}</small>
@@ -193,6 +221,14 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
           <button type="button" role="menuitem" onClick={() => void removeGroup(groupMenu.group)}><TrashIcon /><span>删除分组</span></button>
         </> : null}
       </div> : null}
+      {presetGroupMenu ? <GroupAssignmentMenu
+        x={presetGroupMenu.x}
+        y={presetGroupMenu.y}
+        label={`移动${presetGroupMenu.preset.name}到分组`}
+        currentGroupId={presetGroupMenu.preset.libraryGroupId || ''}
+        groups={catalog.groups}
+        onMove={movePresetToGroup}
+      /> : null}
       {groupDialogOpen ? <PresetGroupDialog
         title={editingGroupId ? '重命名该组' : '添加分组'}
         value={groupDraft}
