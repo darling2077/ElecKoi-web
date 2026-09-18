@@ -58,7 +58,7 @@ export function ContextMeter({ stats }) {
 
   if (!context) return null;
   const breakdown = stats?.contextBreakdown;
-  const rows = contextBreakdownRows(breakdown);
+  const rows = contextBreakdownRows(breakdown, context.usedTokens);
   const total = rows.reduce((sum, row) => sum + row.value, 0);
 
   return (
@@ -113,13 +113,26 @@ export function ContextMeter({ stats }) {
   );
 }
 
-export function contextBreakdownRows(breakdown) {
+export function contextBreakdownRows(breakdown, usedTokens) {
   if (!breakdown) return [];
-  return [
+  const rows = [
     { key: "systemTokens", label: "系统提示词", className: "system", value: breakdown.systemTokens || 0 },
     { key: "toolsTokens", label: "工具定义", className: "tools", value: breakdown.toolsTokens || 0 },
     { key: "messageTokens", label: "对话消息", className: "messages", value: breakdown.messageTokens || 0 },
   ];
+  const classifiedTokens = rows.reduce((sum, row) => sum + row.value, 0);
+  const unclassifiedTokens = Number.isFinite(usedTokens)
+    ? Math.max(0, Math.round(usedTokens - classifiedTokens))
+    : 0;
+  if (unclassifiedTokens > 0) {
+    rows.push({
+      key: "unclassifiedTokens",
+      label: "其余上下文",
+      className: "unclassified",
+      value: unclassifiedTokens,
+    });
+  }
+  return rows;
 }
 
 export function generationStatGroups(stats) {

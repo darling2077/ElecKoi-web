@@ -1429,6 +1429,8 @@
 .context-meter-bar .messages,
 .context-meter-rows i.messages,
 .context-meter-bar .total { background: #4f8cff; }
+.context-meter-bar .unclassified,
+.context-meter-rows i.unclassified { background: #d99a3e; }
 
 .context-meter-rows {
   display: grid;

@@ -58,7 +58,24 @@ describe('generation statistics display', () => {
     expect(formatDuration(162_000)).toBe('2m42s');
   });
 
-  it('keeps DSH provider pressure separate from the heuristic composition', () => {
+  it('reconciles the DSH provider pressure with the heuristic composition', () => {
+    const rows = contextBreakdownRows({
+      systemTokens: 0,
+      toolsTokens: 551,
+      messageTokens: 5_600,
+    }, 14_700);
+
+    expect(rows.map((row) => row.label)).toEqual([
+      '系统提示词',
+      '工具定义',
+      '对话消息',
+      '其余上下文',
+    ]);
+    expect(rows.at(-1)?.value).toBe(8_549);
+    expect(rows.reduce((total, row) => total + row.value, 0)).toBe(14_700);
+  });
+
+  it('does not invent an unclassified row without provider pressure', () => {
     const rows = contextBreakdownRows({
       systemTokens: 0,
       toolsTokens: 551,
@@ -66,7 +83,6 @@ describe('generation statistics display', () => {
     });
 
     expect(rows.map((row) => row.label)).toEqual(['系统提示词', '工具定义', '对话消息']);
-    expect(rows.reduce((total, row) => total + row.value, 0)).toBe(6_151);
   });
 
   it('keeps the statistics strip and context meter stable while a regenerated run warms up', () => {
