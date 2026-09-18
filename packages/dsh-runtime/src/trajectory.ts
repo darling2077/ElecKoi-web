@@ -207,6 +207,7 @@ export function projectDshTrajectory(
   header: DshSessionHeader = {}
 ): Pick<DshTrajectoryPage, 'records' | 'startedAtMillis' | 'completedAtMillis'> {
   const events = input.map((event, index) => normalizeEvent(event, index))
+  const syntheticSeedStepSeqs = findSyntheticSeedStepSeqs(events)
   const records: DshTrajectoryRecord[] = []
   const stepStarts = new Map<string, number>()
   const toolRecords = new Map<string, DshTrajectoryRecord>()
@@ -259,7 +260,7 @@ export function projectDshTrajectory(
     if (type === 'step/start') {
       activeTurn = eventTurn ?? activeTurn
       activeStep = eventStep
-      if (activeTurn !== null && activeStep !== null) {
+      if (activeTurn !== null && activeStep !== null && !syntheticSeedStepSeqs.has(event.seq)) {
         if (time !== null) stepStarts.set(stepKey(activeTurn, activeStep), time)
         pendingRequests.push({
           attached: false,
@@ -534,6 +535,24 @@ export function projectDshTrajectory(
     startedAtMillis: createdAt ?? times[0] ?? null,
     completedAtMillis: times.at(-1) ?? createdAt
   }
+}
+
+function findSyntheticSeedStepSeqs(events: readonly NormalizedEvent[]): Set<number> {
+  const syntheticStepSeqs = new Set<number>()
+  let segmentStart = 0
+
+  for (let index = 0; index < events.length; index += 1) {
+    if (events[index]?.type !== 'session/end-seed') continue
+    const segment = events.slice(segmentStart, index)
+    if (!segment.some((event) => event.type === 'request/header')) {
+      for (const event of segment) {
+        if (event.type === 'step/start') syntheticStepSeqs.add(event.seq)
+      }
+    }
+    segmentStart = index + 1
+  }
+
+  return syntheticStepSeqs
 }
 
 function emptyPage(runtimeThreadId: string): DshTrajectoryPage {

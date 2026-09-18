@@ -215,6 +215,33 @@ describe('DSH trajectory projection', () => {
     expect(JSON.stringify(result)).not.toContain('系统提示词')
   })
 
+  it('does not project headerless constructor seed steps as model requests', () => {
+    const result = projectDshTrajectory([
+      event(0, 'turn/start', { turn: 1 }, 1_000),
+      event(1, 'step/start', { turn: 1, step: 1 }, 1_010),
+      event(2, 'assistant/message', {
+        turn: 1,
+        step: 1,
+        message: { content: [{ type: 'text', text: '合成历史消息' }] }
+      }, 1_020),
+      event(3, 'turn/end', { turn: 1 }, 1_030),
+      event(4, 'session/end-seed', {}, 1_040),
+      event(5, 'turn/start', { turn: 2 }, 1_050),
+      event(6, 'step/start', { turn: 2, step: 1 }, 1_060),
+      event(7, 'request/header', {
+        header: { tools: [], config: { model: 'deepseek-chat' } },
+        reason: 'initial'
+      }, 1_070),
+      event(8, 'assistant/message', {
+        turn: 2,
+        step: 1,
+        message: { content: [{ type: 'text', text: '真实模型回复' }] }
+      }, 1_080)
+    ])
+
+    expect(result.records.map((record) => record.requests.map((request) => request.number))).toEqual([[], [1]])
+  })
+
 })
 
 function event(

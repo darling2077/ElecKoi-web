@@ -65,10 +65,10 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
     if (exportOpen) exportMenuRef.current?.querySelector('button')?.focus();
   }, [exportOpen]);
 
-  function openGroupMenu(event, group) {
+  function openGroupMenu(event, group = selectedGroupRecord || null) {
     event.preventDefault();
     event.stopPropagation();
-    onSelectGroup(group.id);
+    if (group) onSelectGroup(group.id);
     setGroupMenu({
       group,
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - 164)),
@@ -147,8 +147,8 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
   }
 
   return <section className="preset-manager-window" aria-label="预设管理器">
-      <aside className="preset-manager-groups">
-        <button type="button" className={selectedGroup === ALL_PRESETS ? 'active' : ''} onClick={() => onSelectGroup(ALL_PRESETS)}><span>{ALL_PRESETS}</span><em>{catalog.presets.length}</em></button>
+      <aside className="preset-manager-groups" onContextMenu={(event) => openGroupMenu(event)}>
+        <button type="button" className={selectedGroup === ALL_PRESETS ? 'active' : ''} onClick={() => onSelectGroup(ALL_PRESETS)} onContextMenu={(event) => openGroupMenu(event, null)}><span>{ALL_PRESETS}</span><em>{catalog.presets.length}</em></button>
         <small>分组</small>
         <div>{catalog.groups.map((group) => <button type="button" className={selectedGroup === group.id ? 'active' : ''} key={group.id} onClick={() => onSelectGroup(group.id)} onContextMenu={(event) => openGroupMenu(event, group)}><span>{group.name}</span><em>{catalog.presets.filter((preset) => preset.libraryGroupId === group.id).length}</em></button>)}</div>
         <button className="preset-manager-add-group" type="button" onClick={() => openGroupDialog()}><PlusIcon /><span>添加分组</span></button>
@@ -186,10 +186,12 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
           </article>;
         })}</div>
       </div>
-      {groupMenu ? <div className="preset-manager-group-menu" role="menu" aria-label={`${groupMenu.group.name}的操作`} style={{ left: `${groupMenu.x}px`, top: `${groupMenu.y}px` }} onPointerDown={(event) => event.stopPropagation()}>
+      {groupMenu ? <div className="preset-manager-group-menu" role="menu" aria-label={groupMenu.group ? `${groupMenu.group.name}的操作` : '分组操作'} style={{ left: `${groupMenu.x}px`, top: `${groupMenu.y}px` }} onPointerDown={(event) => event.stopPropagation()}>
         <button type="button" role="menuitem" onClick={() => openGroupDialog()}><PlusIcon /><span>添加分组</span></button>
-        <button type="button" role="menuitem" onClick={() => openGroupDialog(groupMenu.group)}><PencilIcon /><span>重命名该组</span></button>
-        <button type="button" role="menuitem" onClick={() => void removeGroup(groupMenu.group)}><TrashIcon /><span>删除分组</span></button>
+        {groupMenu.group ? <>
+          <button type="button" role="menuitem" onClick={() => openGroupDialog(groupMenu.group)}><PencilIcon /><span>重命名该组</span></button>
+          <button type="button" role="menuitem" onClick={() => void removeGroup(groupMenu.group)}><TrashIcon /><span>删除分组</span></button>
+        </> : null}
       </div> : null}
       {groupDialogOpen ? <PresetGroupDialog
         title={editingGroupId ? '重命名该组' : '添加分组'}

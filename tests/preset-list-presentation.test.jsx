@@ -115,6 +115,13 @@ describe('preset list consistency', () => {
     expect(source).toContain("exportPreset('json')");
   });
 
+  it('opens preset group actions from the whole sidebar while limiting the all-presets row to creation', () => {
+    const source = readFileSync(new URL('../src/renderer/src/modules/presets/components/PresetManager.jsx', import.meta.url), 'utf8');
+    expect(source).toContain('className="preset-manager-groups" onContextMenu={(event) => openGroupMenu(event)}');
+    expect(source).toContain('onContextMenu={(event) => openGroupMenu(event, null)}');
+    expect(source).toContain("groupMenu.group ? <>");
+  });
+
   it('uses the shared delete icon throughout preset surfaces', () => {
     const presetComponents = [
       'PresetPanel.jsx',
