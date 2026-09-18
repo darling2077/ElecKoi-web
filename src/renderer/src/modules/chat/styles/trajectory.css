@@ -218,6 +218,10 @@
   grid-template-columns: minmax(0, 1fr) minmax(340px, 34%);
 }
 
+.trajectory-content.has-context-inspector {
+  grid-template-columns: minmax(0, 1fr) minmax(460px, 44%);
+}
+
 .trajectory-ledger,
 .trajectory-inspector-body {
   min-height: 0;
@@ -603,6 +607,140 @@
   white-space: pre-wrap;
 }
 
+.trajectory-request-context {
+  display: grid;
+  gap: 20px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trajectory-request-context > li {
+  min-width: 0;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.trajectory-request-context > li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.trajectory-request-context header {
+  display: grid;
+  grid-template-columns: 22px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-bottom: 9px;
+}
+
+.trajectory-context-order {
+  color: var(--soft-text);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.trajectory-context-role {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.trajectory-context-role.role-system {
+  background: color-mix(in srgb, var(--trajectory-system) 14%, transparent);
+  color: color-mix(in srgb, var(--trajectory-system) 88%, var(--text));
+}
+
+.trajectory-context-role.role-user {
+  background: color-mix(in srgb, var(--trajectory-user) 14%, transparent);
+  color: color-mix(in srgb, var(--trajectory-user) 88%, var(--text));
+}
+
+.trajectory-context-role.role-assistant {
+  background: color-mix(in srgb, var(--trajectory-assistant) 14%, transparent);
+  color: color-mix(in srgb, var(--trajectory-assistant) 88%, var(--text));
+}
+
+.trajectory-request-context header strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trajectory-request-context header small {
+  max-width: 168px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trajectory-context-content {
+  padding-left: 30px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.72;
+  overflow-wrap: anywhere;
+  user-select: text;
+  white-space: pre-wrap;
+}
+
+.trajectory-context-content.is-expanded {
+  max-height: min(56vh, 720px);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-subtle) 72%, var(--surface-raised));
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.trajectory-context-expand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 32px;
+  margin: 7px 0 0 30px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.trajectory-context-expand:hover span {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.trajectory-context-expand:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+
+.trajectory-context-expand span {
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.trajectory-context-expand small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .trajectory-source + .trajectory-source {
   margin-top: 22px;
 }
@@ -688,6 +826,10 @@
   .trajectory-content.has-inspector {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(220px, 1.1fr) minmax(220px, 0.9fr);
+  }
+
+  .trajectory-content.has-context-inspector {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .trajectory-content.has-inspector .trajectory-ledger {

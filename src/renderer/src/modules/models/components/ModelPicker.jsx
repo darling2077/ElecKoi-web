@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { ModelIdentityIcon } from "./ModelIdentityIcon.jsx";
+import { UnsavedChangesDialog } from "../../../ui/ui/UnsavedChangesDialog.jsx";
 import { catalogItem, isImageProviderId, modelOptionsKey, normalizeProviderId } from "../model/modelProviderCatalog.js";
 import {
   DshChevronDownIcon,
@@ -91,6 +92,27 @@ function normalizedParameters(draft, automaticContextWindow) {
   };
 }
 
+function cloneConfig(config) {
+  return {
+    ...config,
+    model_options: (config.model_options || []).map((option) => ({
+      ...option,
+      ...(Array.isArray(option.reasoningEfforts) ? { reasoningEfforts: [...option.reasoningEfforts] } : {}),
+    })),
+  };
+}
+
+function parameterKey(configId, modelId) {
+  return `${configId}\u0000${modelId}`;
+}
+
+function automaticContextWindowFor(config) {
+  return normalizeProviderId(config?.provider) === "deepseek"
+    && (!config?.base_url || config.base_url.includes("api.deepseek.com"))
+    ? 1_000_000
+    : 272_000;
+}
+
 export function ModelPicker({
   configs = [],
   selectedConfigId,
@@ -110,8 +132,13 @@ export function ModelPicker({
   const [focusedConfigId, setFocusedConfigId] = useState("");
   const [query, setQuery] = useState("");
   const [loadingConfigId, setLoadingConfigId] = useState("");
-  const [savingParameters, setSavingParameters] = useState(false);
-  const saveSequence = useRef(Promise.resolve());
+  const [saving, setSaving] = useState(false);
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
+  const [leaveError, setLeaveError] = useState("");
+  const [draftConfigs, setDraftConfigs] = useState([]);
+  const [draftSelection, setDraftSelection] = useState({ capability: "chat", configId: "", model: "" });
+  const [parameterDrafts, setParameterDrafts] = useState({});
+  const [dirtyParameterKeys, setDirtyParameterKeys] = useState({});
   const chatConfigs = useMemo(
     () => configs.filter((config) => !isImageProviderId(config.provider)),
     [configs],
@@ -120,13 +147,24 @@ export function ModelPicker({
     () => chatConfigs.find((config) => config.id === selectedConfigId) || null,
     [chatConfigs, selectedConfigId],
   );
-  const followingMain = allowFollowMain && !selectedChatConfig;
-
-  const selectedConfig = useMemo(
-    () => selectedChatConfig || chatConfigs[0] || null,
-    [chatConfigs, selectedChatConfig],
-  );
-  const focusedConfig = chatConfigs.find((config) => config.id === focusedConfigId) || selectedConfig;
+  const committedConfig = selectedChatConfig || chatConfigs[0] || null;
+  const committedSelection = useMemo(() => {
+    if (allowFollowMain && !selectedChatConfig) {
+      return { capability: "chat", configId: "", model: "" };
+    }
+    return {
+      capability: "chat",
+      configId: committedConfig?.id || "",
+      model: String((selectedChatConfig ? selectedModel : "") || configDefaultModel(committedConfig, modelOptionsByKey)).trim(),
+    };
+  }, [allowFollowMain, committedConfig, modelOptionsByKey, selectedChatConfig, selectedModel]);
+  const activeDraftConfigs = open ? draftConfigs : chatConfigs;
+  const draftSelectedConfig = activeDraftConfigs.find((config) => config.id === draftSelection.configId) || null;
+  const followingMain = allowFollowMain && !draftSelectedConfig;
+  const focusedConfig = activeDraftConfigs.find((config) => config.id === focusedConfigId)
+    || draftSelectedConfig
+    || activeDraftConfigs[0]
+    || null;
   const focusedModels = useMemo(
     () => modelItems(focusedConfig, modelOptionsByKey),
     [focusedConfig, modelOptionsByKey],
@@ -139,24 +177,27 @@ export function ModelPicker({
   }, [focusedModels, query]);
   const groupedConfigs = useMemo(() => {
     const groups = new Map();
-    for (const config of chatConfigs) {
+    for (const config of activeDraftConfigs) {
       const providerId = normalizeProviderId(config.provider);
       if (!groups.has(providerId)) groups.set(providerId, []);
       groups.get(providerId).push(config);
     }
     return [...groups].map(([providerId, items]) => ({ provider: catalogItem(providerId), items }));
-  }, [chatConfigs]);
+  }, [activeDraftConfigs]);
 
   const parameterModelId = followingMain
     ? ""
-    : String((selectedChatConfig ? selectedModel : "") || selectedConfig?.model || "").trim();
+    : String(draftSelection.model || configDefaultModel(draftSelectedConfig, modelOptionsByKey)).trim();
   const selectedOptions = useMemo(
-    () => modelItems(selectedConfig, modelOptionsByKey),
-    [modelOptionsByKey, selectedConfig],
+    () => modelItems(draftSelectedConfig, modelOptionsByKey),
+    [draftSelectedConfig, modelOptionsByKey],
   );
   const selectedOption = selectedOptions.find((item) => item.id === parameterModelId) || null;
-  const [draft, setDraft] = useState(() => parameterDraft(selectedOption));
-  const modelCapabilities = useModelCapabilities(selectedConfig, parameterModelId);
+  const activeParameterKey = parameterModelId && draftSelectedConfig
+    ? parameterKey(draftSelectedConfig.id, parameterModelId)
+    : "";
+  const draft = parameterDrafts[activeParameterKey] || parameterDraft(selectedOption);
+  const modelCapabilities = useModelCapabilities(draftSelectedConfig, parameterModelId);
   const usesCustomReasoningList = modelCapabilities.source === "provider_default" || modelCapabilities.source === "explicit_profile";
   const reasoningEffortOptions = usesCustomReasoningList
     ? customReasoningOptions(draft.reasoningEfforts != null)
@@ -164,32 +205,57 @@ export function ModelPicker({
   const selectedReasoningEffort = reasoningEffortOptions.some((item) => item.id === draft.reasoningEffort)
     ? draft.reasoningEffort
     : "";
-  const automaticContextWindow = normalizeProviderId(selectedConfig?.provider) === "deepseek"
-    && (!selectedConfig?.base_url || selectedConfig.base_url.includes("api.deepseek.com"))
-    ? 1_000_000
-    : 272_000;
-
-  useEffect(() => {
-    setDraft(parameterDraft(selectedOption));
-  }, [parameterModelId, selectedConfig?.id, selectedOption]);
+  const automaticContextWindow = automaticContextWindowFor(draftSelectedConfig);
+  const selectionChanged = draftSelection.configId !== committedSelection.configId
+    || draftSelection.model !== committedSelection.model;
+  const hasChanges = selectionChanged || Object.keys(dirtyParameterKeys).length > 0;
 
   useEffect(() => {
     if (!open) return undefined;
-    setFocusedConfigId(selectedConfig?.id || chatConfigs[0]?.id || "");
-    setQuery("");
-    setTab("models");
     const closeOnEscape = (event) => {
       if (event.key !== "Escape") return;
+      if (leaveDialogOpen) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      setOpen(false);
+      requestClosePicker();
     };
     window.addEventListener("keydown", closeOnEscape, true);
     return () => window.removeEventListener("keydown", closeOnEscape, true);
-  }, [open, selectedConfig?.id]);
+  }, [hasChanges, leaveDialogOpen, open, saving]);
+
+  function openPicker() {
+    const nextConfigs = chatConfigs.map(cloneConfig);
+    setDraftConfigs(nextConfigs);
+    setDraftSelection(committedSelection);
+    setFocusedConfigId(committedSelection.configId || nextConfigs[0]?.id || "");
+    setParameterDrafts({});
+    setDirtyParameterKeys({});
+    setQuery("");
+    setTab("models");
+    setLeaveDialogOpen(false);
+    setLeaveError("");
+    setOpen(true);
+  }
+
+  function requestClosePicker() {
+    if (saving) return;
+    if (hasChanges) {
+      setLeaveError("");
+      setLeaveDialogOpen(true);
+      return;
+    }
+    setOpen(false);
+  }
+
+  function discardAndClosePicker() {
+    if (saving) return;
+    setLeaveDialogOpen(false);
+    setLeaveError("");
+    setOpen(false);
+  }
 
   function chooseModel(config, modelId) {
-    onSelect?.({
+    setDraftSelection({
       capability: "chat",
       configId: config.id,
       model: modelId,
@@ -209,7 +275,7 @@ export function ModelPicker({
   }
 
   function followMainModel() {
-    onSelect?.({ capability: "chat", configId: "", model: "" });
+    setDraftSelection({ capability: "chat", configId: "", model: "" });
     setTab("models");
   }
 
@@ -217,7 +283,14 @@ export function ModelPicker({
     if (!focusedConfig || loadingConfigId) return;
     setLoadingConfigId(focusedConfig.id);
     try {
-      await onLoadModels?.(focusedConfig);
+      const models = await onLoadModels?.(focusedConfig);
+      if (Array.isArray(models)) {
+        setDraftConfigs((current) => current.map((config) => (
+          config.id === focusedConfig.id
+            ? { ...config, model_options: models.map((item) => ({ ...item })) }
+            : config
+        )));
+      }
     } catch (error) {
       onNotify?.("error", error.message || "刷新模型列表失败");
     } finally {
@@ -225,10 +298,13 @@ export function ModelPicker({
     }
   }
 
-  function updateDraft(patch, persist = false) {
-    const next = { ...draft, ...patch };
-    setDraft(next);
-    if (persist) saveParameters(next);
+  function updateDraft(patch) {
+    if (!activeParameterKey) return;
+    setParameterDrafts((current) => ({
+      ...current,
+      [activeParameterKey]: { ...(current[activeParameterKey] || parameterDraft(selectedOption)), ...patch },
+    }));
+    setDirtyParameterKeys((current) => ({ ...current, [activeParameterKey]: true }));
   }
 
   function updateReasoningEffort(value) {
@@ -237,33 +313,68 @@ export function ModelPicker({
         ? { reasoningEfforts: withCustomReasoningEffort(draft.reasoningEfforts, value) }
         : {}),
       reasoningEffort: value,
-    }, true);
+    });
   }
 
-  function saveParameters(nextDraft = draft) {
-    if (!selectedConfig || !parameterModelId || !onSaveModelConfig) return;
-    const normalized = normalizedParameters(nextDraft, automaticContextWindow);
-    if (!normalized) {
-      onNotify?.("error", "参数超出有效范围");
-      return;
+  async function saveChanges() {
+    if (!hasChanges || saving) return false;
+    const changedConfigs = new Map();
+    for (const key of Object.keys(dirtyParameterKeys)) {
+      const separator = key.indexOf("\u0000");
+      const configId = key.slice(0, separator);
+      const modelId = key.slice(separator + 1);
+      const baseConfig = changedConfigs.get(configId)
+        || draftConfigs.find((config) => config.id === configId);
+      if (!baseConfig || !modelId) continue;
+      const nextDraft = parameterDrafts[key];
+      const normalized = normalizedParameters(nextDraft, automaticContextWindowFor(baseConfig));
+      if (!normalized) {
+        const message = "参数超出有效范围";
+        setLeaveError(message);
+        onNotify?.("error", message);
+        return false;
+      }
+      const availableOptions = modelItems(baseConfig, modelOptionsByKey);
+      const baseOption = availableOptions.find((item) => item.id === modelId)
+        || { id: modelId, name: modelId, isUserAdded: true };
+      const nextOption = { ...baseOption, ...normalized, id: modelId, name: baseOption.name || modelId };
+      const options = [...(baseConfig.model_options || [])];
+      const index = options.findIndex((item) => (item.id || item.name) === modelId);
+      if (index >= 0) options[index] = nextOption;
+      else options.push(nextOption);
+      changedConfigs.set(configId, { ...baseConfig, model_options: options });
     }
-    const base = selectedOption || { id: parameterModelId, name: parameterModelId, isUserAdded: true };
-    const nextOption = { ...base, ...normalized, id: parameterModelId, name: base.name || parameterModelId };
-    const options = [...(selectedConfig.model_options || [])];
-    const index = options.findIndex((item) => (item.id || item.name) === parameterModelId);
-    if (index >= 0) options[index] = nextOption;
-    else options.push(nextOption);
-    setSavingParameters(true);
-    saveSequence.current = saveSequence.current
-      .then(() => onSaveModelConfig({ ...selectedConfig, model_options: options }))
-      .catch((error) => onNotify?.("error", error.message || "保存模型参数失败"))
-      .finally(() => setSavingParameters(false));
+    if (changedConfigs.size > 0 && !onSaveModelConfig) {
+      const message = "模型参数保存功能不可用";
+      setLeaveError(message);
+      onNotify?.("error", message);
+      return false;
+    }
+    setSaving(true);
+    setLeaveError("");
+    try {
+      for (const config of changedConfigs.values()) {
+        await onSaveModelConfig(config);
+      }
+      await onSelect?.(draftSelection);
+      setLeaveDialogOpen(false);
+      setOpen(false);
+      onNotify?.("success", "模型设置已保存，将从下一次请求生效。");
+      return true;
+    } catch (error) {
+      const message = error.message || "保存模型设置失败";
+      setLeaveError(message);
+      onNotify?.("error", message);
+      return false;
+    } finally {
+      setSaving(false);
+    }
   }
 
-  const triggerLabel = (selectedChatConfig ? selectedModel : "") || selectedConfig?.model || "选择模型";
+  const triggerLabel = (selectedChatConfig ? selectedModel : "") || committedConfig?.model || "选择模型";
   const trigger = renderTrigger ? renderTrigger({
     open,
-    openPicker: () => setOpen(true),
+    openPicker,
     selectedConfig: selectedChatConfig,
     selectedModel: selectedChatConfig ? selectedModel : "",
   }) : (
@@ -273,11 +384,11 @@ export function ModelPicker({
       title="选择模型"
       aria-haspopup="dialog"
       aria-expanded={open}
-      onClick={() => setOpen(true)}
+      onClick={openPicker}
     >
       <ModelIdentityIcon
         modelName={triggerLabel === "选择模型" ? "" : triggerLabel}
-        providerId={selectedConfig?.provider}
+        providerId={committedConfig?.provider}
         className="chat-model-trigger-icon"
       />
       <span className="chat-model-trigger-label">{triggerLabel}</span>
@@ -289,8 +400,8 @@ export function ModelPicker({
       {trigger}
 
       {open ? createPortal(
-        <div className={`chat-model-backdrop${elevated ? " is-elevated" : ""}`} role="presentation" onMouseDown={() => setOpen(false)}>
-          <section className="chat-model-panel" role="dialog" aria-modal="true" aria-label={title} onMouseDown={(event) => event.stopPropagation()}>
+        <div className={`chat-model-backdrop${elevated ? " is-elevated" : ""}`} role="presentation" onMouseDown={requestClosePicker}>
+          <section className="chat-model-panel" role="dialog" aria-modal="true" aria-label={title} aria-busy={saving} onMouseDown={(event) => event.stopPropagation()}>
             <header>
               <div className="chat-model-title">
                 <strong>{title}</strong>
@@ -298,14 +409,14 @@ export function ModelPicker({
                   <span>
                     <ModelIdentityIcon
                       modelName={parameterModelId}
-                      providerId={selectedConfig?.provider}
+                      providerId={draftSelectedConfig?.provider}
                       className="chat-model-title-icon"
                     />
                     {parameterModelId}
                   </span>
                 ) : null}
               </div>
-              <button type="button" className="chat-model-close" aria-label="关闭" onClick={() => setOpen(false)}>
+              <button type="button" className="chat-model-close" aria-label="关闭" disabled={saving} onClick={requestClosePicker}>
                 <DshCloseIcon size={20} />
               </button>
             </header>
@@ -339,10 +450,10 @@ export function ModelPicker({
                             type="button"
                             className="chat-model-config-select"
                             aria-label={`使用配置 ${configName(config)}`}
-                            aria-pressed={selectedConfig?.id === config.id}
+                            aria-pressed={draftSelectedConfig?.id === config.id}
                             onClick={() => chooseConfig(config)}
                           >
-                            <ModelSelectionIndicator selected={selectedConfig?.id === config.id} />
+                            <ModelSelectionIndicator selected={draftSelectedConfig?.id === config.id} />
                           </button>
                           <button
                             type="button"
@@ -370,7 +481,7 @@ export function ModelPicker({
                   </div>
                   <div className="chat-model-list">
                     {visibleModels.length ? visibleModels.map((model) => {
-                      const selected = selectedConfig?.id === focusedConfig?.id && parameterModelId === model.id;
+                      const selected = draftSelectedConfig?.id === focusedConfig?.id && parameterModelId === model.id;
                       return <button type="button" className={selected ? "active" : ""} aria-pressed={selected} key={model.id} onClick={() => chooseModel(focusedConfig, model.id)}>
                         <ModelSelectionIndicator selected={selected} />
                         <span className="chat-model-name">{model.name}</span>
@@ -380,28 +491,47 @@ export function ModelPicker({
                 </div>
               </div>
             ) : (
-              <div className="chat-model-parameters" aria-busy={savingParameters}>
+              <div className="chat-model-parameters">
                 <ParameterGroup title="连接与能力">
-                  <ParameterSwitch label="此模型支持图片" checked={draft.supportsImageInput} onChange={(checked) => updateDraft({ supportsImageInput: checked }, true)} />
+                  <ParameterSwitch label="此模型支持图片" checked={draft.supportsImageInput} onChange={(checked) => updateDraft({ supportsImageInput: checked })} />
                 </ParameterGroup>
                 <ParameterGroup title="推理">
                   <ParameterSelect label="推理强度" disabled={!usesCustomReasoningList && modelCapabilities.reasoningEfforts.length === 0} value={selectedReasoningEffort} options={reasoningEffortOptions} onChange={updateReasoningEffort} />
                 </ParameterGroup>
                 <ParameterGroup title="上限">
-                  <ParameterNumber label="上下文窗口" value={draft.contextWindowTokens} placeholder={automaticContextWindow} min={4096} max={4_000_000} onChange={(value) => updateDraft({ contextWindowTokens: value })} onCommit={saveParameters} />
-                  <ParameterNumber label="自动压缩阈值" value={draft.autoCompactTokenLimit} placeholder={Math.floor((optionalNumber(draft.contextWindowTokens) || automaticContextWindow) * 0.8)} min={1024} onChange={(value) => updateDraft({ autoCompactTokenLimit: value })} onCommit={saveParameters} />
-                  <ParameterNumber label="最大输出" value={draft.maxOutputTokens} placeholder="自动" min={1} onChange={(value) => updateDraft({ maxOutputTokens: value })} onCommit={saveParameters} />
+                  <ParameterNumber label="上下文窗口" value={draft.contextWindowTokens} placeholder={automaticContextWindow} min={4096} max={4_000_000} onChange={(value) => updateDraft({ contextWindowTokens: value })} />
+                  <ParameterNumber label="自动压缩阈值" value={draft.autoCompactTokenLimit} placeholder={Math.floor((optionalNumber(draft.contextWindowTokens) || automaticContextWindow) * 0.8)} min={1024} onChange={(value) => updateDraft({ autoCompactTokenLimit: value })} />
+                  <ParameterNumber label="最大输出" value={draft.maxOutputTokens} placeholder="自动" min={1} onChange={(value) => updateDraft({ maxOutputTokens: value })} />
                 </ParameterGroup>
                 <ParameterGroup title="采样">
-                  <ParameterNumber label="温度" value={draft.temperature} placeholder="上游默认" min={0} max={2} step={0.01} onChange={(value) => updateDraft({ temperature: value })} onCommit={saveParameters} />
-                  <ParameterNumber label="Top P" value={draft.topP} placeholder="上游默认" min={0} max={1} step={0.01} onChange={(value) => updateDraft({ topP: value })} onCommit={saveParameters} />
+                  <ParameterNumber label="温度" value={draft.temperature} placeholder="上游默认" min={0} max={2} step={0.01} onChange={(value) => updateDraft({ temperature: value })} />
+                  <ParameterNumber label="Top P" value={draft.topP} placeholder="上游默认" min={0} max={1} step={0.01} onChange={(value) => updateDraft({ topP: value })} />
                 </ParameterGroup>
               </div>
             )}
+            <footer className="chat-model-actions">
+              <button type="button" className="chat-model-cancel" disabled={saving} onClick={requestClosePicker}>取消</button>
+              <button type="button" className="chat-model-save" disabled={!hasChanges || saving} onClick={saveChanges}>
+                {saving ? "保存中…" : "保存"}
+              </button>
+            </footer>
           </section>
         </div>,
         document.body,
       ) : null}
+      <UnsavedChangesDialog
+        open={leaveDialogOpen}
+        title="保存修改？"
+        description="离开前是否保存模型选择和参数修改？"
+        error={leaveError}
+        saving={saving}
+        onCancel={() => {
+          setLeaveDialogOpen(false);
+          setLeaveError("");
+        }}
+        onDiscard={discardAndClosePicker}
+        onSave={saveChanges}
+      />
     </div>
   );
 }
@@ -426,6 +556,6 @@ function ParameterSwitch({ label, checked, onChange }) {
   return <label className="chat-model-parameter-row"><span>{label}</span><input className="chat-model-switch" type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></label>;
 }
 
-function ParameterNumber({ label, value, placeholder, min, max, step = 1, disabled, onChange, onCommit }) {
-  return <label className="chat-model-parameter-row"><span>{label}</span><span className="chat-model-number-control"><input type="number" value={value} placeholder={String(placeholder ?? "")} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(event.target.value)} onBlur={() => onCommit()} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /></span></label>;
+function ParameterNumber({ label, value, placeholder, min, max, step = 1, disabled, onChange }) {
+  return <label className="chat-model-parameter-row"><span>{label}</span><span className="chat-model-number-control"><input type="number" value={value} placeholder={String(placeholder ?? "")} min={min} max={max} step={step} disabled={disabled} onChange={(event) => onChange(event.target.value)} /></span></label>;
 }

@@ -1,4 +1,9 @@
 import type { HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
+import {
+  deriveEventMessage,
+  isSurfaceEvent,
+  type SessionEvent
+} from '@deepseek-ai/dsh-session'
 
 export interface DshTokenUsageStats {
   uncachedInputTokens: number
@@ -45,6 +50,12 @@ interface SurfaceClaim {
   tokens: number
 }
 
+interface BreakdownNode {
+  seq: number
+  heuristicTokens: number
+  system: boolean
+}
+
 export interface StoredDshGenerationStats extends DshGenerationStats {
   version: 1
   lastSeq: number
@@ -55,6 +66,9 @@ export interface StoredDshGenerationStats extends DshGenerationStats {
   surfaceTokens: number
   sampledSurfaceTokens?: number
   surfaceClaim?: SurfaceClaim
+  breakdownNodes: BreakdownNode[]
+  legacyBreakdownSurfaceTokens: number
+  legacyBreakdownSystemTokens: number
 }
 
 const zeroUsage = (): DshTokenUsageStats => ({
@@ -83,7 +97,10 @@ export function emptyStoredGenerationStats(): StoredDshGenerationStats {
     openStep: null,
     pendingCalls: {},
     lastUsage: null,
-    surfaceTokens: 0
+    surfaceTokens: 0,
+    breakdownNodes: [],
+    legacyBreakdownSurfaceTokens: 0,
+    legacyBreakdownSystemTokens: 0
   }
 }
 
@@ -174,12 +191,10 @@ export class DshGenerationStatsProjector {
       }
     } else if (type === 'request/header') {
       const header = record(data.header)
-      const system = typeof header?.system === 'string' ? header.system : undefined
       const tools = Array.isArray(header?.tools) ? header.tools : undefined
-      const systemTokens = system === undefined ? 0 : Math.ceil(system.length / 4) + 4
       const toolsTokens = !tools?.length ? 0 : Math.ceil(JSON.stringify(tools).length / 4) + 4
-      if (systemTokens !== this.state.contextBreakdown.systemTokens || toolsTokens !== this.state.contextBreakdown.toolsTokens) {
-        this.state.contextBreakdown = { ...this.state.contextBreakdown, systemTokens, toolsTokens }
+      if (toolsTokens !== this.state.contextBreakdown.toolsTokens) {
+        this.state.contextBreakdown = { ...this.state.contextBreakdown, toolsTokens }
         changed = true
       }
     }
@@ -253,39 +268,91 @@ export class DshGenerationStatsProjector {
       return true
     }
 
-    const surfaceOp = event.surfaceOp
-    const surfaceMessage = type === 'user/message'
-      ? data
-      : type === 'assistant/message' || type === 'tool/result'
-        ? record(data.message)
-        : undefined
-    if (!surfaceMessage || surfaceOp === undefined) {
+    const sessionEvent = event as unknown as SessionEvent
+    if (!isSurfaceEvent(sessionEvent)) {
       if (!this.state.surfaceClaim) return false
       delete this.state.surfaceClaim
       return true
     }
 
-    const tokens = estimateMessage(surfaceMessage)
-    let delta = 0
+    const message = deriveEventMessage(sessionEvent)
+    const tokens = message === null ? 0 : estimateMessage(message)
+    const claim = this.state.surfaceClaim
+    const surfaceOp = sessionEvent.surfaceOp
+    let pressureDelta = 0
     if (surfaceOp === 'append') {
-      delta = tokens
+      pressureDelta = tokens
     } else {
-      const operation = record(surfaceOp)
-      const claim = this.state.surfaceClaim
-      if (operation?.op === 'replace' && claim
-        && operation.start === claim.start && operation.end === claim.end) {
-        delta = tokens - claim.tokens
+      if (claim
+        && (claim.start !== surfaceOp.startSeq || claim.end !== surfaceOp.endSeq)) {
+        throw new Error(
+          `token surface: replace at seq ${String(sessionEvent.seq)} over range ${String(surfaceOp.startSeq)}-${String(surfaceOp.endSeq)} `
+          + `has no adjacent shadow price (armed claim covers ${String(claim.start)}-${String(claim.end)})`
+        )
       }
+      if (claim) pressureDelta = tokens - claim.tokens
     }
+
+    const breakdownChanged = this.applyBreakdownSurface(sessionEvent, tokens, claim)
     delete this.state.surfaceClaim
-    if (delta === 0) return false
-    this.state.surfaceTokens = Math.max(0, this.state.surfaceTokens + delta)
+    if (pressureDelta !== 0) this.state.surfaceTokens = Math.max(0, this.state.surfaceTokens + pressureDelta)
+    return pressureDelta !== 0 || breakdownChanged || claim !== undefined
+  }
+
+  private applyBreakdownSurface(event: SessionEvent, tokens: number, claim: SurfaceClaim | undefined): boolean {
+    const node: BreakdownNode = {
+      seq: event.seq as number,
+      heuristicTokens: tokens,
+      system: event.type === 'system/message'
+    }
+    if (event.surfaceOp === 'append') {
+      this.state.breakdownNodes.push(node)
+      return true
+    }
+
+    const start = event.surfaceOp.startSeq as number
+    const end = event.surfaceOp.endSeq as number
+    const startIndex = this.state.breakdownNodes.findIndex((candidate) => candidate.seq === start)
+    const endIndex = this.state.breakdownNodes.findIndex((candidate) => candidate.seq === end)
+    if (startIndex >= 0 && endIndex >= startIndex) {
+      this.state.breakdownNodes.splice(startIndex, endIndex - startIndex + 1, node)
+      return true
+    }
+
+    // v0.1.5 initially persisted only aggregate breakdown totals. Keep that
+    // already-visible history while the positional DSH fold takes ownership of
+    // all newly observed nodes. A later replacement can consume the aggregate
+    // prefix only through DSH's adjacent shadow-price record.
+    if (claim === undefined || claim.start !== start || claim.end !== end) {
+      throw new Error(`token breakdown: replace at seq ${String(event.seq)} has invalid current range ${String(start)}-${String(end)}`)
+    }
+    const prefixEnd = endIndex >= 0 ? endIndex : -1
+    const knownPrefixTokens = prefixEnd < 0
+      ? 0
+      : this.state.breakdownNodes
+          .slice(0, prefixEnd + 1)
+          .reduce((total, candidate) => total + candidate.heuristicTokens, 0)
+    const legacyTokensRemoved = Math.max(0, claim.tokens - knownPrefixTokens)
+    this.state.legacyBreakdownSurfaceTokens = Math.max(
+      0,
+      this.state.legacyBreakdownSurfaceTokens - legacyTokensRemoved
+    )
+    if (event.type === 'system/message') this.state.legacyBreakdownSystemTokens = 0
+    this.state.breakdownNodes.splice(0, prefixEnd + 1, node)
     return true
   }
 
   private refreshContextView(): void {
     const pressureTokens = this.state.contextPressure.pressureTokens
-    this.state.contextBreakdown = { ...this.state.contextBreakdown, messageTokens: this.state.surfaceTokens }
+    const nodeTokens = this.state.breakdownNodes.reduce((total, node) => total + node.heuristicTokens, 0)
+    const lastSystem = this.state.breakdownNodes.findLast((node) => node.system && node.heuristicTokens > 0)
+    const systemTokens = lastSystem?.heuristicTokens ?? this.state.legacyBreakdownSystemTokens
+    const retainedSurfaceTokens = this.state.legacyBreakdownSurfaceTokens + nodeTokens
+    this.state.contextBreakdown = {
+      ...this.state.contextBreakdown,
+      systemTokens,
+      messageTokens: Math.max(0, retainedSurfaceTokens - systemTokens)
+    }
     if (pressureTokens === undefined || this.state.sampledSurfaceTokens === undefined) return
     this.state.contextPressure = {
       ...this.state.contextPressure,
@@ -314,6 +381,15 @@ export function parseStoredGenerationStats(value: unknown): StoredDshGenerationS
   const pressureTokens = nonnegativeInteger(pressure.pressureTokens)
   const projectedTokens = nonnegativeInteger(pressure.projectedTokens)
   const contextWindow = positiveInteger(pressure.contextWindow)
+  const breakdownNodes = parseBreakdownNodes(item.breakdownNodes)
+  const parsedSystemTokens = nonnegativeInteger(breakdown.systemTokens) ?? 0
+  const parsedMessageTokens = nonnegativeInteger(breakdown.messageTokens) ?? 0
+  const legacyBreakdownSurfaceTokens = breakdownNodes === undefined
+    ? parsedSystemTokens + parsedMessageTokens
+    : nonnegativeInteger(item.legacyBreakdownSurfaceTokens) ?? 0
+  const legacyBreakdownSystemTokens = breakdownNodes === undefined
+    ? parsedSystemTokens
+    : nonnegativeInteger(item.legacyBreakdownSystemTokens) ?? 0
   return {
     ...base,
     ...(item as unknown as StoredDshGenerationStats),
@@ -324,10 +400,13 @@ export function parseStoredGenerationStats(value: unknown): StoredDshGenerationS
       ...(contextWindow === undefined ? {} : { contextWindow })
     },
     contextBreakdown: {
-      systemTokens: nonnegativeInteger(breakdown.systemTokens) ?? 0,
+      systemTokens: parsedSystemTokens,
       toolsTokens: nonnegativeInteger(breakdown.toolsTokens) ?? 0,
-      messageTokens: nonnegativeInteger(breakdown.messageTokens) ?? 0
+      messageTokens: parsedMessageTokens
     },
+    breakdownNodes: breakdownNodes ?? [],
+    legacyBreakdownSurfaceTokens,
+    legacyBreakdownSystemTokens,
     openStep: null,
     pendingCalls: {}
   }
@@ -364,8 +443,33 @@ function isTokenDelta(chunk: Record<string, unknown> | undefined): boolean {
   return chunk.type === 'tool-call-delta' && (string(chunk.argumentsDelta).length > 0 || typeof chunk.name === 'string')
 }
 
-function estimateMessage(message: Record<string, unknown>): number {
-  return estimateContent(Array.isArray(message.content) ? message.content : []) + 4
+function estimateMessage(value: unknown): number {
+  const message = record(value)
+  if (!message) return 0
+  const blocks = Array.isArray(message.content) ? message.content : []
+  if (message.role === 'system') {
+    if (blocks.length === 0) return 0
+    const characters = blocks.reduce((total, value) => {
+      const block = record(value)
+      if (!block) return total
+      return total + (block.type === 'text' ? string(block.text).length : JSON.stringify(block).length)
+    }, 0)
+    return Math.ceil(characters / 4) + 4
+  }
+  return estimateContent(blocks) + 4
+}
+
+function parseBreakdownNodes(value: unknown): BreakdownNode[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const nodes: BreakdownNode[] = []
+  for (const entry of value) {
+    const item = record(entry)
+    const seq = nonnegativeInteger(item?.seq)
+    const heuristicTokens = nonnegativeInteger(item?.heuristicTokens)
+    if (seq === undefined || heuristicTokens === undefined || typeof item?.system !== 'boolean') return undefined
+    nodes.push({ seq, heuristicTokens, system: item.system })
+  }
+  return nodes
 }
 
 function estimateContent(blocks: unknown[]): number {

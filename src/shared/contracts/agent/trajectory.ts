@@ -16,6 +16,17 @@ export const agentTrajectoryRecordStatusSchema = z.enum([
   'cancelled'
 ])
 
+export const agentRequestContextItemSchema = z.object({
+  order: z.number().int().positive(),
+  messageId: z.string(),
+  role: z.enum(['system', 'user', 'assistant']),
+  kind: z.enum(['system', 'prompt', 'history', 'user', 'assistant', 'tool', 'context']),
+  title: z.string(),
+  source: z.string(),
+  anchor: z.string(),
+  content: z.string()
+})
+
 export const agentTrajectoryRequestSchema = z.object({
   number: z.number().int().positive(),
   seq: z.number().int().nonnegative(),
@@ -27,6 +38,7 @@ export const agentTrajectoryRequestSchema = z.object({
   model: z.string(),
   detail: z.string(),
   rawJson: z.string(),
+  context: z.array(agentRequestContextItemSchema),
   timeMillis: z.number().int().nonnegative().nullable(),
   durationMillis: z.number().int().nonnegative().nullable()
 })
@@ -65,4 +77,5 @@ export const agentTrajectorySnapshotSchema = z.object({
 
 export type AgentTrajectoryRecord = z.infer<typeof agentTrajectoryRecordSchema>
 export type AgentTrajectoryRequest = z.infer<typeof agentTrajectoryRequestSchema>
+export type AgentRequestContextItem = z.infer<typeof agentRequestContextItemSchema>
 export type AgentTrajectorySnapshot = z.infer<typeof agentTrajectorySnapshotSchema>

@@ -105,6 +105,37 @@ describe("DSH character setting-library tools", () => {
     });
   });
 
+  it("returns every matched setting and complete file content without artificial limits", async () => {
+    const longContent = "长".repeat(130_001);
+    const bulkEntries = Array.from({ length: 1_101 }, (_, index) => entry({
+      id: `bulk-${index}`,
+      title: `批量设定-${String(index).padStart(4, "0")}`,
+      content: `无限搜索命中-${index}`,
+      order: index + 10,
+    }));
+    const runtime = await tools({
+      extraEntries: [
+        ...bulkEntries,
+        entry({ id: "long", title: "超长正文", content: longContent, order: 2_000 }),
+      ],
+    });
+
+    const found = await runtime.byName.get("eleckoi_glob_setting_files").execute({ pattern: "**" });
+    expect(found.files).toHaveLength(1_104);
+    expect(found).not.toHaveProperty("truncated");
+    expect(found).not.toHaveProperty("omitted");
+
+    const searched = await runtime.byName.get("eleckoi_grep_setting_files").execute({ pattern: "无限搜索命中" });
+    expect(searched.matches).toHaveLength(1_101);
+    expect(searched).not.toHaveProperty("omitted");
+
+    const paths = bulkEntries.slice(0, 17).map((item) => item.title).concat("超长正文");
+    const read = await runtime.byName.get("eleckoi_read_setting_files").execute({ paths });
+    expect(read.files).toHaveLength(18);
+    expect(read.files.at(-1).content).toBe(longContent);
+    expect(read.files.at(-1)).not.toHaveProperty("truncated");
+  });
+
   it("supports the complete Android patch operation set on the conversation snapshot", async () => {
     const runtime = await tools();
     const patch = runtime.byName.get("eleckoi_apply_setting_patch");

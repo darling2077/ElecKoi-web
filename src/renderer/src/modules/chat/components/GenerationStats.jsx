@@ -58,14 +58,8 @@ export function ContextMeter({ stats }) {
 
   if (!context) return null;
   const breakdown = stats?.contextBreakdown;
-  const total = breakdown
-    ? breakdown.systemTokens + breakdown.toolsTokens + breakdown.messageTokens
-    : 0;
-  const rows = [
-    { key: "systemTokens", label: "系统提示词", className: "system" },
-    { key: "toolsTokens", label: "工具", className: "tools" },
-    { key: "messageTokens", label: "对话消息", className: "messages" },
-  ];
+  const rows = contextBreakdownRows(breakdown);
+  const total = rows.reduce((sum, row) => sum + row.value, 0);
 
   return (
     <span className="context-meter" ref={rootRef}>
@@ -98,8 +92,7 @@ export function ContextMeter({ stats }) {
           </div>
           <div className="context-meter-bar" aria-hidden="true">
             {rows.map((row) => {
-              const value = breakdown?.[row.key] || 0;
-              const width = total > 0 ? context.percent * value / total : 0;
+              const width = total > 0 ? context.percent * row.value / total : 0;
               return width > 0 ? <i key={row.key} className={row.className} style={{ width: `${width}%` }} /> : null;
             })}
             {!total ? <i className="total" style={{ width: `${context.percent}%` }} /> : null}
@@ -109,7 +102,7 @@ export function ContextMeter({ stats }) {
               {rows.map((row) => (
                 <div key={row.key}>
                   <dt><i className={row.className} />{row.label}</dt>
-                  <dd>{`~${formatTokens(breakdown[row.key])}`}</dd>
+                  <dd>{`~${formatTokens(row.value)}`}</dd>
                 </div>
               ))}
             </dl>
@@ -118,6 +111,15 @@ export function ContextMeter({ stats }) {
       ) : null}
     </span>
   );
+}
+
+export function contextBreakdownRows(breakdown) {
+  if (!breakdown) return [];
+  return [
+    { key: "systemTokens", label: "系统提示词", className: "system", value: breakdown.systemTokens || 0 },
+    { key: "toolsTokens", label: "工具定义", className: "tools", value: breakdown.toolsTokens || 0 },
+    { key: "messageTokens", label: "对话消息", className: "messages", value: breakdown.messageTokens || 0 },
+  ];
 }
 
 export function generationStatGroups(stats) {

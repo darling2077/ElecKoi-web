@@ -49,3 +49,9 @@ export type {
   DshTrajectoryRecordKind,
   DshTrajectoryRecordStatus
 } from './trajectory'
+export type {
+  DshRequestContextItem,
+  DshRequestContextKind,
+  DshRequestContextRole,
+  DshRequestContextSnapshot
+} from './requestContext'

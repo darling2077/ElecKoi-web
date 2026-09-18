@@ -36,9 +36,7 @@ function globTool() {
         status: entries.length ? 'ok' : 'no_matches',
         path: scope,
         required_files: requiredFiles(catalog),
-        files: entries.slice(0, 100).map(summary),
-        truncated: entries.length > 100,
-        omitted: Math.max(0, entries.length - 100)
+        files: entries.map(summary)
       }
     }
   })
@@ -53,8 +51,7 @@ function grepTool() {
       path: { type: 'string', description: '可选目录路径。' },
       glob: { type: 'string', description: '可选路径 Glob。' },
       output_mode: { type: 'string', enum: ['files_with_matches', 'content', 'count'] },
-      ignore_case: { type: 'boolean' },
-      limit: { type: 'integer' }
+      ignore_case: { type: 'boolean' }
     },
     output: output(),
     async execute(args, exec) {
@@ -69,7 +66,6 @@ function grepTool() {
         pathMatcher = args.glob ? globRegex(String(args.glob)) : null
       } catch (error) { return fail('grep_error', message(error)) }
       const mode = args.output_mode || 'files_with_matches'
-      const limit = Math.max(1, Math.min(1000, Number.isInteger(args.limit) ? args.limit : 100))
       const matches = []
       for (const entry of catalog.entries) {
         if (!inScope(entry.path, scope) || (pathMatcher && !pathMatcher.test(relative(entry.path, scope)))) continue
@@ -80,7 +76,7 @@ function grepTool() {
         else if (mode === 'count') matches.push({ ...summary(entry), count: hit.length })
         else matches.push(summary(entry))
       }
-      return { status: matches.length ? 'ok' : 'no_matches', required_files: requiredFiles(catalog), matches: matches.slice(0, limit), omitted: Math.max(0, matches.length - limit) }
+      return { status: matches.length ? 'ok' : 'no_matches', required_files: requiredFiles(catalog), matches }
     }
   })
 }
@@ -89,21 +85,19 @@ function readTool() {
   return defineTool({
     name: 'eleckoi_read_setting_files',
     description: '读取 Glob 或 Grep 已返回的虚拟设定文件完整正文。路径没有 .md 后缀；不得猜测路径；不会修改设定。',
-    parameters: { paths: { type: 'array', items: { type: 'string' }, required: true, description: '1 到 16 个完整虚拟设定文件路径。' } },
+    parameters: { paths: { type: 'array', items: { type: 'string' }, required: true, description: '一个或多个完整虚拟设定文件路径。' } },
     output: output(),
     async execute(args, exec) {
       const bridgeFile = settingBridgeFor(exec)
       const paths = [...new Set((args.paths || []).map((path) => normalizePath(path, false)).filter(Boolean))]
-      if (!paths.length || paths.length > 16) return fail('invalid_arguments', '一次必须读取 1 到 16 个文件。')
+      if (!paths.length) return fail('invalid_arguments', '至少需要读取一个文件。')
       const catalog = await runtimeCatalogOf(readBridge(bridgeFile), bridgeFile)
       const byPath = new Map(catalog.entries.map((entry) => [entry.path, entry]))
       const missing = paths.filter((path) => !byPath.has(path))
       if (missing.length) return { ...fail('not_found', '存在当前虚拟设定库没有的路径，请重新使用 Glob 或 Grep。'), paths: missing }
-      let remaining = 120000
       return { status: 'ok', files: paths.map((path) => {
         const entry = byPath.get(path)
-        const content = entry.content.slice(0, Math.min(40000, remaining)); remaining -= content.length
-        return { ...summary(entry), group_path: entry.groupPath, selection_hint: entry.selectionHint, read_strategy: entry.readStrategy, content, truncated: content.length < entry.content.length }
+        return { ...summary(entry), group_path: entry.groupPath, selection_hint: entry.selectionHint, read_strategy: entry.readStrategy, content: entry.content }
       }) }
     }
   })

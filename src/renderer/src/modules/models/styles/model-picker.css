@@ -19,7 +19,7 @@
   bottom: auto;
   z-index: auto;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   width: min(780px, calc(100vw - 64px));
   height: min(680px, calc(100vh - 64px));
   overflow: hidden;
@@ -488,6 +488,52 @@
 .chat-model-list-tools label:focus-within {
   outline: 2px solid color-mix(in srgb, var(--blue) 44%, transparent);
   outline-offset: 1px;
+}
+
+.chat-model-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 64px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-raised);
+}
+
+.chat-model-actions button {
+  min-width: 84px;
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 9px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.chat-model-cancel {
+  border: 1px solid var(--line-strong);
+  background: var(--control-bg);
+  color: var(--text);
+}
+
+.chat-model-cancel:hover:not(:disabled) {
+  background: var(--control-bg-hover);
+}
+
+.chat-model-save {
+  border: 1px solid var(--blue);
+  background: var(--blue);
+  color: var(--on-accent);
+}
+
+.chat-model-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.chat-model-actions button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--blue) 44%, transparent);
+  outline-offset: 2px;
 }
 
 @media (max-width: 720px) {

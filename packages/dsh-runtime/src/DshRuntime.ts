@@ -49,11 +49,10 @@ import {
   type DshTrajectoryReadOptions
 } from './trajectory'
 import {
-  appendTrajectoryContextActivation,
-  discardTrajectoryContextActivations,
-  trajectoryContextEntries,
-  type DshTrajectoryContextEntry
-} from './trajectoryContext'
+  discardRequestContexts,
+  requestContextPath
+} from './requestContext'
+import { sessionRuntimeIdentityChanged, type DshSessionRuntimeIdentity } from './sessionSnapshot'
 
 const imageLimits: ImageAttachmentLimits = {
   maxImageBytes: 20 * 1024 * 1024,
@@ -81,7 +80,6 @@ export class DshRuntime {
   private readonly conversationSessions = new Map<string, string>()
   private readonly generationStatsProjectors = new Map<string, DshGenerationStatsProjector>()
   private readonly trajectoryEvents = new Map<string, DshSessionEventRecord[]>()
-  private readonly trajectoryContextTurns = new Set<string>()
   private harness: DeepSeekHarness | undefined
   private harnessKey = ''
   private harnessStartTask: Promise<DeepSeekHarness> | undefined
@@ -177,8 +175,7 @@ export class DshRuntime {
           runtimeThreadId
         )
         this.discardGenerationStats(conversationId, sessionRoot, discardRuntimeThreadIds, runtimeThreadId)
-        discardTrajectoryContextActivations(sessionRoot, discardRuntimeThreadIds, runtimeThreadId)
-        this.discardTrajectoryContextTurns(conversationId, discardRuntimeThreadIds, runtimeThreadId)
+        discardRequestContexts(sessionRoot, discardRuntimeThreadIds, runtimeThreadId)
       }
       const variableStateFile = join(sessionRoot, 'eleckoi-variable-state.json')
       writeVariableBridge(variableStateFile, variableContext)
@@ -186,6 +183,7 @@ export class DshRuntime {
       writeSettingBridge(settingStateFile, conversationContext, variableContext)
       const contextFile = join(sessionRoot, 'eleckoi-conversation-context.json')
       writeContextBridge(contextFile, text, conversationContext)
+      const requestContextFile = requestContextPath(sessionRoot, runtimeThreadId)
       const effectiveToolPolicy = sessionToolPolicy(
         toolPolicy,
         variableContext !== undefined,
@@ -200,27 +198,34 @@ export class DshRuntime {
         selectedWebSearch,
         settings
       )
-      writeSessionSnapshot(
-        join(this.options.runtimeDataRoot, 'session-snapshots'),
+      const snapshotRoot = join(this.options.runtimeDataRoot, 'session-snapshots')
+      const previousSessionSnapshot = readSessionSnapshot(snapshotRoot, runtimeThreadId)
+      const nextSessionSnapshot = {
+        conversationId,
         runtimeThreadId,
-        {
-          conversationId,
-          runtimeThreadId,
-          mountedPresetId,
-          model: requestSnapshot(settings, mainBinding),
-          subagentModel: requestSnapshot(effectiveSubagentSettings, subagentBinding),
-          variableStateFile,
-          settingStateFile,
-          contextFile,
-          variablesEnabled: variableContext !== undefined,
-          settingLibraryEnabled: conversationContext?.settingLibrary !== undefined,
-          disabledToolGroupIds: effectiveToolPolicy.disabledGroupIds,
-          roleplayPlanSteps: selectedAgentPreset.roleplayPlan.steps,
-          historyCompactionInstructions: selectedAgentPreset.historyCompactionInstructions ?? '',
-          conversationContext: conversationContext ?? {
-            characterId: '', characterName: '', persona: {}, history: []
-          }
+        mountedPresetId,
+        model: requestSnapshot(settings, mainBinding),
+        subagentModel: requestSnapshot(effectiveSubagentSettings, subagentBinding),
+        variableStateFile,
+        settingStateFile,
+        contextFile,
+        requestContextFile,
+        variablesEnabled: variableContext !== undefined,
+        settingLibraryEnabled: conversationContext?.settingLibrary !== undefined,
+        disabledToolGroupIds: effectiveToolPolicy.disabledGroupIds,
+        roleplayPlanSteps: selectedAgentPreset.roleplayPlan.steps,
+        historyCompactionInstructions: selectedAgentPreset.historyCompactionInstructions ?? '',
+        conversationContext: conversationContext ?? {
+          characterId: '', characterName: '', persona: {}, history: []
         }
+      }
+      if (sessionRuntimeIdentityChanged(previousSessionSnapshot, nextSessionSnapshot)) {
+        await this.disposeRuntimeThreads([runtimeThreadId], '')
+      }
+      writeSessionSnapshot(
+        snapshotRoot,
+        runtimeThreadId,
+        nextSessionSnapshot
       )
       this.conversationSessions.set(conversationId, runtimeThreadId)
       if (run.cancelled) return 'cancelled'
@@ -236,7 +241,6 @@ export class DshRuntime {
               attachment: attachment as unknown as ImageAttachmentRef
             }))
           ]
-      const traceEntries = trajectoryContextEntries(conversationContext)
       const result = await this.runWithRecovery(
         harness,
         catalog,
@@ -245,7 +249,7 @@ export class DshRuntime {
         content,
         runtimeThreadId,
         (notification) => {
-          this.captureTrajectoryEvent(conversationId, runtimeThreadId, sessionRoot, traceEntries, notification)
+          this.captureTrajectoryEvent(conversationId, runtimeThreadId, notification)
           if (run.cancelled) return
           const generationStats = generationStatsProjector.project(notification, runtimeThreadId)
           if (generationStats !== undefined) {
@@ -342,7 +346,6 @@ export class DshRuntime {
     this.activeRuns.delete(conversationId)
     clearConversationEntries(this.trajectoryEvents, conversationId)
     clearConversationEntries(this.generationStatsProjectors, conversationId)
-    this.discardTrajectoryContextTurns(conversationId, discardedThreadIds, '')
   }
 
   generationStats(conversationId: string, runtimeThreadId: string): DshGenerationStats | undefined {
@@ -383,7 +386,6 @@ export class DshRuntime {
     this.conversationSessions.clear()
     this.trajectoryEvents.clear()
     this.generationStatsProjectors.clear()
-    this.trajectoryContextTurns.clear()
   }
 
   async verify(): Promise<void> {
@@ -591,26 +593,11 @@ export class DshRuntime {
   private captureTrajectoryEvent(
     conversationId: string,
     runtimeThreadId: string,
-    sessionRoot: string,
-    contextEntries: DshTrajectoryContextEntry[],
     notification: HarnessNotification
   ): void {
     if (notification.method !== 'session.event' || notification.params.sessionId !== runtimeThreadId) return
     const event = notification.params.event
     if (!isRecord(event) || typeof event.type !== 'string') return
-    if (event.type === 'turn/start') {
-      const data = isRecord(event.data) ? event.data : {}
-      const turn = typeof data.turn === 'number' && Number.isSafeInteger(data.turn) ? data.turn : 0
-      const activationKey = `${conversationId}:${runtimeThreadId}:${turn}`
-      if (turn > 0 && !this.trajectoryContextTurns.has(activationKey)) {
-        appendTrajectoryContextActivation(sessionRoot, runtimeThreadId, {
-          turn,
-          time: typeof event.time === 'number' && Number.isSafeInteger(event.time) ? event.time : Date.now(),
-          entries: contextEntries
-        })
-        this.trajectoryContextTurns.add(activationKey)
-      }
-    }
     const key = trajectoryKey(conversationId, runtimeThreadId)
     const events = this.trajectoryEvents.get(key) ?? []
     const seq = typeof event.seq === 'number' && Number.isSafeInteger(event.seq) && event.seq >= 0
@@ -684,18 +671,6 @@ export class DshRuntime {
     }
   }
 
-  private discardTrajectoryContextTurns(
-    conversationId: string,
-    threadIds: readonly string[],
-    selectedThreadId: string
-  ): void {
-    const prefixes = new Set(threadIds
-      .filter((threadId) => threadId && threadId !== selectedThreadId)
-      .map((threadId) => `${conversationId}:${threadId}:`))
-    for (const key of this.trajectoryContextTurns) {
-      if ([...prefixes].some((prefix) => key.startsWith(prefix))) this.trajectoryContextTurns.delete(key)
-    }
-  }
 }
 
 function resolvePresetPluginSpecifiers(source: string): string {
@@ -799,6 +774,17 @@ function resolveCompactionPolicy(mainSettings: DshModelSettings | undefined): {
 function writeSessionSnapshot(root: string, runtimeThreadId: string, value: Record<string, unknown>): void {
   mkdirSync(root, { recursive: true })
   writeAtomically(join(root, `${safeRuntimeThreadFile(runtimeThreadId)}.json`), JSON.stringify(value, null, 2))
+}
+
+function readSessionSnapshot(root: string, runtimeThreadId: string): DshSessionRuntimeIdentity | undefined {
+  const path = join(root, `${safeRuntimeThreadFile(runtimeThreadId)}.json`)
+  if (!existsSync(path)) return undefined
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8')) as unknown
+    return isRecord(value) ? value : undefined
+  } catch {
+    return undefined
+  }
 }
 
 function discardSessionSnapshots(root: string, threadIds: readonly string[], selectedThreadId: string): void {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   billedInputTokens,
   cacheHitPercent,
+  contextBreakdownRows,
   contextOccupancy,
   formatDuration,
   formatTokens,
@@ -55,6 +56,17 @@ describe('generation statistics display', () => {
     });
     expect(formatTokens(18_700)).toBe('18.7K');
     expect(formatDuration(162_000)).toBe('2m42s');
+  });
+
+  it('keeps DSH provider pressure separate from the heuristic composition', () => {
+    const rows = contextBreakdownRows({
+      systemTokens: 0,
+      toolsTokens: 551,
+      messageTokens: 5_600,
+    });
+
+    expect(rows.map((row) => row.label)).toEqual(['系统提示词', '工具定义', '对话消息']);
+    expect(rows.reduce((total, row) => total + row.value, 0)).toBe(6_151);
   });
 
   it('keeps the statistics strip and context meter stable while a regenerated run warms up', () => {

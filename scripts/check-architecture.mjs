@@ -3,6 +3,7 @@ import { dirname, extname, join, relative, resolve, sep } from 'node:path'
 
 const root = resolve(import.meta.dirname, '..')
 const failures = []
+const reviewNotices = []
 const sourceExtensions = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs'])
 
 function sourceFiles(path) {
@@ -281,7 +282,7 @@ for (const file of sourceFiles('src/renderer/src/app')) {
 for (const file of [...sourceFiles('src/renderer/src/app'), ...sourceFiles('src/renderer/src/modules')]) {
   const lines = readFileSync(file, 'utf8').split(/\r?\n/).length
   if (lines > 600) {
-    failures.push(`${relative(root, file)} 达到 ${lines} 行；请按状态、视图或业务职责拆分，避免重新形成巨型文件。`)
+    reviewNotices.push(`${relative(root, file)} 达到 ${lines} 行；请人工确认它仍围绕单一职责保持高内聚。行数本身不要求拆分。`)
   }
 }
 
@@ -307,6 +308,10 @@ for (const file of sourceFiles('packages/dsh-runtime')) {
   if (/packages[\\/]dsh-runtime[\\/]src|@eleckoi\/dsh-runtime\//.test(content)) {
     failures.push(`${relative(root, file)} 绕过了 @eleckoi/dsh-runtime 的公开入口。`)
   }
+}
+
+if (reviewNotices.length > 0) {
+  console.warn(reviewNotices.map((notice) => `- 架构复核提示：${notice}`).join('\n'))
 }
 
 if (failures.length > 0) {

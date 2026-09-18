@@ -5,6 +5,12 @@ import { DshChevronRightIcon, DshCloseIcon } from "../../../ui/icons/dshComposer
 import { getTrajectory } from "../api/chatApi.js";
 
 const pageSize = 400;
+const toolContextCollapseCharacters = 320;
+const toolContextCollapseLines = 8;
+const contextCollapseCharacters = 3_000;
+const contextCollapseLines = 40;
+const contextPreviewCharacters = 620;
+const contextPreviewLines = 7;
 const lanes = [
   { id: "input", label: "输入", kinds: new Set(["system", "user", "context"]) },
   { id: "model", label: "模型", kinds: new Set(["assistant", "compaction"]) },
@@ -266,7 +272,7 @@ export function TrajectoryDialog({ conversationId, isSending, onClose }) {
           }}
         />
 
-        <div className={`trajectory-content${inspectorOpen ? " has-inspector" : ""}`}>
+        <div className={`trajectory-content${inspectorOpen ? " has-inspector" : ""}${selectedRequest && detailTab === "context" ? " has-context-inspector" : ""}`}>
           <main
             ref={ledgerRef}
             className="trajectory-ledger"
@@ -315,7 +321,7 @@ export function TrajectoryDialog({ conversationId, isSending, onClose }) {
                     onSelectRequest={(request) => {
                       setSelectedId("");
                       setSelectedRequestSeq(request.seq);
-                      setDetailTab("summary");
+                      setDetailTab("context");
                     }}
                   />)}
                 </div> : null}
@@ -402,12 +408,20 @@ function TrajectoryRow({ record, selected, selectedRequestSeq, onSelect, onSelec
 }
 
 function TrajectoryInspector({ record, request, tab, onTabChange, onClose }) {
-  const tabs = [
-    ["summary", "摘要"],
-    ["preview", "预览"],
-    ["raw", "原始"],
-    ["source", "来源"],
-  ];
+  const tabs = request
+    ? [
+        ["summary", "摘要"],
+        ["context", "上下文"],
+        ["preview", "预览"],
+        ["raw", "原始"],
+        ["source", "来源"],
+      ]
+    : [
+        ["summary", "摘要"],
+        ["preview", "预览"],
+        ["raw", "原始"],
+        ["source", "来源"],
+      ];
   return <aside className="trajectory-inspector" aria-label="事件详情">
     <div className="trajectory-inspector-heading">
       {request ? <>
@@ -450,6 +464,7 @@ function TrajectoryInspector({ record, request, tab, onTabChange, onClose }) {
           <DetailTerm label="时间" value={formatTime(record.timeMillis)} />
           <DetailTerm label="耗时" value={formatDuration(record.durationMillis)} />
         </dl> : null}
+        {tab === "context" && request ? <RequestContextPanel key={request.seq} items={request.context || []} /> : null}
         {tab === "preview" ? <InspectorPre value={request?.detail || record?.output || record?.input || record?.preview || record?.detail} /> : null}
         {tab === "raw" ? <InspectorPre value={request?.rawJson || record?.rawJson} /> : null}
         {tab === "source" ? <>
@@ -458,6 +473,78 @@ function TrajectoryInspector({ record, request, tab, onTabChange, onClose }) {
         </> : null}
       </div>
   </aside>;
+}
+
+function RequestContextPanel({ items }) {
+  const [expandedItems, setExpandedItems] = useState(() => new Set());
+  if (!items.length) return <p className="trajectory-no-value">这个请求没有可读取的上下文快照</p>;
+  return <ol className="trajectory-request-context">
+    {items.map((item, index) => {
+      const itemKey = `${item.messageId || "message"}-${item.order || index}`;
+      const longContent = shouldCollapseRequestContext(item);
+      const expanded = expandedItems.has(itemKey);
+      const content = longContent && !expanded ? requestContextPreview(item.content) : item.content;
+      return <li key={itemKey}>
+        <header>
+          <span className="trajectory-context-order">{item.order || index + 1}</span>
+          <span className={`trajectory-context-role role-${item.role}`}>{contextRoleLabel(item.role)}</span>
+          <strong>{item.title || contextRoleLabel(item.role)}</strong>
+          {item.source ? <small>{item.source}</small> : null}
+        </header>
+        <div className={`trajectory-context-content${longContent && expanded ? " is-expanded" : ""}`}>{content}</div>
+        {longContent ? <button
+          type="button"
+          className="trajectory-context-expand"
+          aria-expanded={expanded}
+          onClick={() => setExpandedItems((current) => {
+            const next = new Set(current);
+            if (next.has(itemKey)) next.delete(itemKey);
+            else next.add(itemKey);
+            return next;
+          })}
+        >
+          <span>{expanded ? "收起全文" : "展开全文"}</span>
+          <small>{formatContextSize(item.content)}</small>
+        </button> : null}
+      </li>;
+    })}
+  </ol>;
+}
+
+function shouldCollapseRequestContext(item) {
+  const content = typeof item.content === "string" ? item.content : "";
+  const lineCount = contextLineCount(content);
+  if (item.kind === "tool") {
+    return content.length > toolContextCollapseCharacters || lineCount > toolContextCollapseLines;
+  }
+  return content.length > contextCollapseCharacters || lineCount > contextCollapseLines;
+}
+
+function requestContextPreview(content) {
+  const source = String(content);
+  const allLines = source.split(/\r?\n/);
+  let preview = allLines.slice(0, contextPreviewLines).join("\n").trimEnd();
+  let truncated = allLines.length > contextPreviewLines;
+  if (preview.length > contextPreviewCharacters) {
+    preview = preview.slice(0, contextPreviewCharacters).trimEnd();
+    truncated = true;
+  }
+  return truncated ? `${preview}\n…` : preview;
+}
+
+function formatContextSize(content) {
+  const value = String(content);
+  return `${new Intl.NumberFormat("zh-CN").format(value.length)} 字符 · ${contextLineCount(value)} 行`;
+}
+
+function contextLineCount(content) {
+  return String(content).split(/\r?\n/).length;
+}
+
+function contextRoleLabel(role) {
+  if (role === "system") return "系统";
+  if (role === "assistant") return "AI";
+  return "用户";
 }
 
 function DetailTerm({ label, value }) {

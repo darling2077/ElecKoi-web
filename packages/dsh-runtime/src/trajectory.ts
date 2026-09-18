@@ -6,7 +6,12 @@ import {
 } from 'node:fs'
 import { isAbsolute, join, relative } from 'node:path'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
-import { readTrajectoryContextActivations } from './trajectoryContext'
+import {
+  readRequestContextSnapshots,
+  type DshRequestContextItem
+} from './requestContext'
+
+const REQUEST_PROJECTION_PLUGIN = 'eleckoi-request-projection'
 
 export type DshTrajectoryRecordKind =
   | 'system'
@@ -29,6 +34,7 @@ export interface DshTrajectoryRequest {
   model: string
   detail: string
   rawJson: string
+  context: DshRequestContextItem[]
   timeMillis: number | null
   durationMillis: number | null
 }
@@ -150,9 +156,9 @@ export function readDshTrajectory(
   }
 
   const projected = projectDshTrajectory(mergeLiveEvents(events, liveEvents), header)
-  projected.records = mergeContextActivations(
+  attachRequestContexts(
     projected.records,
-    readTrajectoryContextActivations(conversationStateRoot, runtimeThreadId)
+    readRequestContextSnapshots(conversationStateRoot, runtimeThreadId)
   )
   const beforeIndex = options.beforeIndex
   const eligible = beforeIndex === undefined
@@ -172,96 +178,15 @@ export function readDshTrajectory(
   }
 }
 
-function mergeContextActivations(
+function attachRequestContexts(
   records: DshTrajectoryRecord[],
-  activations: ReturnType<typeof readTrajectoryContextActivations>
-): DshTrajectoryRecord[] {
-  if (records.length === 0 || activations.length === 0) return records
-  const knownTurns = new Set(records.flatMap((record) => record.turn === null ? [] : [record.turn]))
-  const activatedTurns = new Set(activations.map((activation) => activation.turn))
-  const merged = records.filter((record) => (
-    record.type !== 'eleckoi/context-message'
-    || record.turn === null
-    || !activatedTurns.has(record.turn)
-  ))
-  for (const activation of [...activations].sort((left, right) => left.time - right.time)) {
-    if (!knownTurns.has(activation.turn)) continue
-    const turnRecord = merged.find((record) => record.turn === activation.turn)
-    const turnStep = turnRecord?.step ?? null
-    const turnSeq = turnRecord?.seq ?? 0
-    const contextRecords = activation.entries.map((entry, entryIndex): DshTrajectoryRecord => ({
-      id: `eleckoi-context:${activation.time}:${entry.key || entryIndex}`,
-      index: 0,
-      seq: turnSeq,
-      type: 'eleckoi/context',
-      kind: 'context',
-      title: entry.title,
-      preview: preview(entry.content),
-      source: entry.source,
-      input: entry.content,
-      output: '',
-      detail: pretty({
-        id: entry.id, title: entry.title, source: entry.source,
-        anchor: entry.anchor, role: entry.role, content: entry.content
-      }),
-      rawJson: pretty({
-        type: 'eleckoi/context', time: activation.time,
-        data: {
-          id: entry.id, title: entry.title, source: entry.source,
-          anchor: entry.anchor, role: entry.role, content: entry.content
-        }
-      }),
-      timeMillis: activation.time,
-      durationMillis: null,
-      turn: activation.turn,
-      step: turnStep,
-      status: 'complete',
-      requests: []
-    }))
-    insertContextRecords(merged, activation.turn, contextRecords, activation.entries)
-  }
-  merged.forEach((record, index) => { record.index = index + 1 })
-  return merged
-}
-
-function insertContextRecords(
-  records: DshTrajectoryRecord[],
-  turn: number,
-  contexts: DshTrajectoryRecord[],
-  entries: ReturnType<typeof readTrajectoryContextActivations>[number]['entries']
+  snapshots: ReturnType<typeof readRequestContextSnapshots>
 ): void {
-  const grouped = new Map<string, DshTrajectoryRecord[]>()
-  contexts.forEach((record, index) => {
-    const anchor = entries[index]?.anchor
-    const placement = anchor === 'insert_point_3'
-      ? 'before-user'
-      : anchor === 'insert_point_4' || anchor === 'insert_point_5'
-        ? 'after-user'
-        : 'before-dialogue'
-    grouped.set(placement, [...(grouped.get(placement) ?? []), record])
-  })
-  const insert = (placement: string, index: number) => {
-    const values = grouped.get(placement) ?? []
-    if (values.length > 0) records.splice(Math.max(0, Math.min(index, records.length)), 0, ...values)
+  if (snapshots.length === 0) return
+  const byRequestSeq = new Map(snapshots.map((snapshot) => [snapshot.requestSeq, snapshot.items]))
+  for (const record of records) {
+    for (const request of record.requests) request.context = byRequestSeq.get(request.seq) ?? []
   }
-  const firstTurnIndex = records.findIndex((record) => record.turn === turn)
-  if (firstTurnIndex < 0) return
-  insert('before-dialogue', firstTurnIndex)
-
-  const currentUserIndex = lastIndex(records, (record) => record.turn === turn && record.kind === 'user')
-  insert('before-user', currentUserIndex < 0 ? firstTurnIndex : currentUserIndex)
-
-  const lastUserIndex = lastIndex(records, (record) => record.turn === turn && record.kind === 'user')
-  const lastContextIndex = lastIndex(records, (record) => record.turn === turn && record.kind === 'context')
-  insert('after-user', (lastUserIndex >= 0 ? lastUserIndex : lastContextIndex >= 0 ? lastContextIndex : firstTurnIndex) + 1)
-
-}
-
-function lastIndex<T>(values: readonly T[], predicate: (value: T) => boolean): number {
-  for (let index = values.length - 1; index >= 0; index -= 1) {
-    if (predicate(values[index]!)) return index
-  }
-  return -1
 }
 
 function mergeLiveEvents(
@@ -282,6 +207,7 @@ export function projectDshTrajectory(
   header: DshSessionHeader = {}
 ): Pick<DshTrajectoryPage, 'records' | 'startedAtMillis' | 'completedAtMillis'> {
   const events = input.map((event, index) => normalizeEvent(event, index))
+  const seedEndSeq = events.findLast((event) => event.type === 'session/end-seed')?.seq ?? -1
   const records: DshTrajectoryRecord[] = []
   const stepStarts = new Map<string, number>()
   const toolRecords = new Map<string, DshTrajectoryRecord>()
@@ -334,7 +260,7 @@ export function projectDshTrajectory(
     if (type === 'step/start') {
       activeTurn = eventTurn ?? activeTurn
       activeStep = eventStep
-      if (activeTurn !== null && activeStep !== null) {
+      if (event.seq > seedEndSeq && activeTurn !== null && activeStep !== null) {
         if (time !== null) stepStarts.set(stepKey(activeTurn, activeStep), time)
         pendingRequests.push({
           attached: false,
@@ -349,6 +275,7 @@ export function projectDshTrajectory(
             model: currentRequestHeader?.model ?? '',
             detail: currentRequestHeader?.detail ?? pretty(data),
             rawJson: pretty(event),
+            context: [],
             timeMillis: time,
             durationMillis: null
           }
@@ -398,6 +325,7 @@ export function projectDshTrajectory(
     if (type === 'user/message') {
       const message = messageFrom(data)
       const source = record(message.source)
+      if (text(source.plugin) === REQUEST_PROJECTION_PLUGIN) continue
       const sourceKind = text(source.kind)
       const content = contentText(message.content)
       const kind: DshTrajectoryRecordKind = sourceKind === 'user' || sourceKind === '' ? 'user' : 'context'

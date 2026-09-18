@@ -31,24 +31,29 @@ describe('DSH trajectory projection', () => {
         source: { kind: 'agent-instructions' },
         role: 'user'
       }, 1_030),
-      event(4, 'request/header', {
+      event(4, 'user/message', {
+        content: [{ type: 'text', text: 'ELECKOI_REQUEST_PROJECTION_V1\n[{"content":"内部定义"}]' }],
+        source: { kind: 'plugin', plugin: 'eleckoi-request-projection' },
+        role: 'user'
+      }, 1_035),
+      event(5, 'request/header', {
         header: { system: '系统提示词', config: { provider: 'deepseek-official', model: 'deepseek-chat' } },
         reason: 'initial'
       }, 1_040),
-      event(5, 'assistant/message', {
+      event(6, 'assistant/message', {
         turn: 1,
         step: 1,
         message: { content: [{ type: 'text', text: '我来查看' }] },
         usage: { inputTokens: 120, outputTokens: 8 }
       }, 1_200),
-      event(6, 'tool/call', {
+      event(7, 'tool/call', {
         turn: 1,
         step: 1,
         callId: 'call-a',
         name: 'read',
         arguments: '{"path":"README.md"}'
       }, 1_220),
-      event(7, 'tool/result', {
+      event(8, 'tool/result', {
         turn: 1,
         step: 1,
         message: {
@@ -82,6 +87,8 @@ describe('DSH trajectory projection', () => {
     })
     expect(JSON.parse(result.records[3]?.rawJson ?? '[]')).toHaveLength(2)
     expect(JSON.stringify(result)).not.toContain('系统提示词')
+    expect(JSON.stringify(result)).not.toContain('ELECKOI_REQUEST_PROJECTION_V1')
+    expect(JSON.stringify(result)).not.toContain('内部定义')
     expect(result).toMatchObject({ startedAtMillis: 990, completedAtMillis: 1_270 })
   })
 
@@ -107,17 +114,38 @@ describe('DSH trajectory projection', () => {
       join(directory, `session.v${sessionFormatCatalog.currentVersion}.jsonl`),
       `${rows.map((row) => JSON.stringify(row)).join('\n')}\n{"partial":`
     )
+    const contextFile = join(root, 'eleckoi-request-context', `${runtimeThreadId}.jsonl`)
+    mkdirSync(join(root, 'eleckoi-request-context'), { recursive: true })
+    writeFileSync(contextFile, `${JSON.stringify({
+      requestSeq: 1,
+      turn: 1,
+      step: 1,
+      timeMillis: 1_020,
+      items: [{
+        order: 1,
+        messageId: 'message-user',
+        role: 'user',
+        kind: 'user',
+        title: '用户最新输入',
+        source: '本轮输入',
+        anchor: '',
+        content: '问题'
+      }]
+    })}\n`)
 
     const latest = readDshTrajectory(root, runtimeThreadId, { limit: 2 })
     expect(latest.records.map((record) => record.kind)).toEqual(['tool', 'assistant'])
     expect(latest).toMatchObject({ totalRecords: 3, hasMore: true, beforeIndex: 2 })
+    expect(latest.records.flatMap((record) => record.requests)[0]?.context).toEqual([
+      expect.objectContaining({ order: 1, title: '用户最新输入', content: '问题' })
+    ])
 
     const older = readDshTrajectory(root, runtimeThreadId, { beforeIndex: latest.beforeIndex ?? undefined, limit: 2 })
     expect(older.records.map((record) => record.kind)).toEqual(['user'])
     expect(older).toMatchObject({ totalRecords: 3, hasMore: false, beforeIndex: 1 })
   })
 
-  it('numbers every model request while omitting DSH internal system prompts', () => {
+  it('keeps DSH session-global request numbers across turns while omitting internal system prompts', () => {
     const result = projectDshTrajectory([
       event(0, 'turn/start', { turn: 1 }, 1_000),
       event(1, 'step/start', { turn: 1, step: 1 }, 1_010),
@@ -139,11 +167,23 @@ describe('DSH trajectory projection', () => {
         turn: 1,
         step: 2,
         message: { content: [{ type: 'text', text: '第二次' }] }
-      }, 1_060)
+      }, 1_060),
+      event(7, 'turn/end', { turn: 1 }, 1_070),
+      event(8, 'turn/start', { turn: 2 }, 1_080),
+      event(9, 'step/start', { turn: 2, step: 1 }, 1_090),
+      event(10, 'request/header', {
+        header: { system: '系统提示词', tools: [], config: { model: 'deepseek-chat' } },
+        reason: 'initial'
+      }, 1_100),
+      event(11, 'assistant/message', {
+        turn: 2,
+        step: 1,
+        message: { content: [{ type: 'text', text: '新轮第一次' }] }
+      }, 1_110)
     ])
 
-    expect(result.records.map((record) => record.kind)).toEqual(['assistant', 'assistant'])
-    expect(result.records.flatMap((record) => record.requests.map((request) => request.number))).toEqual([1, 2])
+    expect(result.records.map((record) => record.kind)).toEqual(['assistant', 'assistant', 'assistant'])
+    expect(result.records.flatMap((record) => record.requests.map((request) => request.number))).toEqual([1, 2, 3])
     expect(JSON.stringify(result)).not.toContain('系统提示词')
   })
 

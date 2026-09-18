@@ -1,7 +1,16 @@
-import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createAssistantMessage, createUserMessage, freezeMessage, isAgentLoopRequest } from '@deepseek-ai/dsh-llm'
+import { createHash } from 'node:crypto'
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { readSessionSnapshot } from './session-snapshot.mjs'
 
 export const name = 'eleckoi-conversation-context'
+export const projectionPlugin = 'eleckoi-request-projection'
+
+const PROJECTION_VERSION = 1
+const PROJECTION_PREFIX = `ELECKOI_REQUEST_PROJECTION_V${PROJECTION_VERSION}\n`
+const recordedRequestSnapshots = new Set()
+const knownRequestContextDefinitions = new Map()
 
 /**
  * Seed a newly-created DSH Session from ElecKoi's authoritative active branch.
@@ -88,41 +97,361 @@ export function installConversationContext(agentCtx, snapshotRoot, sourceSession
         .join('\n\n')
     }
   })
-  const disposeContext = agentCtx.systemPrompt.context({
-    name: 'eleckoi:conversation-context',
-    order: 10,
-    text: () => renderRuntimeContext(read().conversationContext)
-  })
-  const disposeStepProjection = agentCtx.on('agent/pre-step', async ({ step, signal }, next) => {
+  const disposeStepProjection = agentCtx.on('agent/pre-step', async ({ agent, signal }, next) => {
     const decision = await next()
-    if (decision.kind === 'reject' || signal.aborted || step !== 1) return decision
+    if (decision.kind === 'reject' || signal.aborted) return decision
+    const plan = requestProjectionPlan(read().conversationContext)
+    if (plan.length === 0 || activeProjectionEnvelope(agent.session)) return decision
     return {
       ...decision,
-      messages: projectModelMessages(decision.messages, read().conversationContext)
+      messages: [...decision.messages, projectionEnvelope(plan)]
     }
   })
+  const disposeRequestProjection = agentCtx.on('llm/stream', (options, next) => {
+    if (!isAgentLoopRequest(options) || options.sessionId !== sourceSessionId) return next()
+    const session = agentCtx.sessions.get(options.sessionId)
+    if (!session) return next()
+    const snapshot = read()
+    const plan = requestProjectionPlan(snapshot.conversationContext)
+    ensureProjectionEnvelope(session, plan)
+    const productMessages = projectProductHistory(session.deriveMessages(), snapshot.conversationContext)
+    const messages = projectRequestMessages(productMessages, plan)
+    recordRequestContextSnapshot(snapshot.requestContextFile, session, messages, plan)
+    return agentCtx.llm.stream({
+      ...options,
+      messages
+    })
+  })
   return () => {
+    disposeRequestProjection()
     disposeStepProjection()
-    disposeContext()
     disposeInstructions()
   }
 }
 
-/** Place current-turn prompt entries into DSH's durable admitted message batch. */
-export function projectModelMessages(messages, context) {
-  const injections = settingInjections(context)
-  const before = injections.filter((entry) => entry.anchor === 'insert_point_3')
-  const after = injections.filter((entry) => entry.anchor === 'insert_point_4' || entry.anchor === 'insert_point_5')
-  if (before.length === 0 && after.length === 0) return messages
-  const currentUserIndex = findCurrentUserIndex(messages)
-  if (currentUserIndex < 0) return messages
+/** Freeze the complete active position graph into one durable projection definition. */
+export function requestProjectionPlan(context) {
+  return settingInjections(context)
+    .filter((entry) => entry.anchor !== 'instructions')
+    .map((entry) => ({
+      id: entry.id,
+      anchor: entry.anchor,
+      role: entry.role,
+      content: entry.content,
+      placementRank: entry.placementRank,
+      positionOrder: entry.positionOrder,
+      order: entry.order,
+      traceTitle: entry.traceTitle,
+      traceSource: entry.traceSource
+    }))
+}
+
+/**
+ * Rebuild the exact provider-facing message order for one model request.
+ * The projection envelope itself stays durable in the DSH log but never reaches
+ * the provider. Every tool continuation is therefore reassembled against the
+ * latest real user input and the tool flow accumulated after it.
+ */
+export function projectRequestMessages(messages, plan = projectionPlanFromMessages(messages)) {
+  const visible = messages.filter((message) => !isProjectionEnvelope(message))
+  if (!plan) return visible
+  const system = visible.filter((message) => message?.role === 'system')
+  const dialogue = visible.filter((message) => message?.role !== 'system')
+  const latestUserIndex = dialogue.findLastIndex(isDirectUserMessage)
+  if (latestUserIndex < 0) {
+    return [
+      ...system,
+      ...messagesForAnchor(plan, 'insert_point_1'),
+      ...messagesForAnchor(plan, 'insert_point_2'),
+      ...dialogue,
+      ...messagesForAnchor(plan, 'insert_point_3'),
+      ...messagesForAnchor(plan, 'insert_point_4'),
+      ...messagesForAnchor(plan, 'insert_point_5')
+    ]
+  }
   return [
-    ...messages.slice(0, currentUserIndex),
-    ...before.map(contextMessage),
-    messages[currentUserIndex],
-    ...after.map(contextMessage),
-    ...messages.slice(currentUserIndex + 1)
+    ...system,
+    ...messagesForAnchor(plan, 'insert_point_1'),
+    ...messagesForAnchor(plan, 'insert_point_2'),
+    ...dialogue.slice(0, latestUserIndex),
+    ...messagesForAnchor(plan, 'insert_point_3'),
+    dialogue[latestUserIndex],
+    ...messagesForAnchor(plan, 'insert_point_4'),
+    ...dialogue.slice(latestUserIndex + 1),
+    ...messagesForAnchor(plan, 'insert_point_5')
   ]
+}
+
+export function projectionPlanFromMessages(messages) {
+  const envelope = messages.findLast(isProjectionEnvelope)
+  if (!envelope) return undefined
+  return decodeProjectionEnvelope(envelope)
+}
+
+export function isProjectionEnvelope(message) {
+  return message?.role === 'user'
+    && message?.source?.kind === 'plugin'
+    && message?.source?.plugin === projectionPlugin
+}
+
+/** Persist an author-readable snapshot of the exact messages sent by one loop request. */
+export function recordRequestContextSnapshot(file, session, messages, plan = []) {
+  if (typeof file !== 'string' || !file) return
+  const boundary = session.snapshotEvents().findLast((event) => event?.type === 'step/start')
+  const turn = boundary?.data?.turn
+  const step = boundary?.data?.step
+  const requestSeq = boundary?.seq
+  if (!Number.isSafeInteger(turn) || turn < 1
+    || !Number.isSafeInteger(step) || step < 1
+    || !Number.isSafeInteger(requestSeq) || requestSeq < 0) return
+  const key = `${file}\0${requestSeq}`
+  if (recordedRequestSnapshots.has(key)) return
+  const items = requestContextItems(messages, plan)
+  const definitions = requestContextDefinitionKeys(file)
+  const pendingDefinitions = new Set()
+  const rows = []
+  const itemRefs = items.map((item) => {
+    const key = requestContextDefinitionKey(item)
+    if (!definitions.has(key) && !pendingDefinitions.has(key)) {
+      pendingDefinitions.add(key)
+      rows.push({ type: 'definition', key, ...item, order: undefined })
+    }
+    return { order: item.order, key }
+  })
+  rows.push({
+    type: 'request',
+    version: 1,
+    requestSeq,
+    turn,
+    step,
+    timeMillis: Number.isSafeInteger(boundary.time) && boundary.time >= 0 ? boundary.time : Date.now(),
+    items: itemRefs
+  })
+  try {
+    mkdirSync(dirname(file), { recursive: true })
+    appendFileSync(file, `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`, 'utf8')
+    for (const definitionKey of pendingDefinitions) definitions.add(definitionKey)
+    recordedRequestSnapshots.add(key)
+  } catch (error) {
+    process.emitWarning(`ElecKoi could not persist request context: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+function requestContextDefinitionKeys(file) {
+  const existing = knownRequestContextDefinitions.get(file)
+  if (existing) return existing
+  const keys = new Set()
+  if (existsSync(file)) {
+    for (const line of readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue
+      try {
+        const value = JSON.parse(line)
+        if (value?.type === 'definition' && typeof value.key === 'string') keys.add(value.key)
+      } catch {
+        continue
+      }
+    }
+  }
+  knownRequestContextDefinitions.set(file, keys)
+  return keys
+}
+
+function requestContextDefinitionKey(item) {
+  return createHash('sha256').update([
+    item.messageId,
+    item.role,
+    item.kind,
+    item.title,
+    item.source,
+    item.anchor,
+    item.content
+  ].join('\0')).digest('hex')
+}
+
+export function requestContextItems(messages, plan = []) {
+  const projectionByMessageId = new Map(plan.map((entry) => [
+    `${projectionPlugin}:${entry.id}`,
+    entry
+  ]))
+  const latestUserIndex = messages.findLastIndex(isDirectUserMessage)
+  return messages.map((message, index) => {
+    const projection = projectionByMessageId.get(String(message?.id ?? ''))
+    const role = message?.role === 'system' || message?.role === 'assistant' ? message.role : 'user'
+    if (projection) {
+      return {
+        order: index + 1,
+        messageId: String(message?.id ?? ''),
+        role,
+        kind: 'prompt',
+        title: projection.traceTitle || '设定提示词',
+        source: projection.traceSource || positionLabel(projection.anchor),
+        anchor: projection.anchor,
+        content: readableMessageContent(message)
+      }
+    }
+    const source = message?.source && typeof message.source === 'object' ? message.source : {}
+    const kind = requestContextKind(message, source)
+    const directUser = source.kind === 'user'
+    return {
+      order: index + 1,
+      messageId: String(message?.id ?? ''),
+      role,
+      kind,
+      title: requestContextTitle(message, source, directUser && index === latestUserIndex),
+      source: requestContextSource(source, directUser && index === latestUserIndex),
+      anchor: '',
+      content: readableMessageContent(message)
+    }
+  }).filter((item) => item.content)
+}
+
+function requestContextKind(message, source) {
+  if (message?.role === 'system') return 'system'
+  if (source.kind === 'tool' || message?.content?.some((block) => block?.type === 'tool-result')) return 'tool'
+  if (source.plugin === 'eleckoi-product-history') return 'history'
+  if (source.kind === 'user') return 'user'
+  if (message?.role === 'assistant') return 'assistant'
+  return 'context'
+}
+
+function requestContextTitle(message, source, latestUser) {
+  if (message?.role === 'system') return '系统提示词'
+  if (source.kind === 'tool' || message?.content?.some((block) => block?.type === 'tool-result')) return '工具结果'
+  if (message?.content?.some((block) => block?.type === 'tool-call')) return '助手工具调用'
+  if (source.kind === 'user') return latestUser ? '用户最新输入' : '用户消息'
+  if (source.plugin === 'eleckoi-product-history') return message?.role === 'assistant' ? '历史助手消息' : '历史用户消息'
+  if (source.kind === 'model' || message?.role === 'assistant') return '助手消息'
+  return source.sections?.[0]?.name || '上下文'
+}
+
+function requestContextSource(source, latestUser) {
+  if (source.kind === 'user') return latestUser ? '本轮输入' : '聊天记录'
+  if (source.kind === 'tool') return source.callId ? `工具结果 · ${source.callId}` : '工具结果'
+  if (source.plugin === 'eleckoi-product-history') return '聊天记录'
+  if (source.kind === 'model') return [source.provider, source.model].filter(Boolean).join(' · ') || '模型'
+  if (source.kind === 'plugin') return source.plugin || '插件上下文'
+  return source.kind || ''
+}
+
+function readableMessageContent(message) {
+  return Array.isArray(message?.content)
+    ? message.content.map(readableBlock).filter(Boolean).join('\n\n')
+    : ''
+}
+
+function readableBlock(block) {
+  if (!block || typeof block !== 'object') return ''
+  if (block.type === 'text') return String(block.text ?? '')
+  if (block.type === 'reasoning') return `思考\n${String(block.text ?? '')}`
+  if (block.type === 'image') {
+    const attachment = block.attachment && typeof block.attachment === 'object' ? block.attachment : {}
+    return `[图片] ${attachment.name || attachment.id || attachment.mediaType || '图片附件'}`
+  }
+  if (block.type === 'file') {
+    const attachment = block.attachment && typeof block.attachment === 'object' ? block.attachment : {}
+    return `[文件] ${attachment.name || attachment.id || '文件附件'}`
+  }
+  if (block.type === 'tool-call') {
+    return `调用工具 ${String(block.name || '')}\n${prettyJsonText(block.arguments)}`.trim()
+  }
+  if (block.type === 'tool-result') {
+    const result = Array.isArray(block.content) ? block.content.map(readableBlock).filter(Boolean).join('\n\n') : ''
+    return `${block.isError ? '工具返回错误' : '工具返回结果'}${result ? `\n${result}` : ''}`
+  }
+  try {
+    return JSON.stringify(block, null, 2)
+  } catch {
+    return String(block.type || '')
+  }
+}
+
+function prettyJsonText(value) {
+  if (typeof value !== 'string') return String(value ?? '')
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+}
+
+function activeProjectionEnvelope(session) {
+  for (const seq of session.surface.nodes.toReversed()) {
+    const event = session.eventAt(seq)
+    if (event?.type === 'user/message' && isProjectionEnvelope(event.data)) return event
+  }
+}
+
+function ensureProjectionEnvelope(session, plan) {
+  const current = activeProjectionEnvelope(session)
+  const next = projectionEnvelope(plan)
+  if (current && messageText(current.data) === messageText(next)) return current
+  if (!current && plan.length === 0) return undefined
+  if (!current) {
+    return session.append('user/message', next, { surfaceOp: 'append' })
+  }
+  return session.append('user/message', next, {
+    surfaceOp: { op: 'replace', startSeq: current.seq, endSeq: current.seq },
+    sourceEventSeqs: [current.seq]
+  })
+}
+
+function projectionEnvelope(plan) {
+  return freezeMessage({
+    id: `${projectionPlugin}:v${PROJECTION_VERSION}`,
+    role: 'user',
+    content: [{ type: 'text', text: `${PROJECTION_PREFIX}${JSON.stringify(plan)}` }],
+    source: {
+      kind: 'plugin',
+      plugin: projectionPlugin,
+      form: 'snapshot',
+      sections: plan.map((entry) => ({ name: entry.traceTitle || entry.id, text: entry.content }))
+    }
+  })
+}
+
+function decodeProjectionEnvelope(message) {
+  const text = messageText(message)
+  if (!text.startsWith(PROJECTION_PREFIX)) return []
+  try {
+    const value = JSON.parse(text.slice(PROJECTION_PREFIX.length))
+    return Array.isArray(value) ? value.filter(isProjectionEntry) : []
+  } catch {
+    return []
+  }
+}
+
+function isProjectionEntry(value) {
+  return value && typeof value === 'object'
+    && typeof value.id === 'string'
+    && typeof value.anchor === 'string'
+    && (value.role === 'user' || value.role === 'assistant')
+    && typeof value.content === 'string'
+}
+
+function isDirectUserMessage(message) {
+  return message?.role === 'user' && message?.source?.kind === 'user'
+}
+
+function messagesForAnchor(plan, anchor) {
+  return plan
+    .filter((entry) => entry.anchor === anchor)
+    .map(projectionMessage)
+}
+
+function projectionMessage(entry) {
+  return freezeMessage({
+    id: `${projectionPlugin}:${entry.id}`,
+    role: entry.role,
+    content: [{ type: 'text', text: entry.content }],
+    source: entry.role === 'assistant'
+      ? { kind: 'model', provider: 'eleckoi', model: 'prompt-projection' }
+      : {
+          kind: 'plugin',
+          plugin: name,
+          form: 'snapshot',
+          sections: [{ name: entry.traceTitle || entry.id || name, text: entry.content }]
+        }
+  })
 }
 
 /**
@@ -204,14 +533,9 @@ function normalizedDialogueText(value, role) {
   return trimmed.slice(bodyStart, end >= bodyStart ? end : undefined).trim()
 }
 
-/**
- * DSH runtime context is a logged user-context snapshot. Entries after the
- * latest input and around tool flow therefore stay visible on later steps
- * without manufacturing assistant history.
- */
+/** Render a diagnostic-only text view of the current projection definition. */
 export function renderRuntimeContext(context) {
-  return settingInjections(context)
-    .filter((entry) => entry.anchor === 'insert_point_1' || entry.anchor === 'insert_point_2')
+  return requestProjectionPlan(context)
     .map((entry) => entry.content)
     .join('\n\n')
 }
@@ -257,19 +581,6 @@ export function settingInjections(context) {
       || left.order - right.order
       || left.id.localeCompare(right.id))
     .slice(0, 128)
-}
-
-function contextMessage(entry) {
-  return createUserMessage({
-    content: [{ type: 'text', text: entry.content }],
-    source: {
-      kind: 'plugin',
-      plugin: name,
-      form: 'snapshot',
-      label: entry.traceSource,
-      sections: [{ name: entry.traceTitle || entry.id || name, text: entry.content }]
-    }
-  })
 }
 
 function anchorOrder(anchor) {

@@ -92,6 +92,54 @@ describe('DSH generation statistics projection', () => {
     expect(stats?.contextBreakdown.messageTokens).toBe(21)
   })
 
+  it('classifies the final surviving system surface exactly like the DSH token meter', () => {
+    const projector = new DshGenerationStatsProjector()
+    projector.project(sessionEvent(1, 'system/message', {
+      turn: 1,
+      step: 1,
+      message: { role: 'system', content: [{ type: 'text', text: '12345678' }] }
+    }, 100, 'append'), 'session-a')
+    projector.project(sessionEvent(2, 'user/message', {
+      role: 'user',
+      content: [{ type: 'text', text: '12345678' }],
+      source: { kind: 'plugin', plugin: 'eleckoi-conversation-context' }
+    }, 110, 'append'), 'session-a')
+    const stats = projector.project(sessionEvent(3, 'request/header', {
+      header: { config: { provider: 'test', model: 'test' }, tools: [{ name: 'tool-a' }] }
+    }, 120), 'session-a')
+
+    expect(stats?.contextBreakdown).toEqual({
+      systemTokens: 6,
+      toolsTokens: 9,
+      messageTokens: 10
+    })
+  })
+
+  it('uses DSH startSeq and endSeq replacements for both pressure and breakdown', () => {
+    const projector = new DshGenerationStatsProjector()
+    projector.project(sessionEvent(1, 'user/message', {
+      role: 'user', content: [{ type: 'text', text: '12345678' }]
+    }, 100, 'append'), 'session-a')
+    projector.project(sessionEvent(2, 'user/message', {
+      role: 'user', content: [{ type: 'text', text: 'abcdefghijkl' }]
+    }, 110, 'append'), 'session-a')
+    projector.project(sessionEvent(3, 'assistant/chunk', {
+      turn: 1,
+      step: 1,
+      chunk: { type: 'usage', usage: { inputTokens: 100, outputTokens: 5 } }
+    }, 120), 'session-a')
+    projector.project(sessionEvent(4, 'compaction/summary', {
+      shadowedRange: { start: 1, end: 2 },
+      shadowedTokenCount: 21
+    }, 130), 'session-a')
+    const stats = projector.project(sessionEvent(5, 'user/message', {
+      role: 'user', content: [{ type: 'text', text: 'abcd' }]
+    }, 140, { op: 'replace', startSeq: 1, endSeq: 2 }), 'session-a')
+
+    expect(stats?.contextPressure).toMatchObject({ pressureTokens: 100, projectedTokens: 88 })
+    expect(stats?.contextBreakdown).toMatchObject({ systemTokens: 0, messageTokens: 9 })
+  })
+
   it('restores durable totals without reviving transient open work', () => {
     const stored = emptyStoredGenerationStats()
     stored.turns = 3

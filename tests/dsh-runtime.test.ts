@@ -405,7 +405,7 @@ describe('packaged DSH runtime composition', () => {
             {
               id: 'cache-entry', title: '缓存设定区', enabled: true,
               content: 'ELECKOI_CACHE_CONTEXT_SENTINEL', kind: 'normal', triggerMode: 'cache',
-              position: null, promptPositionId: '', insertRole: 'system', order: 1
+              position: null, promptPositionId: '', insertRole: 'assistant', order: 1
             },
             {
               id: 'hidden-tool-timeline', title: '隐藏工具时间线', enabled: true,
@@ -430,9 +430,11 @@ describe('packaged DSH runtime composition', () => {
       expect(requests[0]?.body).toMatchObject({ model: 'deepseek-chat', stream: true, temperature: 0.65 })
       const dialogue = (requests[0]?.body.messages as Array<{ role?: string; content?: unknown }>)
         .filter((message) => message.role === 'user' || message.role === 'assistant')
-      expect(dialogue.slice(0, 2).map((message) => message.role)).toEqual(['assistant', 'user'])
-      expect(JSON.stringify(dialogue[0]?.content)).toContain('你好啊')
-      expect(JSON.stringify(dialogue[1]?.content)).toContain('你好')
+      expect(dialogue.slice(0, 4).map((message) => message.role)).toEqual(['assistant', 'assistant', 'user', 'user'])
+      expect(JSON.stringify(dialogue[0]?.content)).toContain('ELECKOI_CACHE_CONTEXT_SENTINEL')
+      expect(JSON.stringify(dialogue[1]?.content)).toContain('你好啊')
+      expect(JSON.stringify(dialogue[2]?.content)).toContain('你好')
+      expect(JSON.stringify(dialogue[3]?.content)).toContain('ELECKOI_HIDDEN_TIMELINE_SENTINEL')
       expect(dialogue.filter((message) => message.role === 'user' && message.content === '你好')).toHaveLength(1)
       expect(JSON.stringify(requests[0]?.body.messages)).toContain('ELECKOI_CACHE_CONTEXT_SENTINEL')
       expect(JSON.stringify(requests[0]?.body.messages)).toContain('ELECKOI_HIDDEN_TIMELINE_SENTINEL')
@@ -443,12 +445,146 @@ describe('packaged DSH runtime composition', () => {
       expect(JSON.stringify(requests[0]?.body.tools)).toContain('web_fetch')
       expect(JSON.stringify(requests[0]?.body.tools)).toContain('update_roleplay_plan')
 
+      await expect(runtime.stream('conversation-local-test', '第二轮问题', {
+        configId: 'local-test-config',
+        provider: 'deepseek',
+        apiKey: 'local-test-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: 'deepseek-chat',
+        systemPrompt: '只返回本地测试文本。',
+        apiFormat: 'openai-completions',
+        customHeaders: {},
+        contextWindow: 128000,
+        autoCompactTokenLimit: 96000,
+        temperature: 0.65,
+        supportsImageInput: false
+      }, {
+        onDelta: (delta) => deltas.push(delta),
+        onFinal: (content) => finals.push(content)
+      }, undefined, {
+        characterId: 'card-a',
+        characterName: '角色 A',
+        persona: {},
+        history: [
+          { role: 'assistant', content: '你好啊', speakerName: '角色 A' },
+          { role: 'user', content: '你好' },
+          { role: 'assistant', content: '本地 Agent 回复', speakerName: '角色 A' }
+        ],
+        settingLibrary: {
+          characterId: 'card-a',
+          name: '设定库',
+          entries: [
+            {
+              id: 'cache-entry', title: '缓存设定区', enabled: true,
+              content: 'ELECKOI_CACHE_CONTEXT_SENTINEL', kind: 'normal', triggerMode: 'cache',
+              position: null, promptPositionId: '', insertRole: 'assistant', order: 1
+            },
+            {
+              id: 'hidden-tool-timeline', title: '隐藏工具时间线', enabled: true,
+              content: 'ELECKOI_HIDDEN_TIMELINE_SENTINEL', kind: 'hidden_tool_timeline', triggerMode: 'always',
+              position: 'insert_point_4', promptPositionId: 'hidden-tool-timeline-position', insertRole: 'user', order: 1
+            }
+          ],
+          groups: [],
+          promptPositions: [{
+            id: 'hidden-tool-timeline-position', name: '隐藏工具时间线',
+            anchor: 'insert_point_4', side: 'before_setting_position', order: 1
+          }]
+        }
+      }, 'runtime-thread-a', {
+        disabledGroupIds: ['builtin:variables', 'builtin:other']
+      })).resolves.toBe('complete')
+
+      expect(requests).toHaveLength(2)
+      const secondTurnMessages = JSON.stringify(requests[1]?.body.messages)
+      expect(secondTurnMessages.split('ELECKOI_CACHE_CONTEXT_SENTINEL')).toHaveLength(2)
+      expect(secondTurnMessages.split('ELECKOI_HIDDEN_TIMELINE_SENTINEL')).toHaveLength(2)
+
       const persistedSessionRoot = join(root, 'runtime', 'sessions')
       expect((await readdir(persistedSessionRoot, { recursive: true })).some((entry) => entry.split(/[\\/]/).at(-1) === 'runtime-thread-a')).toBe(true)
       const persistedRoot = join(persistedSessionRoot, 'conversation-local-test')
       const settingBridge = JSON.parse(await readFile(join(persistedRoot, 'eleckoi-setting-library-state.json'), 'utf8'))
-      expect(settingBridge.history).toEqual([{ role: 'assistant', content: '你好啊', speakerName: '角色 A' }])
+      expect(settingBridge.history).toEqual([
+        { role: 'assistant', content: '你好啊', speakerName: '角色 A' },
+        { role: 'user', content: '你好' },
+        { role: 'assistant', content: '本地 Agent 回复', speakerName: '角色 A' }
+      ])
       expect(settingBridge.variableState).toEqual({})
+
+      await expect(runtime.stream('conversation-local-test', '第三轮问题', {
+        configId: 'local-test-config',
+        provider: 'deepseek',
+        apiKey: 'local-test-key',
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        model: 'deepseek-chat',
+        systemPrompt: '只返回本地测试文本。',
+        apiFormat: 'openai-completions',
+        customHeaders: {},
+        contextWindow: 128000,
+        autoCompactTokenLimit: 96000,
+        temperature: 0.65,
+        supportsImageInput: false
+      }, {
+        onDelta: (delta) => deltas.push(delta),
+        onFinal: (content) => finals.push(content)
+      }, undefined, {
+        characterId: 'card-a',
+        characterName: '角色 A',
+        persona: {},
+        history: [
+          { role: 'assistant', content: '你好啊', speakerName: '角色 A' },
+          { role: 'user', content: '你好' },
+          { role: 'assistant', content: '本地 Agent 回复', speakerName: '角色 A' },
+          { role: 'user', content: '第二轮问题' },
+          { role: 'assistant', content: '本地 Agent 回复', speakerName: '角色 A' }
+        ],
+        settingLibrary: {
+          characterId: 'card-a',
+          name: '设定库',
+          entries: [
+            {
+              id: 'cache-entry', title: '缓存设定区', enabled: true,
+              content: 'ELECKOI_CACHE_CONTEXT_V2', kind: 'normal', triggerMode: 'cache',
+              position: null, promptPositionId: '', insertRole: 'assistant', order: 1
+            },
+            {
+              id: 'hidden-tool-timeline', title: '隐藏工具时间线', enabled: true,
+              content: 'ELECKOI_HIDDEN_TIMELINE_V2', kind: 'hidden_tool_timeline', triggerMode: 'always',
+              position: 'insert_point_4', promptPositionId: 'hidden-tool-timeline-position', insertRole: 'user', order: 1
+            }
+          ],
+          groups: [],
+          promptPositions: [{
+            id: 'hidden-tool-timeline-position', name: '隐藏工具时间线',
+            anchor: 'insert_point_4', side: 'before_setting_position', order: 1
+          }]
+        }
+      }, 'runtime-thread-a', {
+        disabledGroupIds: ['builtin:variables', 'builtin:other']
+      })).resolves.toBe('complete')
+
+      expect(requests).toHaveLength(3)
+      const changedProjection = JSON.stringify(requests[2]?.body.messages)
+      expect(changedProjection).not.toContain('ELECKOI_CACHE_CONTEXT_SENTINEL')
+      expect(changedProjection).not.toContain('ELECKOI_HIDDEN_TIMELINE_SENTINEL')
+      expect(changedProjection.split('ELECKOI_CACHE_CONTEXT_V2')).toHaveLength(2)
+      expect(changedProjection.split('ELECKOI_HIDDEN_TIMELINE_V2')).toHaveLength(2)
+
+      const trajectory = runtime.trajectory('conversation-local-test', 'runtime-thread-a')
+      const requestContexts = trajectory.records.flatMap((record) => record.requests.map((request) => request.context))
+      expect(requestContexts).toHaveLength(3)
+      expect(requestContexts[0]).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: 'assistant', kind: 'prompt', title: '缓存设定 · 缓存设定区', content: 'ELECKOI_CACHE_CONTEXT_SENTINEL' }),
+        expect.objectContaining({ role: 'user', kind: 'prompt', title: '预设固定条目 · 隐藏工具时间线', content: 'ELECKOI_HIDDEN_TIMELINE_SENTINEL' }),
+        expect.objectContaining({ role: 'user', kind: 'user', title: '用户最新输入', content: '你好' })
+      ]))
+      expect(requestContexts[2]).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: 'assistant', kind: 'prompt', content: 'ELECKOI_CACHE_CONTEXT_V2' }),
+        expect.objectContaining({ role: 'user', kind: 'prompt', content: 'ELECKOI_HIDDEN_TIMELINE_V2' }),
+        expect.objectContaining({ role: 'user', kind: 'user', title: '用户最新输入', content: '第三轮问题' })
+      ]))
+      expect(trajectory.records.some((record) => record.title === '隐藏工具时间线')).toBe(false)
+
       await expect(runtime.stream('conversation-local-test', '你好', {
         configId: 'local-main',
         provider: 'deepseek',
@@ -471,8 +607,8 @@ describe('packaged DSH runtime composition', () => {
         persona: {},
         history: [{ role: 'assistant', content: '你好啊', speakerName: '角色 A' }]
       }, 'runtime-thread-b', undefined, ['runtime-thread-a'])).resolves.toBe('complete')
-      expect(requests).toHaveLength(2)
-      const regenerationDialogue = (requests[1]?.body.messages as Array<{ role?: string; content?: unknown }>)
+      expect(requests).toHaveLength(4)
+      const regenerationDialogue = (requests[3]?.body.messages as Array<{ role?: string; content?: unknown }>)
         .filter((message) => message.role === 'user' || message.role === 'assistant')
       expect(regenerationDialogue.slice(0, 2).map((message) => message.role)).toEqual(['assistant', 'user'])
       expect(JSON.stringify(regenerationDialogue[0]?.content)).toContain('你好啊')

@@ -41,6 +41,7 @@ export function useActiveChatModel({ modelConfigs, setStatus }) {
     } catch (error) {
       setModelSelection(previous);
       setStatus(errorMessage(error, "模型选择保存失败"));
+      throw error;
     }
   }
 
