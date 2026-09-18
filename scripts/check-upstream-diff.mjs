@@ -69,20 +69,54 @@ function git(args, options = {}) {
 
 /**
  * 基线 = 我们与上游最后一次同步的提交。
- * 优先用 upstream/main（跟随上游最新），其次退到本地 tag。
+ *
+ * 首选 `upstream/main`，但**只有当它是 HEAD 的祖先时才作数**：
+ * 上游会强推改写历史（v0.1.4 → v0.1.5 就发生过，旧 v0.1.4 成了孤儿提交），
+ * 也可能在我们同步之后又往前走几个提交。这两种情况下拿 upstream/main 当基线
+ * 会把上游自己的改动误判成"我们删了/我们加了"，门禁直接误报。
+ *
+ * 所以退一步：在所有上游引用里挑**最新的、且是 HEAD 祖先**的那个
+ * （通常就是我们 rebase 到的那条发布 tag）。仍找不到就用 upstream/main 并给出提示。
  */
 function resolveBaseline() {
   const explicit = process.argv[2] ?? process.env.ELECKOI_UPSTREAM_REF
   if (explicit) return explicit
-  for (const candidate of ['upstream/main', 'v0.1.0']) {
+
+  const exists = (ref) => {
     try {
-      git(['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`], { quiet: true })
-      return candidate
+      git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], { quiet: true })
+      return true
     } catch {
-      // 试下一个
+      return false
     }
   }
-  throw new Error('找不到可用的上游基线引用（试过 upstream/main 与 v0.1.0）。')
+  const isAncestor = (ref) => {
+    try {
+      git(['merge-base', '--is-ancestor', ref, 'HEAD'], { quiet: true })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  if (exists('upstream/main') && isAncestor('upstream/main')) return 'upstream/main'
+
+  // 上游发布 tag（v0.1.0、v0.1.5…），按版本号排序取最新的祖先
+  const tags = git(['tag', '--list', 'v*', '--sort=-v:refname'])
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line !== '')
+  for (const tag of tags) {
+    if (isAncestor(tag)) return tag
+  }
+
+  if (exists('upstream/main')) {
+    console.warn('⚠️ upstream/main 不是 HEAD 的祖先（上游改写过历史？），且找不到作为祖先的上游 tag；'
+      + '仍按 upstream/main 比对，结果可能有误报。可用 ELECKOI_UPSTREAM_REF 指定基线。')
+    return 'upstream/main'
+  }
+  if (exists('v0.1.0')) return 'v0.1.0'
+  throw new Error('找不到可用的上游基线引用（试过 upstream/main 与上游 tag）。')
 }
 
 /** 解析 patches/*.patch，得到「被补丁覆盖的文件 → 期望的增删行数」。 */
