@@ -7,7 +7,7 @@ export function getUiPreferences() {
   return readSetting(UI_PREFERENCES_KEY);
 }
 
-function updateUiPreferences(update) {
+export function updateUiPreferences(update) {
   const operation = uiPreferencesWriteQueue.then(async () => {
     const current = await getUiPreferences();
     return writeSetting(UI_PREFERENCES_KEY, update(current || {}));

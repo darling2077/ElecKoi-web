@@ -20,7 +20,7 @@ export function ConversationList({
   onGoCharacterSettings,
   onTogglePinChat,
   onOpenChatWindow,
-  onRemoveChat,
+  onHideChat,
 }) {
   const [menu, setMenu] = useState(null);
   const [addCharacterOpen, setAddCharacterOpen] = useState(false);
@@ -199,7 +199,7 @@ export function ConversationList({
             <span>打开独立聊天窗口</span>
           </button>
           <div className="context-separator" />
-          <button type="button" onClick={() => runMenuAction((item) => onRemoveChat(item.id))}>
+          <button type="button" onClick={() => runMenuAction((item) => onHideChat(item.id))}>
             <TrashIcon />
             <span>从消息列表中删除</span>
           </button>

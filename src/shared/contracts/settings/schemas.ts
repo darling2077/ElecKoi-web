@@ -11,6 +11,7 @@ export const resolvedAppearanceModeSchema = z.enum(['light', 'dark'])
 export const sidebarCharacterArtworkSchema = z.enum(['avatar', 'cover'])
 export const newCharacterBackgroundSchema = z.enum(['app', 'character'])
 export const collapsedGroupMapSchema = z.record(z.string(), z.boolean())
+export const conversationEntryIdsSchema = z.array(z.string().trim().min(1))
 export const listCollapseStateSchema = z.object({
   characters: collapsedGroupMapSchema.optional(),
   presets: collapsedGroupMapSchema.optional(),
@@ -19,6 +20,8 @@ export const listCollapseStateSchema = z.object({
 export const appearanceUiPreferencesSchema = z.object({
   sidebar_character_artwork: sidebarCharacterArtworkSchema.optional(),
   new_character_background: newCharacterBackgroundSchema.optional(),
+  pinned_chat_ids: conversationEntryIdsSchema.optional(),
+  hidden_chat_ids: conversationEntryIdsSchema.optional(),
   list_collapse_state: listCollapseStateSchema.optional()
 }).catchall(z.unknown())
 

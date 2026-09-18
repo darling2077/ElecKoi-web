@@ -23,11 +23,12 @@ import {
   collapseSessionsByCharacter,
   createCharacterLookup,
   currentChatTitle,
+  filterHiddenConversationEntries,
   filterConversationSessions,
   sortSessionsByPinned,
 } from "../model/chatSessionView.js";
 import { findRegenerateBranchUserIndex } from "../model/chatRegeneration.js";
-import { usePinnedChats } from "./usePinnedChats.js";
+import { useConversationListPreferences } from "./useConversationListPreferences.js";
 import { useActiveChatModel } from "./useActiveChatModel.js";
 import { useConversationMessages } from "./useConversationMessages.js";
 import { useChatHistoryPaging } from "./useChatHistoryPaging.js";
@@ -45,7 +46,14 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
   const [chatCharacter, setChatCharacter] = useState(() => createEmptyChatCharacter());
 
   const requestRef = useRef(null);
-  const { pinnedIds, togglePinChat: togglePinnedChat, unpinChat } = usePinnedChats();
+  const {
+    pinnedIds,
+    hiddenIds,
+    togglePinChat: togglePinnedChat,
+    unpinChat,
+    hideChatEntry,
+    restoreChatEntry,
+  } = useConversationListPreferences();
   const { modelConfig, modelSelection, selectChatModel } = useActiveChatModel({ modelConfigs, setStatus });
   const {
     inputImages, inputImagesRef, modelSupportsImages, addInputImages, removeInputImage, clearInputImages,
@@ -76,7 +84,14 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
   const displaySessions = useMemo(() => applyLatestCharactersToSessions(sessions, characterLookup), [characterLookup, sessions]);
   const sortedSessions = useMemo(() => sortSessionsByPinned(displaySessions, pinnedIds), [displaySessions, pinnedIds]);
   const conversationSessions = useMemo(() => collapseSessionsByCharacter(sortedSessions, sessionId), [sessionId, sortedSessions]);
-  const filteredSessions = useMemo(() => filterConversationSessions(conversationSessions, keyword), [conversationSessions, keyword]);
+  const visibleConversationSessions = useMemo(
+    () => filterHiddenConversationEntries(conversationSessions, hiddenIds),
+    [conversationSessions, hiddenIds],
+  );
+  const filteredSessions = useMemo(
+    () => filterConversationSessions(visibleConversationSessions, keyword),
+    [keyword, visibleConversationSessions],
+  );
   const currentTitle = useMemo(
     () => currentChatTitle(displaySessions, sessionId, chatCharacter),
     [chatCharacter.assistant_name, chatCharacter.character_name, displaySessions, sessionId],
@@ -163,6 +178,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
       .filter((item) => item.character_id === characterId)
       .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")))[0];
     if (existing?.id) {
+      restoreChatEntry(existing.id);
       await loadChat(existing.id, { bumpToTop: true });
       return;
     }
@@ -247,18 +263,6 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
     togglePinnedChat(chatId);
   }
 
-  async function removeChat(chatId) {
-    const target = sessions.find((item) => item.id === chatId);
-    const targetCharacterId = target?.character_id || "";
-    const idsToRemove = targetCharacterId ? sessions.filter((item) => item.character_id === targetCharacterId).map((item) => item.id) : [chatId];
-    await Promise.all(idsToRemove.map((id) => deleteChat(id)));
-    idsToRemove.forEach((id) => unpinChat(id));
-    if (idsToRemove.includes(sessionId)) {
-      clearActiveChat();
-    }
-    await refreshSessionsOnly();
-  }
-
   async function removeHistoryChat(chatId) {
     if (!chatId) return;
     const target = displaySessions.find((item) => item.id === chatId) || sessions.find((item) => item.id === chatId);
@@ -324,7 +328,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
       requestRef, setIsSending, sessionId, chatCharacter, setSessionId, replaceChatMessages,
       setChatCharacter, normalizeLatestChatCharacter, refreshSessionsOnly, setInput, clearInputImages,
       setMessages, updatePendingReply, requestScrollToEnd,
-      reconcileChatMessages, commitPendingError, notify,
+      reconcileChatMessages, commitPendingError, notify, restoreChatEntry,
     });
   }
 
@@ -368,6 +372,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
     }
     const branchUser = messages[branchUserIndex];
     const targetMessageId = String(branchUser?.turnId || branchUser?.id || requestedTargetMessageId).trim();
+    restoreChatEntry(sessionId);
 
     const controller = new AbortController();
     const activeRequest = { controller };
@@ -523,7 +528,7 @@ export function useChatSessions({ persona, characters, modelConfigs, language, s
     regenerateReply,
     deleteMessagesFrom,
     togglePinChat,
-    removeChat,
+    hideChatEntry,
     removeHistoryChat,
     openChatWindow,
     abortActiveRequest,

@@ -14,7 +14,7 @@ export async function runChatMessageSend(options) {
     requestRef, setIsSending, sessionId, chatCharacter, setSessionId, replaceChatMessages,
     setChatCharacter, normalizeLatestChatCharacter, refreshSessionsOnly, setInput, clearInputImages,
     setMessages, updatePendingReply, requestScrollToEnd,
-    reconcileChatMessages, commitPendingError, notify,
+    reconcileChatMessages, commitPendingError, notify, restoreChatEntry,
   } = options;
   event.preventDefault();
   const text = input.trim();
@@ -52,6 +52,8 @@ export async function runChatMessageSend(options) {
       await refreshSessionsOnly({ keepSection: true });
       throwIfAborted(controller.signal);
     }
+
+    restoreChatEntry?.(targetSessionId);
 
     setInput("");
     const createdAt = new Date().toISOString();

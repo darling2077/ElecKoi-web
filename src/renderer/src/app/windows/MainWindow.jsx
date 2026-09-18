@@ -219,7 +219,7 @@ export function MainWindow() {
         onGoCharacterSettings={() => chat.setActiveSection("character")}
         onTogglePinChat={chat.togglePinChat}
         onOpenChatWindow={chat.openChatWindow}
-        onRemoveChat={chat.removeChat}
+        onHideChat={chat.hideChatEntry}
       />
     );
     const mainPanel = isCharacterSection ? (

@@ -192,18 +192,23 @@ describe('shared SQLite baseline', () => {
     expect(settings.write('appearance.mode', 'system')).toBe('system')
     expect(settings.read('appearance.mode')).toBe('system')
     expect(settings.write('appearance.ui', {
+      pinned_chat_ids: ['pinned-chat'],
+      hidden_chat_ids: ['hidden-chat'],
       list_collapse_state: {
         characters: { 全部角色: true },
         presets: { 全部预设: true },
         models: { general: false, image: true }
       }
     })).toEqual({
+      pinned_chat_ids: ['pinned-chat'],
+      hidden_chat_ids: ['hidden-chat'],
       list_collapse_state: {
         characters: { 全部角色: true },
         presets: { 全部预设: true },
         models: { general: false, image: true }
       }
     })
+    expect(settings.read('appearance.ui').hidden_chat_ids).toEqual(['hidden-chat'])
     expect(settings.read('appearance.ui').list_collapse_state?.models).toEqual({ general: false, image: true })
     expect(() => settings.write('appearance.mode', 'sepia' as never)).toThrow()
   })

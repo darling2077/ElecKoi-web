@@ -34,6 +34,34 @@ export function collapseSessionsByCharacter(sortedSessions, sessionId) {
   return [...byCharacter.values()];
 }
 
+export function normalizeConversationEntryIds(ids) {
+  const next = [];
+  for (const id of ids || []) {
+    const value = String(id || "").trim();
+    if (value && !next.includes(value)) next.push(value);
+  }
+  return next;
+}
+
+export function hideConversationEntry(hiddenIds, sessionId) {
+  const id = String(sessionId || "").trim();
+  const normalized = normalizeConversationEntryIds(hiddenIds);
+  if (!id || normalized.includes(id)) return normalized;
+  return [id, ...normalized];
+}
+
+export function restoreConversationEntry(hiddenIds, sessionId) {
+  const id = String(sessionId || "").trim();
+  const normalized = normalizeConversationEntryIds(hiddenIds);
+  if (!id) return normalized;
+  return normalized.filter((hiddenId) => hiddenId !== id);
+}
+
+export function filterHiddenConversationEntries(conversationSessions, hiddenIds) {
+  const hidden = new Set(normalizeConversationEntryIds(hiddenIds));
+  return (conversationSessions || []).filter((item) => !hidden.has(item.id));
+}
+
 export function filterConversationSessions(conversationSessions, keyword) {
   if (!keyword.trim()) return conversationSessions;
   const key = keyword.trim().toLowerCase();

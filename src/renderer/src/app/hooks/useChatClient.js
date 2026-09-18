@@ -255,7 +255,7 @@ export function useChatClient() {
     probeModelOptions,
     testModelConnection: testConnection,
     togglePinChat: chatSessions.togglePinChat,
-    removeChat: chatSessions.removeChat,
+    hideChatEntry: chatSessions.hideChatEntry,
     removeHistoryChat: chatSessions.removeHistoryChat,
     openChatWindow: chatSessions.openChatWindow,
   };
