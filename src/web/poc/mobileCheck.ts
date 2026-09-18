@@ -318,6 +318,10 @@ function probeScript(): string {
             panelRight: pr ? Math.round(pr.right) : -1,
             panelWidth: pr ? Math.round(pr.width) : 0,
             panelHeight: pr ? Math.round(pr.height) : 0,
+            // 纵向边界：弹窗整体必须装进视口（这才是"没被挤压"的真正判据）
+            panelTop: pr ? Math.round(pr.top) : -1,
+            panelBottom: pr ? Math.round(pr.bottom) : -1,
+            viewportHeight: window.innerHeight,
             configsWidth: configs ? Math.round(box(configs).width) : 0,
             listPaneWidth: pane ? Math.round(box(pane).width) : 0,
             listNameClipped: name ? name.scrollWidth > name.clientWidth + 1 : null,
@@ -604,7 +608,7 @@ async function main(): Promise<void> {
     if (!conversationId) throw new Error('会话创建失败')
 
     // 跑一个回合产生助手消息（正文要够长，宽度才量得准）
-    await call('command.agent.start', { conversationId, text: '请写一段较长的场景描写' })
+    await call('command.agent.start', { conversationId, requestId: `mobile-${Date.now()}`, text: '请写一段较长的场景描写' })
     const deadline = Date.now() + 120_000
     let ready = false
     while (Date.now() < deadline && !ready) {
@@ -781,17 +785,22 @@ async function main(): Promise<void> {
     const panelInside = Number(modelReport?.panelLeft ?? -1) >= 0
       && Number(modelReport?.panelRight ?? 1e9) <= Number(modelReport?.viewport ?? 0) + 1
     // 模型列表列至少占弹窗的 60%（改前 141/361 = 39%）
-    const modelOk = modelReport?.modelOpened === true && panelInside
+    // 判据是"窄屏下弹窗没有被挤压/超出视口"，而不是"配置条绝不能滚动"：
+    // 上游 v0.1.5 增加了「自定义模型提供商」分组后内容变高，配置条自身可滚动属于正常交互，
+    // 真正要守的是弹窗整体仍在视口内、模型列表仍有足够宽度、名字不被截断。
+    const panelFitsVertically = Number(modelReport?.panelTop ?? -1) >= 0
+      && Number(modelReport?.panelBottom ?? 1e9) <= Number(modelReport?.viewportHeight ?? 0) + 1
+    const modelOk = modelReport?.modelOpened === true && panelInside && panelFitsVertically
       && listPaneWidth >= panelWidth * 0.6
       && modelReport?.configsClipped !== true
-      && Number(modelReport?.configsScrolls ?? 1) <= 1
       && Number(modelReport?.docOverflowX ?? 1) <= 1
     record('M-model', modelOk,
       `模型弹窗：宽 ${panelWidth}px（${String(modelReport?.panelLeft)}→${String(modelReport?.panelRight)}，视口 ${String(modelReport?.viewport)}px）、`
       + `配置条 ${String(modelReport?.configsWidth)}px、模型列表 ${listPaneWidth}px`
       + `（占 ${panelWidth > 0 ? Math.round((listPaneWidth / panelWidth) * 100) : 0}%，期望 ≥60%）、`
       + `名字被截断=${String(modelReport?.listNameClipped)}、`
-      + `配置项被截=${String(modelReport?.configsClipped)}、配置条纵向需滚动 ${String(modelReport?.configsScrolls)}px、`
+      + `配置项被截=${String(modelReport?.configsClipped)}、配置条可滚动 ${String(modelReport?.configsScrolls)}px、`
+      + `弹窗纵向 ${String(modelReport?.panelTop)}→${String(modelReport?.panelBottom)}（视口高 ${String(modelReport?.viewportHeight)}）、`
       + `横向溢出 ${String(modelReport?.docOverflowX)}px`
       + `\n        配置条：${JSON.stringify(modelReport?.configsDiag ?? [])}`)
 
