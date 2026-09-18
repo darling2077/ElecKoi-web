@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { SessionFormatEvent, SessionFormatJsonObject } from '@deepseek-ai/dsh-session-format'
 import { sessionFormatCatalog } from '@deepseek-ai/dsh-session-format-catalog'
 import { projectDshTrajectory, readDshTrajectory } from '@eleckoi/dsh-runtime'
+import { agentTrajectorySnapshotSchema } from '../src/shared/contracts/agent/trajectory'
 
 const temporaryDirectories: string[] = []
 
@@ -145,7 +146,7 @@ describe('DSH trajectory projection', () => {
     expect(older).toMatchObject({ totalRecords: 3, hasMore: false, beforeIndex: 1 })
   })
 
-  it('keeps DSH session-global request numbers across turns while omitting internal system prompts', () => {
+  it('keeps DSH session-global request numbers across turns, resumes and compactions', () => {
     const result = projectDshTrajectory([
       event(0, 'turn/start', { turn: 1 }, 1_000),
       event(1, 'step/start', { turn: 1, step: 1 }, 1_010),
@@ -169,21 +170,48 @@ describe('DSH trajectory projection', () => {
         message: { content: [{ type: 'text', text: '第二次' }] }
       }, 1_060),
       event(7, 'turn/end', { turn: 1 }, 1_070),
-      event(8, 'turn/start', { turn: 2 }, 1_080),
-      event(9, 'step/start', { turn: 2, step: 1 }, 1_090),
-      event(10, 'request/header', {
+      event(8, 'session/end-seed', {}, 1_075),
+      event(9, 'turn/start', { turn: 2 }, 1_080),
+      event(10, 'compaction/start', { compactionId: 'compact-a', turn: 2 }, 1_085),
+      event(11, 'compaction/summary', {
+        compactionId: 'compact-a',
+        summary: { content: [{ type: 'text', text: '历史摘要' }] }
+      }, 1_087),
+      event(12, 'compaction/end', { compactionId: 'compact-a', turn: 2 }, 1_088),
+      event(13, 'step/start', { turn: 2, step: 1 }, 1_090),
+      event(14, 'request/header', {
         header: { system: '系统提示词', tools: [], config: { model: 'deepseek-chat' } },
         reason: 'initial'
       }, 1_100),
-      event(11, 'assistant/message', {
+      event(15, 'assistant/message', {
         turn: 2,
         step: 1,
         message: { content: [{ type: 'text', text: '新轮第一次' }] }
       }, 1_110)
     ])
 
-    expect(result.records.map((record) => record.kind)).toEqual(['assistant', 'assistant', 'assistant'])
-    expect(result.records.flatMap((record) => record.requests.map((request) => request.number))).toEqual([1, 2, 3])
+    expect(result.records.map((record) => record.kind)).toEqual([
+      'assistant', 'assistant', 'compaction', 'assistant'
+    ])
+    expect(result.records.flatMap((record) => record.requests.map((request) => request.number))).toEqual([1, 2, 3, 4])
+    expect(result.records[2]).toMatchObject({
+      status: 'complete',
+      output: '历史摘要',
+      requests: [{ number: 3, reason: 'compaction', step: null, status: 'complete' }]
+    })
+    expect(result.records[3]).toMatchObject({
+      requests: [{ number: 4, seq: 13, turn: 2, step: 1 }]
+    })
+    expect(() => agentTrajectorySnapshotSchema.parse({
+      conversationId: 'conversation-a',
+      runtimeThreadId: 'thread-a',
+      records: result.records,
+      totalRecords: result.records.length,
+      hasMore: false,
+      beforeIndex: result.records[0]?.index ?? null,
+      startedAtMillis: result.startedAtMillis,
+      completedAtMillis: result.completedAtMillis
+    })).not.toThrow()
     expect(JSON.stringify(result)).not.toContain('系统提示词')
   })
 

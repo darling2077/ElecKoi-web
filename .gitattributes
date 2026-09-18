@@ -5,9 +5,6 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
-# Git hooks are executed by Git's POSIX shell on every platform and must keep LF.
-.githooks/* text eol=lf
-
 # Do not perform line-ending conversion on binary assets.
 *.ico binary
 *.png binary

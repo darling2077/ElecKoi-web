@@ -207,7 +207,6 @@ export function projectDshTrajectory(
   header: DshSessionHeader = {}
 ): Pick<DshTrajectoryPage, 'records' | 'startedAtMillis' | 'completedAtMillis'> {
   const events = input.map((event, index) => normalizeEvent(event, index))
-  const seedEndSeq = events.findLast((event) => event.type === 'session/end-seed')?.seq ?? -1
   const records: DshTrajectoryRecord[] = []
   const stepStarts = new Map<string, number>()
   const toolRecords = new Map<string, DshTrajectoryRecord>()
@@ -260,7 +259,7 @@ export function projectDshTrajectory(
     if (type === 'step/start') {
       activeTurn = eventTurn ?? activeTurn
       activeStep = eventStep
-      if (event.seq > seedEndSeq && activeTurn !== null && activeStep !== null) {
+      if (activeTurn !== null && activeStep !== null) {
         if (time !== null) stepStarts.set(stepKey(activeTurn, activeStep), time)
         pendingRequests.push({
           attached: false,
@@ -449,6 +448,21 @@ export function projectDshTrajectory(
         kind: 'compaction', title: '上下文压缩', preview: '正在压缩上下文', source: id,
         detail: pretty(data), turn, step, status: 'running'
       })
+      item.requests.push({
+        number: ++requestCount,
+        seq: event.seq,
+        turn,
+        step: null,
+        status: 'running',
+        reason: 'compaction',
+        provider: '',
+        model: '',
+        detail: pretty(data),
+        rawJson: pretty(event),
+        context: [],
+        timeMillis: time,
+        durationMillis: null
+      })
       compactionRecords.set(id, item)
       records.push(item)
       continue
@@ -474,6 +488,12 @@ export function projectDshTrajectory(
         item.durationMillis = duration(item.timeMillis, time)
         item.detail = pretty(data)
         item.rawJson = appendRaw(item.rawJson, event)
+        for (const request of item.requests) {
+          request.status = item.status
+          request.durationMillis = item.durationMillis
+          request.detail = item.detail
+          request.rawJson = item.rawJson
+        }
       }
       continue
     }
