@@ -106,13 +106,13 @@ async function main(): Promise<void> {
     const conversationB = (await dispatch<{ conversation: { id: string } }>('command.conversations.create', { title: 'B', metadata })).conversation.id
 
     // 第一个回合占住名额
-    const first = await dispatch<{ runId: string }>('command.agent.start', { conversationId: conversationA, text: '第一条' })
+    const first = await dispatch<{ runId: string }>('command.agent.start', { conversationId: conversationA, requestId: `quota-a-${Date.now()}`, text: '第一条' })
     record('Q-4', Boolean(first.runId), `会话 A 的回合已接受（runId=${first.runId}），当前占用 ${quota.activeRuns('user-1')}`)
 
     // 第二个回合必须被拒
     let rejectedMessage = ''
     try {
-      await dispatch('command.agent.start', { conversationId: conversationB, text: '第二条' })
+      await dispatch('command.agent.start', { conversationId: conversationB, requestId: `quota-b1-${Date.now()}`, text: '第二条' })
     } catch (error) {
       rejectedMessage = error instanceof Error ? error.message : String(error)
     }
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
       `A 回合结束（${settled.event?.name}），名额已释放，当前占用 ${quota.activeRuns('user-1')}`)
 
     // 现在 B 应该能开始
-    const second = await dispatch<{ runId: string }>('command.agent.start', { conversationId: conversationB, text: '第三条' })
+    const second = await dispatch<{ runId: string }>('command.agent.start', { conversationId: conversationB, requestId: `quota-b2-${Date.now()}`, text: '第三条' })
     record('Q-7', Boolean(second.runId), `释放后会话 B 的回合被接受（runId=${second.runId}）`)
     await waitFor(events, ['agent.run.finished', 'agent.run.failed'], 90_000, settled.index)
     await tenant.dispose()

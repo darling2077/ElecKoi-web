@@ -115,6 +115,8 @@ async function main(): Promise<void> {
     const startedAt = Date.now()
     const started = await dispatch<{ runId: string; messageId: string }>('command.agent.start', {
       conversationId,
+      // 上游 v0.1.5 起 requestId 必填（停止/重新生成链路按它匹配事件），格式与渲染层一致
+      requestId: `p2b-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       text: '你好，请自我介绍一下。'
     })
     record('P2b-4', 'command.agent.start 被接受', Boolean(started.runId),
