@@ -235,11 +235,9 @@ function insertContextRecords(
     const anchor = entries[index]?.anchor
     const placement = anchor === 'insert_point_3'
       ? 'before-user'
-      : anchor === 'insert_point_4'
+      : anchor === 'insert_point_4' || anchor === 'insert_point_5'
         ? 'after-user'
-        : anchor === 'insert_point_5'
-          ? 'after-tools'
-          : 'before-dialogue'
+        : 'before-dialogue'
     grouped.set(placement, [...(grouped.get(placement) ?? []), record])
   })
   const insert = (placement: string, index: number) => {
@@ -257,9 +255,6 @@ function insertContextRecords(
   const lastContextIndex = lastIndex(records, (record) => record.turn === turn && record.kind === 'context')
   insert('after-user', (lastUserIndex >= 0 ? lastUserIndex : lastContextIndex >= 0 ? lastContextIndex : firstTurnIndex) + 1)
 
-  const lastToolIndex = lastIndex(records, (record) => record.turn === turn && record.kind === 'tool')
-  const lastDialogueIndex = lastIndex(records, (record) => record.turn === turn && (record.kind === 'user' || record.kind === 'context'))
-  insert('after-tools', (lastToolIndex >= 0 ? lastToolIndex : lastDialogueIndex >= 0 ? lastDialogueIndex : firstTurnIndex) + 1)
 }
 
 function lastIndex<T>(values: readonly T[], predicate: (value: T) => boolean): number {

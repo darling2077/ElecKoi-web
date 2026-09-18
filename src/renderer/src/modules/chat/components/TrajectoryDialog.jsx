@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { MagnifyingGlass } from "@phosphor-icons/react";
-import { DshCloseIcon } from "../../../ui/icons/dshComposerIcons.jsx";
+import { DshChevronRightIcon, DshCloseIcon } from "../../../ui/icons/dshComposerIcons.jsx";
 import { getTrajectory } from "../api/chatApi.js";
 
 const pageSize = 400;
@@ -40,6 +40,9 @@ export function TrajectoryDialog({ conversationId, isSending, onClose }) {
   const [callsCollapsed, setCallsCollapsed] = useState(false);
   const [detailTab, setDetailTab] = useState("summary");
   const dialogRef = useRef(null);
+  const ledgerRef = useRef(null);
+  const initialScrollPendingRef = useRef(true);
+  const followLatestRef = useRef(true);
   const onCloseRef = useRef(onClose);
 
   useEffect(() => {
@@ -52,6 +55,8 @@ export function TrajectoryDialog({ conversationId, isSending, onClose }) {
     setSelectedRequestSeq(null);
     setError("");
     setLoading(true);
+    initialScrollPendingRef.current = true;
+    followLatestRef.current = true;
   }, [conversationId]);
 
   const refresh = useCallback(async () => {
@@ -124,6 +129,15 @@ export function TrajectoryDialog({ conversationId, isSending, onClose }) {
   }, []);
 
   const records = snapshot?.records || [];
+  useLayoutEffect(() => {
+    const ledger = ledgerRef.current;
+    if (!ledger || records.length === 0) return;
+    if (!initialScrollPendingRef.current && !followLatestRef.current) return;
+    ledger.scrollTop = ledger.scrollHeight;
+    initialScrollPendingRef.current = false;
+    followLatestRef.current = true;
+  }, [conversationId, records.length]);
+
   useEffect(() => {
     if (selectedId && !records.some((record) => record.id === selectedId)) setSelectedId("");
     if (selectedRequestSeq !== null
@@ -253,7 +267,15 @@ export function TrajectoryDialog({ conversationId, isSending, onClose }) {
         />
 
         <div className={`trajectory-content${inspectorOpen ? " has-inspector" : ""}`}>
-          <main className="trajectory-ledger" aria-label="轨迹事件">
+          <main
+            ref={ledgerRef}
+            className="trajectory-ledger"
+            aria-label="轨迹事件"
+            onScroll={(event) => {
+              const ledger = event.currentTarget;
+              followLatestRef.current = ledger.scrollHeight - ledger.clientHeight - ledger.scrollTop <= 48;
+            }}
+          >
             {snapshot?.hasMore ? (
               <button className="trajectory-load-older" type="button" disabled={loadingOlder} onClick={loadOlder}>
                 {loadingOlder ? "正在加载…" : "加载更早记录"}
@@ -273,7 +295,9 @@ export function TrajectoryDialog({ conversationId, isSending, onClose }) {
                   aria-expanded={!collapsed}
                   onClick={() => toggleTurn(group.key)}
                 >
-                  <span>{collapsed ? "›" : "⌄"}</span>
+                  <span className="trajectory-turn-toggle" aria-hidden="true">
+                    <DshChevronRightIcon className={collapsed ? "" : "is-expanded"} />
+                  </span>
                   <strong>{group.label}</strong>
                   <small>{group.records.length}</small>
                 </button>

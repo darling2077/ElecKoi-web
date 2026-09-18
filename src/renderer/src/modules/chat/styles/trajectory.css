@@ -222,6 +222,9 @@
 .trajectory-inspector-body {
   min-height: 0;
   overflow: auto;
+}
+
+.trajectory-inspector-body {
   scrollbar-gutter: stable;
 }
 
@@ -278,10 +281,22 @@
   text-align: left;
 }
 
-.trajectory-turn-header > span {
+.trajectory-turn-toggle {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
   color: var(--muted);
-  font-size: 18px;
-  line-height: 1;
+}
+
+.trajectory-turn-toggle svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 150ms ease-out;
+}
+
+.trajectory-turn-toggle svg.is-expanded {
+  transform: rotate(90deg);
 }
 
 .trajectory-turn-header strong {
