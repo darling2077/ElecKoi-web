@@ -398,7 +398,7 @@ async function main(): Promise<void> {
     // 一条用例一个回合；等这一条写完再跑下一条，避免并发写乱顺序。
     for (let index = 0; index < CASES.length; index += 1) {
       caseIndex = index
-      await call('command.agent.start', { conversationId, text: `请回复第 ${CASES[index]!.key} 个用例` })
+      await call('command.agent.start', { conversationId, requestId: `render-${index}-${Date.now()}`, text: `请回复第 ${CASES[index]!.key} 个用例` })
       // 每个回合产生 user + assistant 两条，所以第 n 轮结束时应为 (n+1)*2 条
       const settled = await waitForRun(call, conversationId, 120_000)
       // 落库原文是否保留换行与围栏：渲染异常时先确认"存进去的还在不在"
