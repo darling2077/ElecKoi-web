@@ -3,18 +3,16 @@ import { createPortal } from "react-dom";
 import { PencilIcon, PlusIcon, CharacterManagerIcon, ImportIcon, TrashIcon } from "../../../ui/icons/index.jsx";
 import { AddGroupDialog } from "./AddGroupDialog.jsx";
 import { CharacterGroupList } from "./CharacterGroupList.jsx";
-import { CharacterManagerModal } from "./CharacterManagerModal.jsx";
 import { CharacterImportDialog } from "./CharacterImportDialog.jsx";
 import { DeleteCharacterDialog } from "./DeleteCharacterDialog.jsx";
 import { ALL_CHARACTERS, characterGroup, characterName } from "./characterUtils.js";
 import { DshSearchField } from "../../../ui/ui/DshSearchField.jsx";
 import { SidebarCreateButton } from "../../../ui/ui/SidebarCreateButton.jsx";
 import { LIST_COLLAPSE_AREAS, usePersistentCollapseState } from "../../settings/index.js";
-import { exportCharacter } from "../api/personaApi.js";
+import { openCharacterManagerWindow } from "../window/openCharacterManagerWindow.js";
 
 export function CharacterListPanel({ characters, activeCharacterId, artworkMode, onSelectCharacter, onOpenCharacterChat, onSaveCharacterGroups, onImportPreparedCharacters, onCreateCharacter, onDeleteCharacters }) {
   const [keyword, setKeyword] = useState("");
-  const [managerOpen, setManagerOpen] = useState(false);
   const [createMenuOpen, setCreateMenuOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [listTab, setListTab] = useState("characters");
@@ -47,19 +45,6 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
       ? [ALL_CHARACTERS, ...groups]
       : undefined,
   );
-
-  const visibleCharacters = useMemo(() => {
-    const key = keyword.trim().toLowerCase();
-    return (characters.items || []).filter((item) => {
-      const inGroup = selectedGroup === ALL_CHARACTERS || characterGroup(item) === selectedGroup;
-      const matches = !key || `${characterName(item)} ${characterGroup(item)}`.toLowerCase().includes(key);
-      return inGroup && matches;
-    });
-  }, [characters, keyword, selectedGroup]);
-
-  function countByGroup(group) {
-    return (characters.items || []).filter((item) => characterGroup(item) === group).length;
-  }
 
   function toggleGroup(group) {
     setCollapsedGroups((current) => ({ ...current, [group]: !current[group] }));
@@ -190,20 +175,6 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
     if (selectedGroup === group) setSelectedGroup(ALL_CHARACTERS);
   }
 
-  async function exportCharacters(format) {
-    const character = (characters.items || []).find((item) => item.id === activeCharacterId) || characters.items?.[0];
-    if (!character) return;
-    const exported = await exportCharacter(character.id, format);
-    const bytes = base64Bytes(exported.base64);
-    const blob = new Blob([bytes], { type: exported.mimeType });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = exported.fileName;
-    link.click();
-    URL.revokeObjectURL(url);
-  }
-
   function createInSelectedGroup() {
     setCreateMenuOpen(false);
     onCreateCharacter(selectedGroup === ALL_CHARACTERS ? "" : selectedGroup);
@@ -236,7 +207,7 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
         </div>
       ) : null}
 
-      <button className="character-manager-entry" type="button" onClick={() => setManagerOpen(true)}>
+      <button className="character-manager-entry" type="button" onClick={openCharacterManagerWindow}>
         <CharacterManagerIcon />
         <span>角色卡管理器</span>
       </button>
@@ -283,33 +254,6 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
           </div>
         ) : null}
       </div>
-
-      {managerOpen ? (
-        <CharacterManagerModal
-          characters={characters}
-          groups={groups}
-          visibleCharacters={visibleCharacters}
-          activeCharacterId={activeCharacterId}
-          selectedGroup={selectedGroup}
-          keyword={keyword}
-          groupDialogOpen={groupDialogOpen}
-          groupDialogTitle={groupDialogMode === "rename" ? "重命名该组" : "添加分组"}
-          newGroupName={newGroupName}
-          onClose={() => setManagerOpen(false)}
-          onSelectGroup={setSelectedGroup}
-          onKeywordChange={setKeyword}
-          onSelectCharacter={onSelectCharacter}
-          onGroupContextMenu={openGroupMenu}
-          onOpenGroupDialog={openAddGroupDialog}
-          onCloseGroupDialog={() => setGroupDialogOpen(false)}
-          onGroupNameChange={setNewGroupName}
-          onAddGroup={saveGroupDialog}
-          onOpenImport={openImportDialog}
-          onExportCharacters={exportCharacters}
-          onDeleteCharacters={onDeleteCharacters}
-          countByGroup={countByGroup}
-        />
-      ) : null}
 
       {groupMenu ? (
         <div className="character-group-context-menu" style={{ left: `${groupMenu.x}px`, top: `${groupMenu.y}px` }} onPointerDown={(event) => event.stopPropagation()}>
@@ -363,7 +307,7 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
         />
       ) : null}
 
-      {!managerOpen && groupDialogOpen ? (
+      {groupDialogOpen ? (
         <AddGroupDialog
           title={groupDialogMode === "rename" ? "重命名该组" : "添加分组"}
           value={newGroupName}
@@ -374,11 +318,4 @@ export function CharacterListPanel({ characters, activeCharacterId, artworkMode,
       ) : null}
     </aside>
   );
-}
-
-function base64Bytes(value) {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
 }

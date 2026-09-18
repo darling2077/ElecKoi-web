@@ -43,6 +43,7 @@ export const mainWindowPlugin = {
         installWindowsNativeFrame(window)
         window.webContents.on('did-finish-load', () => installWindowsNativeFrame(window))
         window.once('ready-to-show', () => window.show())
+        configureWindowNavigation(ctx, windows, window)
       }
     })
 
@@ -135,6 +136,10 @@ function configureMainWindow(ctx: Context, windows: ElectronWindowHost, window: 
   installWindowsNativeFrame(window)
   window.webContents.on('did-finish-load', () => installWindowsNativeFrame(window))
   window.once('ready-to-show', () => window.show())
+  configureWindowNavigation(ctx, windows, window)
+}
+
+function configureWindowNavigation(ctx: Context, windows: ElectronWindowHost, window: BrowserWindow): void {
   window.webContents.on('will-navigate', (event, url) => {
     if (!isAppRendererUrl(url)) event.preventDefault()
   })
@@ -183,9 +188,13 @@ function initialWindowSize(): { width: number; height: number } {
 
 function initialChildWindowSize(payload?: unknown): { width: number; height: number } {
   const frameName = (payload as { frameName?: unknown } | undefined)?.frameName
-  return typeof frameName === 'string' && frameName.startsWith('character-editor-')
-    ? fitWindowSize(1520, 1120)
-    : fitWindowSize(960, 720)
+  if (typeof frameName === 'string' && frameName.startsWith('character-editor-')) {
+    return fitWindowSize(1520, 1120)
+  }
+  if (frameName === 'character-manager' || frameName === 'preset-manager') {
+    return fitWindowSize(1500, 1040)
+  }
+  return fitWindowSize(960, 720)
 }
 
 function fitWindowSize(preferredWidth: number, preferredHeight: number): { width: number; height: number } {

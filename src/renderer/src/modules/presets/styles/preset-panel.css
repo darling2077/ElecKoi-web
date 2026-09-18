@@ -920,38 +920,25 @@
   top: 51px;
 }
 
-.preset-manager-overlay {
-  position: fixed;
-  z-index: 300;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  padding: 42px;
-  background: color-mix(in srgb, #000 36%, transparent);
-}
-
 .preset-manager-window {
   position: relative;
   display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  width: min(1120px, calc(100vw - 84px));
-  height: min(650px, calc(100vh - 84px));
-  min-height: 420px;
+  grid-template-columns: 232px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
   color: var(--text);
-  background: var(--surface-subtle);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  box-shadow: 0 22px 68px color-mix(in srgb, #000 30%, transparent);
+  background: var(--chat);
 }
 
 .preset-manager-groups {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 7px;
-  padding: 25px 15px 18px;
-  background: var(--surface-raised);
-  border-right: 1px solid var(--line);
+  padding: 48px 16px 18px;
+  background: var(--list);
 }
 
 .preset-manager-groups > button,
@@ -1009,17 +996,20 @@
 
 .preset-manager-main {
   display: grid;
-  grid-template-rows: 78px auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  padding: 0 25px 24px;
+  padding: 48px 34px 28px;
+  background: var(--chat);
 }
 
 .preset-manager-titlebar {
   display: grid;
-  grid-template-columns: auto minmax(180px, 1fr) repeat(3, auto) 34px;
+  grid-template-columns: minmax(180px, auto) minmax(220px, 1fr) repeat(3, auto);
   align-items: center;
   gap: 8px;
+  min-height: 44px;
+  margin-bottom: 22px;
 }
 
 .preset-manager-main h2 {
@@ -1068,12 +1058,6 @@
 .preset-manager-titlebar > .preset-manager-confirm-delete:hover:not(:disabled) {
   color: #fff;
   background: #ff3437;
-}
-
-.preset-manager-titlebar > .preset-manager-close {
-  width: 34px;
-  padding: 0;
-  color: var(--muted);
 }
 
 .preset-manager-export {
@@ -1131,9 +1115,9 @@
 
 .preset-manager-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   align-content: start;
-  gap: 10px;
+  gap: 14px;
   min-height: 0;
   overflow-y: auto;
 }
@@ -1141,10 +1125,24 @@
 .preset-manager-card {
   position: relative;
   display: block;
-  padding: 10px;
+  padding: 12px;
   background: var(--surface-raised);
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 11px;
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.preset-manager-card:hover {
+  border-color: color-mix(in srgb, var(--blue) 22%, var(--line));
+  box-shadow: 0 7px 20px color-mix(in srgb, var(--shadow-color) 42%, transparent);
+  transform: translateY(-1px);
+}
+
+.preset-manager-groups button:focus-visible,
+.preset-manager-titlebar button:focus-visible,
+.preset-manager-card-open:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
 }
 
 .preset-manager-card.is-current {
@@ -1268,8 +1266,8 @@
 }
 
 .preset-group-dialog-backdrop {
-  position: absolute;
-  z-index: 3;
+  position: fixed;
+  z-index: 330;
   inset: 0;
   display: grid;
   place-items: center;
@@ -1430,6 +1428,26 @@
   color: var(--muted);
 }
 
+@media (max-width: 1080px) {
+  .preset-manager-window {
+    grid-template-columns: 190px minmax(0, 1fr);
+  }
+
+  .preset-manager-main {
+    padding-right: 22px;
+    padding-left: 22px;
+  }
+
+  .preset-manager-titlebar {
+    grid-template-columns: minmax(160px, auto) minmax(190px, 1fr) repeat(3, auto);
+  }
+
+  .preset-manager-titlebar > button,
+  .preset-manager-export > button {
+    padding: 0 8px;
+  }
+}
+
 @media (max-width: 850px) {
   .preset-author-fields {
     grid-template-columns: 1fr;
@@ -1441,6 +1459,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .preset-manager-card,
   .preset-group-heading svg,
   .preset-tool-summary > svg,
   .preset-tool-switch i,

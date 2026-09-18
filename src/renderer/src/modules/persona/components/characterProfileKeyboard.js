@@ -11,7 +11,6 @@ const BLOCKING_OVERLAY_SELECTOR = [
   "dialog[open]",
   "[aria-modal='true']",
   "[role='dialog']",
-  ".character-manager-overlay",
 ].join(",");
 
 export function characterDeckKeyDirection(event, overlayOpen = false) {

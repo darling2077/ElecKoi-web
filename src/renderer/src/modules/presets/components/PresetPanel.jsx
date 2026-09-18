@@ -12,7 +12,6 @@ import { LIST_COLLAPSE_AREAS, usePersistentCollapseState } from '../../settings/
 import {
   createPreset,
   deletePreset,
-  exportPreset,
   getPreset,
   getPresetCatalog,
   importPreset,
@@ -26,8 +25,8 @@ import { PresetProfileEditor } from './PresetProfileEditor.jsx';
 import { PresetPromptEditor } from './PresetPromptEditor.jsx';
 import { PresetRegexEditor } from './PresetRegexEditor.jsx';
 import { PresetToolsEditor } from './PresetToolsEditor.jsx';
-import { PresetManager } from './PresetManager.jsx';
-import { downloadPresetFile, fileBase64, PresetImportDialog } from './PresetTransfer.jsx';
+import { fileBase64, PresetImportDialog } from './PresetTransfer.jsx';
+import { openPresetManagerWindow } from '../window/openPresetManagerWindow.js';
 
 const PresetContext = createContext(null);
 const ALL_PRESETS = '全部预设';
@@ -109,7 +108,6 @@ export function PresetListPanel() {
   const { catalog, setCatalog, selectedPresetId, setSelectedPresetId, navigationGuard, refresh, error, setError } = usePresets();
   const [keyword, setKeyword] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
-  const [managerOpen, setManagerOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState(ALL_PRESETS);
   const [importing, setImporting] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -205,13 +203,6 @@ export function PresetListPanel() {
     });
   }
 
-  async function exportSelectedPreset(format) {
-    if (!selectedPresetId) return;
-    setImportError('');
-    const result = await exportPreset(selectedPresetId, format);
-    downloadPresetFile(result);
-  }
-
   function activateFromList(preset) {
     runGuarded(async () => {
       try {
@@ -271,7 +262,7 @@ export function PresetListPanel() {
       <button type="button" disabled={importing} onClick={beginImport}><ImportIcon /><span>导入预设</span></button>
     </div> : null}
     <input ref={importInputRef} type="file" accept="image/png,application/json,.png,.json" hidden onChange={handleImport} />
-    <button type="button" className="character-manager-entry preset-manager-entry" onClick={() => { if (navigationGuard.current) navigationGuard.current(() => setManagerOpen(true)); else setManagerOpen(true); }}><CharacterManagerIcon /><span>预设管理器</span></button>
+    <button type="button" className="character-manager-entry preset-manager-entry" onClick={openPresetManagerWindow}><CharacterManagerIcon /><span>预设管理器</span></button>
     <div className="character-list-scroll preset-list-scroll">
       {collapseStateReady ? sections.map(renderGroup) : null}
       {shouldShowPresetCatalogLoading(catalog, error) ? <p className="preset-list-state">正在读取…</p> : null}
@@ -283,19 +274,6 @@ export function PresetListPanel() {
       () => activateFromList(context.menu.target),
       () => removeFromList(context.menu.target),
     )} /> : null}
-    {managerOpen && catalog ? <PresetManager
-      catalog={catalog}
-      selectedGroup={selectedGroup}
-      selectedPresetId={selectedPresetId}
-      onSelectGroup={setSelectedGroup}
-      onSelectPreset={(id) => { setSelectedPresetId(id); setManagerOpen(false); }}
-      onClose={() => setManagerOpen(false)}
-      onRefresh={refresh}
-      onImport={beginImport}
-      onExport={exportSelectedPreset}
-      importing={importing}
-      importError={importError}
-    /> : null}
     {importDialogOpen ? <PresetImportDialog onSelect={chooseImportSource} onClose={() => setImportDialogOpen(false)} /> : null}
   </aside>;
 }

@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar } from '../../../ui/ui/Avatar.jsx';
 import { DshSearchField } from '../../../ui/ui/DshSearchField.jsx';
-import { ExportIcon, ImportIcon, PencilIcon, PlusIcon, TrashIcon, XIcon } from '../../../ui/icons/index.jsx';
+import { ExportIcon, ImportIcon, PencilIcon, PlusIcon, TrashIcon } from '../../../ui/icons/index.jsx';
 import defaultPresetAvatar from '../../../assets/eleckoi-app-icon.png';
 import { createPresetGroup, deletePreset, deletePresetGroup, renamePresetGroup } from '../api/presetApi.js';
 
 const ALL_PRESETS = '全部预设';
 
-export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSelectGroup, onSelectPreset, onClose, onRefresh, onImport, onExport, importing, importError }) {
+export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSelectGroup, onSelectPreset, onRefresh, onImport, onExport, importing, importError }) {
   const [groupDraft, setGroupDraft] = useState('');
   const [editingGroupId, setEditingGroupId] = useState('');
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -146,8 +146,7 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
     }
   }
 
-  return <div className="preset-manager-overlay" role="presentation" onMouseDown={onClose}>
-    <section className="preset-manager-window" role="dialog" aria-modal="true" aria-label="预设管理器" onMouseDown={(event) => event.stopPropagation()}>
+  return <section className="preset-manager-window" aria-label="预设管理器">
       <aside className="preset-manager-groups">
         <button type="button" className={selectedGroup === ALL_PRESETS ? 'active' : ''} onClick={() => onSelectGroup(ALL_PRESETS)}><span>{ALL_PRESETS}</span><em>{catalog.presets.length}</em></button>
         <small>分组</small>
@@ -173,7 +172,6 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
             <button className="preset-manager-confirm-delete" type="button" disabled={!selectedIds.length} onClick={() => void removeSelectedPresets()}>确认{selectedIds.length ? ` ${selectedIds.length}` : ''}</button>
             <button type="button" onClick={cancelDeleteMode}>取消</button>
           </>}
-          <button className="preset-manager-close" type="button" aria-label="关闭" onClick={onClose}><XIcon /></button>
         </header>
         {error || importError ? <p className="preset-manager-error">{error || importError}</p> : null}
         <div className="preset-manager-grid">{visible.map((preset) => {
@@ -200,8 +198,7 @@ export function PresetManager({ catalog, selectedGroup, selectedPresetId, onSele
         onConfirm={() => void (editingGroupId ? renameGroup() : addGroup())}
         onCancel={() => { setGroupDialogOpen(false); setEditingGroupId(''); setGroupDraft(''); }}
       /> : null}
-    </section>
-  </div>;
+  </section>;
 }
 
 function PresetGroupDialog({ title, value, onChange, onConfirm, onCancel }) {
