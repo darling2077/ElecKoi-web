@@ -335,88 +335,16 @@
 
 .preset-prompt-tree {
   min-height: 0;
-  padding: 9px 18px 24px;
-  overflow-y: auto;
+  padding: 0 18px;
+  overflow: auto;
 }
 
-.preset-prompt-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
+.preset-prompt-tree .setting-library-tree-row-content {
   width: min(520px, 100%);
-  height: 35px;
-  align-items: center;
-  gap: 2px;
-  padding-right: 3px;
-  color: var(--text);
-  border-radius: 7px;
-  font-size: 13px;
-  text-align: left;
 }
 
-.preset-prompt-open {
-  display: flex;
-  min-width: 0;
-  height: 100%;
-  align-items: center;
-  gap: 7px;
-  text-align: left;
-}
-
-.preset-prompt-open > svg:first-child {
-  color: var(--soft-text);
-  transition: transform 130ms ease;
-}
-
-.preset-prompt-open > svg:first-child.is-expanded {
-  transform: rotate(90deg);
-}
-
-.preset-prompt-caret-space {
-  width: 13px;
-  flex: 0 0 13px;
-}
-
-.preset-prompt-row:hover,
-.preset-prompt-row.is-selected {
-  background: var(--active);
-}
-
-.preset-prompt-row.is-disabled {
-  color: var(--soft-text);
-}
-
-.preset-prompt-open > span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.preset-prompt-switch {
-  position: relative;
-  width: 28px;
-  height: 16px;
-  background: color-mix(in srgb, var(--text) 16%, transparent);
-  border-radius: 999px;
-}
-
-.preset-prompt-switch i {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  background: #fff;
-  border-radius: 50%;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .14);
-  transition: transform 130ms ease;
-}
-
-.preset-prompt-switch[aria-checked="true"] {
-  background: var(--blue);
-}
-
-.preset-prompt-switch[aria-checked="true"] i {
-  transform: translateX(12px);
+.preset-prompt-tree .setting-library-tree-drop-cursor {
+  --tree-drop-max-width: 520px;
 }
 
 .setting-library-placement-row.is-custom {
@@ -896,11 +824,9 @@
 }
 
 .preset-context-menu button:focus-visible,
-.preset-prompt-open:focus-visible,
 .preset-regex-open:focus-visible,
 .preset-tool-summary:focus-visible,
 .preset-tool-more:focus-visible,
-.preset-prompt-switch:focus-visible,
 .preset-regex-enabled:focus-visible {
   outline: 2px solid var(--blue);
   outline-offset: 2px;

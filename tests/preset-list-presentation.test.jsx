@@ -8,13 +8,23 @@ import { PresetToolsEditor } from '../src/renderer/src/modules/presets/component
 import { PresetProfileHeader } from '../src/renderer/src/modules/presets/components/PresetProfileHeader.jsx';
 import { buildPresetListSections, PresetListRow, presetListContextActions, shouldShowPresetCatalogLoading } from '../src/renderer/src/modules/presets/components/PresetPanel.jsx';
 import { createEntryDraft } from '../src/renderer/src/modules/settingLibraries/model/settingLibraryEditing.js';
+import { treeNodes } from '../src/renderer/src/modules/settingLibraries/model/settingLibraryTree.js';
 import { SettingLibraryInspector } from '../src/renderer/src/modules/settingLibraries/components/SettingLibraryInspector.jsx';
 import { TrashIcon } from '../src/renderer/src/ui/icons/index.jsx';
 import { SETTING_LIBRARY_CREATE_ICONS } from '../src/renderer/src/ui/icons/settingLibraryCreateIcons.jsx';
 
 vi.mock('../src/renderer/src/modules/settingLibraries/index.js', async () => {
+  const react = await import('react');
   const drafts = await import('../src/renderer/src/modules/settingLibraries/model/settingLibraryEditing.js');
-  return { ...drafts, ConfirmationDialog: () => null, SettingEntryGlyph: () => React.createElement('svg'), SettingLibraryInspector: () => null };
+  const tree = await import('../src/renderer/src/modules/settingLibraries/model/settingLibraryTree.js');
+  return {
+    ...drafts,
+    ...tree,
+    ConfirmationDialog: () => null,
+    SettingLibraryInspector: () => null,
+    SettingLibraryTree: () => null,
+    SettingTreeActionsContext: react.createContext(null),
+  };
 });
 vi.mock('../src/renderer/src/modules/regex/index.js', () => ({ RegexRuleInspector: () => null, newRegexId: () => crypto.randomUUID() }));
 
@@ -154,23 +164,21 @@ describe('preset list consistency', () => {
   });
 
   it('keeps prompt rows to an open action and a switch, without an inline delete button', () => {
-    const entry = { ...createEntryDraft('', 1, []), title: '角色核心', enabled: true };
-    const html = renderToStaticMarkup(<PresetPromptEditor {...props} preset={{ ...preset, entries: [entry] }} />);
-    const row = html.slice(html.indexOf('class="preset-prompt-row'));
-    expect(row.match(/<button\b/g)).toHaveLength(2);
-    expect(row).toContain('preset-prompt-open');
-    expect(row).toContain('role="switch" aria-checked="true"');
-    expect(row).not.toContain('删除');
-    expect(row).not.toContain('复制');
+    const promptSource = readFileSync(new URL('../src/renderer/src/modules/presets/components/PresetPromptEditor.jsx', import.meta.url), 'utf8');
+    const treeSource = readFileSync(new URL('../src/renderer/src/modules/settingLibraries/components/SettingLibraryTree.jsx', import.meta.url), 'utf8');
+    expect(promptSource).toContain('<SettingLibraryTree');
+    expect(treeSource).toContain('role="switch"');
+    expect(treeSource).not.toContain('TrashIcon');
+    expect(treeSource).not.toContain('>删除<');
+    expect(treeSource).not.toContain('>复制<');
   });
 
   it('pins the two preset-owned runtime prompts above ordinary prompts', () => {
     const ordinary = { ...createEntryDraft('', 1, []), id: 'ordinary', title: '普通提示词', treeViewOrder: 1 };
     const hidden = { ...createEntryDraft('', 1, []), id: 'built-in-hidden-tool-timeline', title: '隐藏工具时间线', kind: 'hidden_tool_timeline', treeViewOrder: Number.MIN_SAFE_INTEGER };
     const compaction = { ...createEntryDraft('', 1, []), id: 'built-in-roleplay-history-compaction', title: '自动压缩摘要模板', kind: 'history_compaction', treeViewOrder: Number.MIN_SAFE_INTEGER + 1 };
-    const html = renderToStaticMarkup(<PresetPromptEditor {...props} preset={{ ...preset, entries: [ordinary, compaction, hidden] }} />);
-    expect(html.indexOf('隐藏工具时间线')).toBeLessThan(html.indexOf('自动压缩摘要模板'));
-    expect(html.indexOf('自动压缩摘要模板')).toBeLessThan(html.indexOf('普通提示词'));
+    const nodes = treeNodes({ ...preset, entries: [ordinary, compaction, hidden] });
+    expect(nodes.map((node) => node.label)).toEqual(['隐藏工具时间线', '自动压缩摘要模板', '普通提示词']);
   });
 
   it('keeps hidden tool timeline as a full setting editor and confirms before disabling it', () => {

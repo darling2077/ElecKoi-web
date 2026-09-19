@@ -1,5 +1,4 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { Tree as ArboristTree } from "react-arborist";
 import { Copy, MagnifyingGlass, PencilSimple, Plus, Scissors, SlidersHorizontal, Trash } from "@phosphor-icons/react";
 import { getVariableConfig, saveVariableConfig, saveVariableConfigViewState } from "../api/variableConfigApi.js";
 import { ConfirmationDialog, SaveControl } from "../../settingLibraries/index.js";
@@ -21,7 +20,7 @@ import {
 import { hasVariableSearchResults, variableTreeNodes } from "../model/variableConfigTree.js";
 import { VariableConfigInspector } from "./VariableConfigInspector.jsx";
 import { VariableConfigManager } from "./VariableConfigManager.jsx";
-import { VariableEntryIcon, VariableGroupIcon, VariableTreeActionsContext, VariableTreeCursor, VariableTreeNode } from "./VariableConfigTree.jsx";
+import { VariableConfigTree, VariableEntryIcon, VariableGroupIcon, VariableTreeActionsContext } from "./VariableConfigTree.jsx";
 
 function isTextInput(target) {
   return Boolean(target?.closest?.("input, textarea, select, [contenteditable='true']"));
@@ -46,33 +45,20 @@ export const VariableConfigPanel = forwardRef(function VariableConfigPanel({ cha
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [treeHeight, setTreeHeight] = useState(0);
   const configRef = useRef(null);
   const persistedRef = useRef(null);
   const expandedRef = useRef([]);
   const clipboardRef = useRef(null);
   const savePromiseRef = useRef(null);
-  const treeRef = useRef(null);
-  const treeViewportRef = useRef(null);
   const nameInputRef = useRef(null);
 
   const dirty = useMemo(() => JSON.stringify(config) !== JSON.stringify(persisted), [config, persisted]);
   const selected = useMemo(() => config ? selectedVariableNode(config, selectedKey) : { kind: "", value: null }, [config, selectedKey]);
   const nodes = useMemo(() => config ? variableTreeNodes(config) : [], [config]);
   const searchHasResults = useMemo(() => config ? hasVariableSearchResults(config, query) : false, [config, query]);
-  const initialOpenState = useMemo(() => Object.fromEntries(expandedIds.map((id) => [nodeKey("object", id), true])), [expandedIds]);
 
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
   useEffect(() => { expandedRef.current = expandedIds; }, [expandedIds]);
-  useEffect(() => {
-    const element = treeViewportRef.current;
-    if (!element) return undefined;
-    const update = () => setTreeHeight(Math.max(0, Math.floor(element.getBoundingClientRect().height)));
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [config !== null]);
   useEffect(() => {
     if (notice !== "saved") return undefined;
     const timeout = window.setTimeout(() => setNotice(""), 1600);
@@ -141,7 +127,6 @@ export const VariableConfigPanel = forwardRef(function VariableConfigPanel({ cha
     expandedRef.current = ids;
     setExpandedIds(ids);
     setSelectedKey("");
-    treeRef.current?.deselectAll();
     setError("");
     setNotice("");
   }
@@ -150,7 +135,6 @@ export const VariableConfigPanel = forwardRef(function VariableConfigPanel({ cha
 
   function closeInspector() {
     setSelectedKey("");
-    treeRef.current?.deselectAll();
   }
 
   function parentForNewNode() {
@@ -191,29 +175,33 @@ export const VariableConfigPanel = forwardRef(function VariableConfigPanel({ cha
     });
   }
 
-  function handleMove({ dragIds, parentId, parentNode, index }) {
-    const moved = parseNodeKey(String(dragIds[0] || ""));
+  function handleMove({ dragId, parentId, destinationIndex, expandParentId }) {
+    const moved = parseNodeKey(dragId);
     const destinationParentId = parentId ? parseNodeKey(parentId).id : "";
-    const siblings = (parentNode?.children || []).filter((node) => !node.data.fixed && !dragIds.includes(node.id));
-    const before = (parentNode?.children || []).slice(0, index).filter((node) => !node.data.fixed && !dragIds.includes(node.id));
-    const destinationIndex = Math.min(siblings.length, before.length);
-    changeConfig((current) => moveVariableNode(current, moved, destinationParentId, destinationIndex), false);
+    if (!moved.id) return;
+    const expandedParent = expandParentId ? parseNodeKey(expandParentId).id : "";
+    const nextExpanded = expandedParent
+      ? [...new Set([...expandedRef.current, expandedParent])]
+      : expandedRef.current;
+    if (expandedParent) {
+      expandedRef.current = nextExpanded;
+      setExpandedIds(nextExpanded);
+    }
+    changeConfig((current) => {
+      const next = moveVariableNode(current, moved, destinationParentId, destinationIndex);
+      if (!expandedParent) return next;
+      return {
+        ...next,
+        expandedObjectIds: nextExpanded,
+        versions: next.versions.map((version) => version.id === next.activeVersionId
+          ? { ...version, expandedObjectIds: nextExpanded }
+          : version),
+      };
+    }, false);
   }
 
-  function disableDrop({ parentNode, index }) {
-    if (query || (!parentNode.isRoot && (parentNode.data.nodeKind !== "object" || parentNode.data.fixed))) return true;
-    if (!parentNode.isRoot) return false;
-    const firstMovable = (parentNode.children || []).findIndex((node) => !node.data.fixed);
-    return firstMovable > 0 && index < firstMovable;
-  }
-
-  function handleToggle(key) {
-    if (query) return;
-    const id = parseNodeKey(key).id;
-    if (!id) return;
-    const next = treeRef.current?.isOpen(key)
-      ? [...new Set([...expandedRef.current, id])]
-      : expandedRef.current.filter((item) => item !== id);
+  function handleExpandedKeysChange(keys) {
+    const next = keys.map(parseNodeKey).filter((item) => item.kind === "object").map((item) => item.id);
     expandedRef.current = next;
     setExpandedIds(next);
     const applyViewState = (value) => value ? {
@@ -333,34 +321,18 @@ export const VariableConfigPanel = forwardRef(function VariableConfigPanel({ cha
           <button type="button" className="variable-manage-button" aria-expanded={managerOpen} onClick={() => { setAddOpen(false); setManagerOpen(true); }}><SlidersHorizontal size={16} />管理</button>
           <SaveControl dirty={dirty} error={error} notice={notice} saving={saving} onSave={save} />
         </div>
-        <div ref={treeViewportRef} className="variable-tree" onContextMenu={openBackgroundMenu} onMouseDown={(event) => { if (event.button === 0 && !event.target.closest('[role="treeitem"]')) closeInspector(); }}>
+        <div className="variable-tree" onContextMenu={openBackgroundMenu} onMouseDown={(event) => { if (event.button === 0 && !event.target.closest('[role="treeitem"]')) closeInspector(); }}>
           <VariableTreeActionsContext.Provider value={{ openContextMenu, toggleNode }}>
-            {treeHeight > 0 ? (
-              <ArboristTree
-                key={characterId}
-                ref={treeRef}
-                data={nodes}
-                selection={selectedKey || undefined}
-                initialOpenState={initialOpenState}
-                openByDefault={false}
-                rowHeight={38}
-                indent={18}
-                width="100%"
-                height={treeHeight}
-                paddingTop={8}
-                paddingBottom={24}
-                disableMultiSelection
-                disableDrag={(data) => Boolean(query) || data.fixed}
-                disableDrop={disableDrop}
-                searchTerm={query}
-                searchMatch={(node, term) => node.data.searchText.includes(term.trim().toLocaleLowerCase())}
-                onMove={handleMove}
-                onToggle={handleToggle}
-                onSelect={(selectedNodes) => setSelectedKey(selectedNodes[0]?.id || "")}
-                renderCursor={VariableTreeCursor}
-                aria-label="变量配置树"
-              >{VariableTreeNode}</ArboristTree>
-            ) : null}
+            <VariableConfigTree
+              key={characterId}
+              nodes={nodes}
+              query={query}
+              selectedId={selectedKey}
+              expandedIds={expandedIds.map((id) => nodeKey("object", id))}
+              onSelectedIdChange={setSelectedKey}
+              onExpandedIdsChange={handleExpandedKeysChange}
+              onMove={handleMove}
+            />
           </VariableTreeActionsContext.Provider>
           {!searchHasResults ? <p className="variable-empty">没有匹配的变量</p> : null}
         </div>

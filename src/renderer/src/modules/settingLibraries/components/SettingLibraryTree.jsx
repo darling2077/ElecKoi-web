@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect } from "react";
+import { createContext, useContext } from "react";
 import { ChatCircleDots, Code, LinkSimple } from "@phosphor-icons/react";
 import { DshFolderClosedIcon, DshFolderOpenIcon, DshTriangleRightIcon } from "../../../ui/icons/dshTreeIcons.jsx";
+import { HeadlessTree } from "../../../ui/tree/HeadlessTree.jsx";
 import { SettingEntryGlyph } from "./SettingLibraryEntryEditor.jsx";
 
 export const SettingTreeActionsContext = createContext(null);
@@ -12,78 +13,79 @@ function entryIcon(data) {
   return null;
 }
 
-export function SettingTreeNode({ node, style, dragHandle }) {
+export function SettingTreeNode({ item, data, itemProps, style, level, isSelected, isExpanded, isDropTarget, isDragging }) {
   const actions = useContext(SettingTreeActionsContext);
-  const data = node.data;
   const Icon = entryIcon(data);
-
-  useEffect(() => {
-    if (!node.willReceiveDrop || node.isLeaf || node.isOpen) return undefined;
-    const timeout = window.setTimeout(() => node.open(), 500);
-    return () => window.clearTimeout(timeout);
-  }, [node.id, node.isLeaf, node.isOpen, node.willReceiveDrop]);
 
   return (
     <div
-      ref={dragHandle}
-      className={`setting-library-tree-row${data.nodeKind === "entry" ? " has-toggle" : ""}${data.enabled === false ? " is-disabled" : ""}${node.level > 0 ? " is-nested" : ""}${node.isSelected ? " is-selected" : ""}${node.willReceiveDrop ? " is-drop-target" : ""}${node.isDragging ? " is-dragging" : ""}`}
+      {...itemProps}
+      className={`setting-library-tree-row${data.nodeKind === "entry" ? " has-toggle" : ""}${data.enabled === false ? " is-disabled" : ""}${level > 0 ? " is-nested" : ""}${isSelected ? " is-selected" : ""}${isDropTarget ? " is-drop-target" : ""}${isDragging ? " is-dragging" : ""}`}
       style={style}
-      onClick={(event) => {
-        event.stopPropagation();
-        node.handleClick(event);
-      }}
       onDoubleClick={(event) => {
         event.stopPropagation();
-        if (node.isInternal) node.toggle();
+        if (!item.isFolder()) return;
+        if (item.isExpanded()) item.collapse();
+        else item.expand();
       }}
       onContextMenu={(event) => actions.openContextMenu(event, data)}
     >
-      <span className="setting-library-tree-chevron">
+      <div className="setting-library-tree-row-content">
+        <span className="setting-library-tree-chevron">
+          {data.nodeKind === "group" ? (
+            <button
+              type="button"
+              className="setting-library-tree-expander"
+              aria-label={isExpanded ? "折叠文件夹" : "展开文件夹"}
+              aria-expanded={isExpanded}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (item.isExpanded()) item.collapse();
+                else item.expand();
+              }}
+            >
+              <DshTriangleRightIcon className={isExpanded ? "is-expanded" : ""} />
+            </button>
+          ) : null}
+        </span>
         {data.nodeKind === "group" ? (
+          <span className="setting-library-tree-folder" aria-hidden="true">
+            {isExpanded ? <DshFolderOpenIcon /> : <DshFolderClosedIcon />}
+          </span>
+        ) : <span className={`setting-library-tree-entry-icon${data.dynamicMode === "ejs_controller" ? " is-controller" : ""}${data.dynamicMode === "ejs_reference" ? " is-reference" : ""}`} aria-hidden="true">
+          {Icon ? <Icon weight="regular" /> : <SettingEntryGlyph iconId={data.iconId} weight="regular" />}
+        </span>}
+        <span className="setting-library-tree-label">{data.label}</span>
+        {data.nodeKind === "group" ? <span className="setting-library-tree-count">{data.childCount}</span> : (
           <button
             type="button"
-            className="setting-library-tree-expander"
-            aria-label={node.isOpen ? "折叠文件夹" : "展开文件夹"}
-            aria-expanded={node.isOpen}
+            className="setting-library-tree-switch"
+            role="switch"
+            aria-checked={data.enabled}
+            aria-label={`${data.enabled ? "停用" : "启用"}${data.label}`}
+            onMouseDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
-              node.toggle();
+              actions.updateEntryById(data.recordId, { enabled: !data.enabled });
             }}
-          >
-            <DshTriangleRightIcon className={node.isOpen ? "is-expanded" : ""} />
-          </button>
-        ) : null}
-      </span>
-      {data.nodeKind === "group" ? (
-        <span className="setting-library-tree-folder" aria-hidden="true">
-          {node.isOpen ? <DshFolderOpenIcon /> : <DshFolderClosedIcon />}
-        </span>
-      ) : <span className={`setting-library-tree-entry-icon${data.dynamicMode === "ejs_controller" ? " is-controller" : ""}${data.dynamicMode === "ejs_reference" ? " is-reference" : ""}`} aria-hidden="true">
-        {Icon ? <Icon weight="regular" /> : <SettingEntryGlyph iconId={data.iconId} weight="regular" />}
-      </span>}
-      <span className="setting-library-tree-label">{data.label}</span>
-      {data.nodeKind === "group" ? <span className="setting-library-tree-count">{data.childCount}</span> : (
-        <button
-          type="button"
-          className="setting-library-tree-switch"
-          role="switch"
-          aria-checked={data.enabled}
-          aria-label={`${data.enabled ? "停用" : "启用"}${data.label}`}
-          onMouseDown={(event) => event.stopPropagation()}
-          onClick={(event) => {
-            event.stopPropagation();
-            actions.updateEntryById(data.recordId, { enabled: !data.enabled });
-          }}
-        ><span aria-hidden="true" /></button>
-      )}
+          ><span aria-hidden="true" /></button>
+        )}
+      </div>
     </div>
   );
 }
 
-export function SettingTreeCursor({ top, left }) {
-  return (
-    <div className="setting-library-tree-drop-cursor" style={{ top, width: "min(340px, calc(100% - 2px))", paddingLeft: left }}>
-      <span />
-    </div>
-  );
+export function SettingLibraryTree({ nodes, query, selectedId, expandedIds, onSelectedIdChange, onExpandedIdsChange, onMove, ariaLabel }) {
+  return <HeadlessTree
+    nodes={nodes}
+    query={query}
+    selectedId={selectedId}
+    expandedIds={expandedIds}
+    ariaLabel={ariaLabel}
+    dragLineClassName="setting-library-tree-drop-cursor"
+    onSelectedIdChange={onSelectedIdChange}
+    onExpandedIdsChange={onExpandedIdsChange}
+    onMove={onMove}
+    renderItem={(props) => <SettingTreeNode key={props.key} {...props} />}
+  />;
 }

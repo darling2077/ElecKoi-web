@@ -1,5 +1,4 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
-import { adjustMoveIndex, Tree as ArboristTree } from "react-arborist";
 import {
   Books,
   ChatCircleDots,
@@ -19,7 +18,7 @@ import { SETTING_LIBRARY_CREATE_ICONS } from "../../../ui/icons/settingLibraryCr
 import { SettingLibraryManager } from "./SettingLibraryManager.jsx";
 import { ConfirmationDialog, SaveControl } from "./SettingLibraryControls.jsx";
 import { SettingLibraryInspector } from "./SettingLibraryInspector.jsx";
-import { SettingTreeActionsContext, SettingTreeCursor, SettingTreeNode } from "./SettingLibraryTree.jsx";
+import { SettingLibraryTree, SettingTreeActionsContext } from "./SettingLibraryTree.jsx";
 import {
   PINNED_ENTRY_IDS,
   createEntryDraft,
@@ -69,13 +68,9 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
   const persistedRef = useRef(null);
   const expandedKeysRef = useRef([]);
   const savePromiseRef = useRef(null);
-  const treeRef = useRef(null);
-  const treeViewportRef = useRef(null);
-  const [treeHeight, setTreeHeight] = useState(0);
   const dirty = useMemo(() => JSON.stringify(library) !== JSON.stringify(persisted), [library, persisted]);
   const selected = useMemo(() => findSelected(library, selectedKey), [library, selectedKey]);
   const nodes = useMemo(() => treeNodes(library), [library]);
-  const initialOpenState = useMemo(() => Object.fromEntries(expandedKeys.map((key) => [key, true])), [expandedKeys]);
   const searchHasResults = useMemo(() => library ? hasSearchResults(library, query) : false, [library, query]);
 
   useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
@@ -83,16 +78,6 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
   useEffect(() => {
     expandedKeysRef.current = expandedKeys;
   }, [expandedKeys]);
-
-  useEffect(() => {
-    const element = treeViewportRef.current;
-    if (!element) return undefined;
-    const updateHeight = () => setTreeHeight(Math.max(0, Math.floor(element.getBoundingClientRect().height)));
-    updateHeight();
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [library !== null]);
 
   useEffect(() => {
     if (saveNotice !== "saved") return undefined;
@@ -182,7 +167,6 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
 
   function requestCloseInspector() {
     setSelectedKey("");
-    treeRef.current?.deselectAll();
   }
 
   function applyManagerChange(nextLibrary) {
@@ -191,7 +175,6 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
     expandedKeysRef.current = nextExpanded;
     setExpandedKeys(nextExpanded);
     setSelectedKey("");
-    treeRef.current?.deselectAll();
   }
 
   function requestSelection(key, contextMenuAfterSelection = null) {
@@ -262,12 +245,22 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
       nextLibrary = { ...sourceLibrary, entries: [...sourceLibrary.entries, entry] };
       nextKey = nodeKey("entry", entry.id);
     }
-    changeLibrary(nextLibrary);
     if (parentId) {
       const parentKey = nodeKey("group", parentId);
-      setExpandedKeys((current) => [...new Set([...current, parentKey])]);
-      requestAnimationFrame(() => treeRef.current?.open(parentKey));
+      const nextExpanded = [...new Set([...expandedKeysRef.current, parentKey])];
+      const nextGroupIds = nextExpanded.map(parseNodeKey).filter((item) => item.kind === "group").map((item) => item.id);
+      expandedKeysRef.current = nextExpanded;
+      setExpandedKeys(nextExpanded);
+      nextLibrary = {
+        ...nextLibrary,
+        listAllExpanded: false,
+        expandedGroupIds: nextGroupIds,
+        versions: nextLibrary.versions.map((version) => version.id === nextLibrary.activeVersionId
+          ? { ...version, listAllExpanded: false, expandedGroupIds: nextGroupIds }
+          : version),
+      };
     }
+    changeLibrary(nextLibrary);
     setMenuOpen(false);
     setContextMenu(null);
     setSelectedKey(nextKey);
@@ -339,34 +332,34 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
     setContextMenu(null);
   }
 
-  function handleMove({ dragIds, parentId, parentNode, index }) {
-    const moved = parseNodeKey(String(dragIds[0] || ""));
-    if (!moved.id || PINNED_ENTRY_IDS.has(moved.id)) return;
-    const siblings = parentNode?.children || [];
-    const siblingIds = siblings.map((node) => node.id);
-    const destinationSlot = adjustMoveIndex({ index, dragIds, siblingIds });
-    const dragged = new Set(dragIds);
-    const postRemovalSiblings = siblings.filter((node) => !dragged.has(node.id));
-    const destinationIndex = postRemovalSiblings
-      .slice(0, destinationSlot)
-      .filter((node) => !node.data.fixed)
-      .length;
+  function handleMove({ dragId, parentId, destinationIndex, expandParentId }) {
+    const moved = parseNodeKey(dragId);
     const destinationParentId = parentId ? parseNodeKey(parentId).id : "";
-    changeLibrary((current) => moveTreeNode(current, moved, destinationParentId, destinationIndex));
+    if (!moved.id || PINNED_ENTRY_IDS.has(moved.id)) return;
+    const expandedParentKey = expandParentId || "";
+    const nextExpandedKeys = expandedParentKey
+      ? [...new Set([...expandedKeysRef.current, expandedParentKey])]
+      : expandedKeysRef.current;
+    const nextGroupIds = nextExpandedKeys.map(parseNodeKey).filter((item) => item.kind === "group").map((item) => item.id);
+    if (expandedParentKey) {
+      expandedKeysRef.current = nextExpandedKeys;
+      setExpandedKeys(nextExpandedKeys);
+    }
+    changeLibrary((current) => {
+      const next = moveTreeNode(current, moved, destinationParentId, destinationIndex);
+      if (!expandedParentKey) return next;
+      return {
+        ...next,
+        listAllExpanded: false,
+        expandedGroupIds: nextGroupIds,
+        versions: next.versions.map((version) => version.id === next.activeVersionId
+          ? { ...version, listAllExpanded: false, expandedGroupIds: nextGroupIds }
+          : version),
+      };
+    });
   }
 
-  function disableDrop({ parentNode, index }) {
-    if (query || (!parentNode.isRoot && parentNode.data.nodeKind !== "group")) return true;
-    if (!parentNode.isRoot) return false;
-    const firstMovableIndex = (parentNode.children || []).findIndex((node) => !node.data.fixed);
-    return firstMovableIndex > 0 && index < firstMovableIndex;
-  }
-
-  function handleToggle(id) {
-    if (query) return;
-    const nextKeys = treeRef.current?.isOpen(id)
-      ? [...new Set([...expandedKeysRef.current, id])]
-      : expandedKeysRef.current.filter((key) => key !== id);
+  function handleExpandedKeysChange(nextKeys) {
     const nextGroupIds = nextKeys.map(parseNodeKey).filter((item) => item.kind === "group").map((item) => item.id);
     const applyViewState = (value) => value ? {
       ...value,
@@ -457,37 +450,19 @@ export const SettingLibraryPanel = forwardRef(function SettingLibraryPanel({ cha
           <SaveControl dirty={dirty} error={error} notice={saveNotice} saving={saving} onSave={save} />
         </div>
 
-        <div ref={treeViewportRef} className="setting-library-tree" onMouseDown={handleTreeMouseDown}>
+        <div className="setting-library-tree" onMouseDown={handleTreeMouseDown} onContextMenu={openTreeContextMenu}>
           <SettingTreeActionsContext.Provider value={{ openContextMenu, updateEntryById }}>
-            {treeHeight > 0 ? (
-              <ArboristTree
-                key={characterId}
-                ref={treeRef}
-                data={nodes}
-                selection={selectedKey || undefined}
-                initialOpenState={initialOpenState}
-                openByDefault={false}
-                rowHeight={38}
-                indent={18}
-                width="100%"
-                height={treeHeight}
-                paddingTop={8}
-                paddingBottom={24}
-                disableMultiSelection
-                disableDrag={(data) => Boolean(query) || data.fixed}
-                disableDrop={disableDrop}
-                searchTerm={query}
-                searchMatch={(node, term) => node.data.searchText.includes(term.trim().toLocaleLowerCase())}
-                onMove={handleMove}
-                onToggle={handleToggle}
-                onSelect={(selectedNodes) => setSelectedKey(selectedNodes[0]?.id || "")}
-                onContextMenu={openTreeContextMenu}
-                renderCursor={SettingTreeCursor}
-                aria-label="设定文件夹树"
-              >
-                {SettingTreeNode}
-              </ArboristTree>
-            ) : null}
+            <SettingLibraryTree
+              key={characterId}
+              nodes={nodes}
+              query={query}
+              selectedId={selectedKey}
+              expandedIds={expandedKeys}
+              onSelectedIdChange={setSelectedKey}
+              onExpandedIdsChange={handleExpandedKeysChange}
+              onMove={handleMove}
+              ariaLabel="设定文件夹树"
+            />
           </SettingTreeActionsContext.Provider>
           {!searchHasResults ? <p className="setting-library-empty">没有匹配的设定</p> : null}
         </div>

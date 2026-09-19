@@ -1531,6 +1531,18 @@ License: Apache-2.0
 Homepage: https://github.com/googleapis/js-genai#readme
 Bundled notice text: 283ea6cc2997a1a7
 
+@headless-tree/core@1.7.0
+License: MIT
+Author: Lukas Bach
+Homepage: https://github.com/lukasbach/headless-tree#readme
+Bundled notice text: not supplied by package
+
+@headless-tree/react@1.7.0
+License: MIT
+Author: Lukas Bach
+Homepage: https://github.com/lukasbach/headless-tree#readme
+Bundled notice text: not supplied by package
+
 @hono/node-server@2.1.1
 License: MIT
 Author: Yusuke Wada
@@ -1745,23 +1757,6 @@ License: BSD-3-Clause
 Author: Daniel Wirtz
 Homepage: https://github.com/protobufjs/protobuf.js#readme
 Bundled notice text: 56c9299ed8fb2684
-
-@react-dnd/asap@4.0.1
-License: MIT
-Homepage: https://github.com/react-dnd/react-dnd#readme
-Bundled notice text: 575cd4bc0f4b0b83
-
-@react-dnd/invariant@2.0.0
-License: MIT
-Author: Andres Suarez
-Homepage: https://github.com/react-dnd/invariant#readme
-Bundled notice text: 2a4be07005467fe5
-
-@react-dnd/shallowequal@2.0.0
-License: MIT
-Author: Alberto Leal
-Homepage: https://github.com/react-dnd/shallowequal#readme
-Bundled notice text: 7f6bbcad25297e8d
 
 @smithy/core@3.33.3
 License: Apache-2.0
@@ -2477,11 +2472,6 @@ License: BSD-3-Clause
 Homepage: https://github.com/kpdecker/jsdiff#readme
 Bundled notice text: ef7eb99d9a97cb70
 
-dnd-core@14.0.1
-License: MIT
-Homepage: https://github.com/react-dnd/react-dnd#readme
-Bundled notice text: 51c8f812ed8033a2
-
 drizzle-orm@0.44.5
 License: Apache-2.0
 Author: Drizzle Team
@@ -2866,12 +2856,6 @@ License: MIT
 Author: Titus Wormer
 Homepage: https://github.com/syntax-tree/hastscript#readme
 Bundled notice text: ea559213e0e927a2
-
-hoist-non-react-statics@3.3.2
-License: BSD-3-Clause
-Author: Michael Ridgway
-Homepage: https://github.com/mridgway/hoist-non-react-statics#readme
-Bundled notice text: 0df6c27751ad005a
 
 hono@4.13.8
 License: MIT
@@ -3853,21 +3837,6 @@ License: MIT
 Homepage: https://react.dev/
 Bundled notice text: cf9b17822d1fcd4f
 
-react-arborist@3.16.0
-License: MIT
-Homepage: https://react-arborist.netlify.app
-Bundled notice text: not supplied by package
-
-react-dnd@14.0.5
-License: MIT
-Homepage: https://github.com/react-dnd/react-dnd#readme
-Bundled notice text: 4b61883b2c2731c2
-
-react-dnd-html5-backend@14.1.0
-License: MIT
-Homepage: https://github.com/react-dnd/react-dnd#readme
-Bundled notice text: 51c8f812ed8033a2
-
 react-dom@19.2.8
 License: MIT
 Homepage: https://react.dev/
@@ -3942,11 +3911,6 @@ License: MIT
 Author: Titus Wormer
 Homepage: https://github.com/mdx-js/recma
 Bundled notice text: 2cf2d507c76caa8f
-
-redux@4.2.1, 5.0.1
-License: MIT
-Homepage: http://redux.js.org
-Bundled notice text: c5b780142b6f8a11
 
 rehype-harden@1.1.8
 License: MIT
@@ -4892,42 +4856,6 @@ ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
 WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-
-NOTICE TEXT 0df6c27751ad005a
-------------------------------------
-Source filenames: LICENSE.md
-Applies to:
-- hoist-non-react-statics@3.3.2
-
-Software License Agreement (BSD License)
-========================================
-
-Copyright (c) 2015, Yahoo! Inc. All rights reserved.
-----------------------------------------------------
-
-Redistribution and use of this software in source and binary forms, with or
-without modification, are permitted provided that the following conditions are
-met:
-
-  * Redistributions of source code must retain the above copyright notice, this
-    list of conditions and the following disclaimer.
-  * Redistributions in binary form must reproduce the above copyright notice,
-    this list of conditions and the following disclaimer in the documentation
-    and/or other materials provided with the distribution.
-  * Neither the name of Yahoo! Inc. nor the names of YUI's contributors may be
-    used to endorse or promote products derived from this software without
-    specific prior written permission of Yahoo! Inc.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
-ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
-ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
-(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 NOTICE TEXT 0e57eeaccc07eade
 ------------------------------------
@@ -6140,7 +6068,6 @@ NOTICE TEXT 2a4be07005467fe5
 ------------------------------------
 Source filenames: LICENSE
 Applies to:
-- @react-dnd/invariant@2.0.0
 - prop-types@15.8.1
 
 MIT License
@@ -7228,34 +7155,6 @@ CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
 TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-NOTICE TEXT 4b61883b2c2731c2
-------------------------------------
-Source filenames: LICENSE
-Applies to:
-- react-dnd@14.0.5
-
-The MIT License (MIT)
-
-Copyright (c) 2016 Dan Abramov
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 NOTICE TEXT 4b68ef983e0fd2b2
 ------------------------------------
 Source filenames: LICENSE
@@ -7692,35 +7591,6 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-NOTICE TEXT 51c8f812ed8033a2
-------------------------------------
-Source filenames: LICENSE
-Applies to:
-- dnd-core@14.0.1
-- react-dnd-html5-backend@14.1.0
-
-The MIT License (MIT)
-
-Copyright (c) 2015 Dan Abramov
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
 NOTICE TEXT 56c9299ed8fb2684
 ------------------------------------
 Source filenames: LICENSE
@@ -7761,32 +7631,6 @@ DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
 THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-
-NOTICE TEXT 575cd4bc0f4b0b83
-------------------------------------
-Source filenames: LICENSE.md
-Applies to:
-- @react-dnd/asap@4.0.1
-
-Copyright 2009–2014 Contributors. All rights reserved.
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to
-deal in the Software without restriction, including without limitation the
-rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-sell copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in
-all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-IN THE SOFTWARE.
 
 NOTICE TEXT 59d4ecf670e758dc
 ------------------------------------
@@ -9377,34 +9221,6 @@ HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
 WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
 OTHER DEALINGS IN THE SOFTWARE.
-
-NOTICE TEXT 7f6bbcad25297e8d
-------------------------------------
-Source filenames: LICENSE
-Applies to:
-- @react-dnd/shallowequal@2.0.0
-
-MIT License
-
-Copyright (c) 2017 Alberto Leal <mailforalberto@gmail.com> (github.com/dashed)
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 NOTICE TEXT 7fb46adff9025f55
 ------------------------------------
@@ -12124,34 +11940,6 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 The views and conclusions contained in the software and documentation are those
 of the authors and should not be interpreted as representing official policies,
 either expressed or implied, of the FreeBSD Project.
-
-NOTICE TEXT c5b780142b6f8a11
-------------------------------------
-Source filenames: LICENSE.md
-Applies to:
-- redux@4.2.1,5.0.1
-
-The MIT License (MIT)
-
-Copyright (c) 2015-present Dan Abramov
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 NOTICE TEXT c74f9c5a522f5929
 ------------------------------------

@@ -73,21 +73,24 @@ export function treeNodes(library) {
     });
   };
 
-  const fixed = library.entries.filter((entry) => PINNED_ENTRY_IDS.has(entry.id)).map((entry) => ({
-    id: nodeKey("entry", entry.id),
-    key: nodeKey("entry", entry.id),
-    value: nodeKey("entry", entry.id),
-    name: entry.title,
-    label: entry.title,
-    searchText: searchableEntryText(entry),
-    nodeKind: "entry",
-    recordId: entry.id,
-    enabled: entry.enabled,
-    entryKind: entry.kind,
-    dynamicMode: entry.dynamicMode,
-    fixed: true,
-    isLeaf: true,
-  }));
+  const fixed = library.entries
+    .filter((entry) => PINNED_ENTRY_IDS.has(entry.id))
+    .sort((left, right) => left.treeViewOrder - right.treeViewOrder || left.id.localeCompare(right.id))
+    .map((entry) => ({
+      id: nodeKey("entry", entry.id),
+      key: nodeKey("entry", entry.id),
+      value: nodeKey("entry", entry.id),
+      name: entry.title,
+      label: entry.title,
+      searchText: searchableEntryText(entry),
+      nodeKind: "entry",
+      recordId: entry.id,
+      enabled: entry.enabled,
+      entryKind: entry.kind,
+      dynamicMode: entry.dynamicMode,
+      fixed: true,
+      isLeaf: true,
+    }));
   return [...fixed, ...build("")];
 }
 

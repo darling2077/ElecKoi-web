@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect } from "react";
+import { createContext, useContext } from "react";
 import { BracketsCurly, HashStraight, ListBullets, ListDashes, TextT, ToggleRight, TreeStructure } from "@phosphor-icons/react";
 import { DshTriangleRightIcon } from "../../../ui/icons/dshTreeIcons.jsx";
+import { HeadlessTree } from "../../../ui/tree/HeadlessTree.jsx";
 import { VARIABLE_INITIALIZATION_OBJECT_ID } from "../../../../../shared/contracts/variables/schemas.ts";
 
 export const VariableTreeActionsContext = createContext(null);
@@ -23,29 +24,26 @@ export function VariableEntryIcon({ type = "", size = 17, className = "" }) {
   return <Icon size={size} className={className} aria-hidden="true" />;
 }
 
-export function VariableTreeNode({ node, style, dragHandle }) {
+export function VariableTreeNode({ item, data, itemProps, style, level, isSelected, isExpanded, isDropTarget, isDragging }) {
   const actions = useContext(VariableTreeActionsContext);
-  const data = node.data;
-
-  useEffect(() => {
-    if (!node.willReceiveDrop || node.isLeaf || node.isOpen) return undefined;
-    const timeout = window.setTimeout(() => node.open(), 500);
-    return () => window.clearTimeout(timeout);
-  }, [node.id, node.isLeaf, node.isOpen, node.willReceiveDrop]);
 
   return (
     <div
-      ref={dragHandle}
-      className={`variable-tree-row${data.enabled === false ? " is-disabled" : ""}${node.level > 0 ? " is-nested" : ""}${node.isSelected ? " is-selected" : ""}${node.willReceiveDrop ? " is-drop-target" : ""}${node.isDragging ? " is-dragging" : ""}`}
+      {...itemProps}
+      className={`variable-tree-row${data.enabled === false ? " is-disabled" : ""}${level > 0 ? " is-nested" : ""}${isSelected ? " is-selected" : ""}${isDropTarget ? " is-drop-target" : ""}${isDragging ? " is-dragging" : ""}`}
       style={style}
-      onClick={(event) => { event.stopPropagation(); node.handleClick(event); }}
-      onDoubleClick={(event) => { event.stopPropagation(); if (node.isInternal) node.toggle(); }}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        if (!item.isFolder()) return;
+        if (item.isExpanded()) item.collapse();
+        else item.expand();
+      }}
       onContextMenu={(event) => actions.openContextMenu(event, data)}
     >
       <span className="variable-tree-chevron">
         {data.nodeKind === "object" && !data.fixed ? (
-          <button type="button" className="variable-tree-expander" aria-label={node.isOpen ? "折叠变量组" : "展开变量组"} aria-expanded={node.isOpen} onClick={(event) => { event.stopPropagation(); node.toggle(); }}>
-            <DshTriangleRightIcon className={node.isOpen ? "is-expanded" : ""} />
+          <button type="button" className="variable-tree-expander" aria-label={isExpanded ? "折叠变量组" : "展开变量组"} aria-expanded={isExpanded} onClick={(event) => { event.stopPropagation(); if (item.isExpanded()) item.collapse(); else item.expand(); }}>
+            <DshTriangleRightIcon className={isExpanded ? "is-expanded" : ""} />
           </button>
         ) : null}
       </span>
@@ -61,8 +59,19 @@ export function VariableTreeNode({ node, style, dragHandle }) {
   );
 }
 
-export function VariableTreeCursor({ top, left }) {
-  return <div className="variable-tree-drop-cursor" style={{ top, width: "min(380px, calc(100% - 2px))", paddingLeft: left }}><span /></div>;
+export function VariableConfigTree({ nodes, query, selectedId, expandedIds, onSelectedIdChange, onExpandedIdsChange, onMove }) {
+  return <HeadlessTree
+    nodes={nodes}
+    query={query}
+    selectedId={selectedId}
+    expandedIds={expandedIds}
+    ariaLabel="变量配置树"
+    dragLineClassName="variable-tree-drop-cursor"
+    onSelectedIdChange={onSelectedIdChange}
+    onExpandedIdsChange={onExpandedIdsChange}
+    onMove={onMove}
+    renderItem={(props) => <VariableTreeNode key={props.key} {...props} />}
+  />;
 }
 
 export { VARIABLE_INITIALIZATION_OBJECT_ID };

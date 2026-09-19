@@ -1,10 +1,23 @@
-import { useMemo, useRef, useState } from 'react';
-import { CaretRight, Code, Copy, Database, FileText, LinkSimple, MagnifyingGlass, PencilSimple, Plus } from '@phosphor-icons/react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Code, Copy, FileText, LinkSimple, MagnifyingGlass, PencilSimple, Plus } from '@phosphor-icons/react';
 import { isHiddenToolTimelineEntry } from '@shared/contracts/presets/builtIns';
 import { TrashIcon } from '../../../ui/icons/index.jsx';
 import { DshFolderClosedIcon } from '../../../ui/icons/dshTreeIcons.jsx';
 import { SETTING_LIBRARY_CREATE_ICONS } from '../../../ui/icons/settingLibraryCreateIcons.jsx';
-import { ConfirmationDialog, PINNED_ENTRY_IDS, SettingEntryGlyph, SettingLibraryInspector, createEntryDraft, createGroupDraft } from '../../settingLibraries/index.js';
+import {
+  ConfirmationDialog,
+  PINNED_ENTRY_IDS,
+  SettingLibraryInspector,
+  SettingLibraryTree,
+  SettingTreeActionsContext,
+  createEntryDraft,
+  createGroupDraft,
+  hasSearchResults,
+  moveTreeNode,
+  nodeKey,
+  parseNodeKey,
+  treeNodes,
+} from '../../settingLibraries/index.js';
 import { PresetContextMenu, usePresetContextMenu } from './PresetContextMenu.jsx';
 
 const HIDDEN_TIMELINE_DISABLE_CONFIRMATION = {
@@ -24,16 +37,33 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
   const [query, setQuery] = useState('');
   const [addOpen, setAddOpen] = useState(false);
   const [selected, setSelected] = useState(null);
-  const [collapsed, setCollapsed] = useState(() => new Set());
   const [pendingHiddenTimelineDisableId, setPendingHiddenTimelineDisableId] = useState('');
   const nameInputRef = useRef(null);
   const context = usePresetContextMenu();
-  const rows = useMemo(() => promptRows(preset, query, collapsed), [preset, query, collapsed]);
+  const library = useMemo(() => ({
+    characterId: `agent-preset:${preset.id}`,
+    name: preset.name,
+    entries: preset.entries,
+    groups: preset.groups,
+    promptPositions: preset.promptPositions,
+    activeVersionId: preset.activeVersionId,
+    versions: [],
+    listAllExpanded: false,
+    expandedGroupIds: preset.expandedGroupIds,
+  }), [preset]);
+  const nodes = useMemo(() => treeNodes(library), [library]);
+  const searchHasResults = useMemo(() => hasSearchResults(library, query), [library, query]);
   const selectedValue = selected?.kind === 'group'
     ? preset.groups.find((group) => group.id === selected.id)
     : selected?.kind === 'entry'
       ? preset.entries.find((entry) => entry.id === selected.id)
       : null;
+
+  useEffect(() => {
+    setSelected(null);
+    setQuery('');
+    context.close();
+  }, [preset.id]);
 
   function createNode(kind, target = selected) {
     const parentId = target?.kind === 'group'
@@ -51,11 +81,10 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
       setSelected({ kind: 'group', id: group.id });
     } else {
       const entry = { ...createEntryDraft(parentId, order, preset.entries, kind === 'reference' ? 'reference' : 'prompt'), title: kind === 'reference' ? '新建 EJS引用设定' : '新建提示词' };
-      onChange({ ...preset, entries: [...preset.entries, entry] });
+      onChange({ ...preset, entries: [...preset.entries, entry], expandedGroupIds: [...new Set([...preset.expandedGroupIds, parentId].filter(Boolean))] });
       setSelected({ kind: 'entry', id: entry.id });
     }
     setAddOpen(false);
-    setCollapsed((current) => { const next = new Set(current); next.delete(parentId); return next; });
     setQuery('');
     requestAnimationFrame(() => nameInputRef.current?.select());
   }
@@ -92,13 +121,35 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
     setPendingHiddenTimelineDisableId('');
   }
 
-  function toggleGroup(groupId) {
-    setCollapsed((current) => {
-      const next = new Set(current);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
-      return next;
-    });
+  function updateTreeEntry(entryId, patch) {
+    const entry = preset.entries.find((item) => item.id === entryId);
+    if (!entry) return;
+    if (Object.hasOwn(patch, 'enabled') && patch.enabled !== entry.enabled) {
+      requestEntryEnabledChange(entry);
+      return;
+    }
+    updateEntry({ ...entry, ...patch });
+  }
+
+  function handleExpandedIdsChange(expandedKeys) {
+    const expandedGroupIds = expandedKeys.map(parseNodeKey).filter((item) => item.kind === 'group').map((item) => item.id);
+    onChange({ ...preset, expandedGroupIds });
+  }
+
+  function handleMove({ dragId, parentId, destinationIndex, expandParentId }) {
+    const moved = parseNodeKey(dragId);
+    const destinationParentId = parentId ? parseNodeKey(parentId).id : '';
+    if (!moved.id || PINNED_ENTRY_IDS.has(moved.id)) return;
+    const next = moveTreeNode(
+      preset,
+      moved,
+      destinationParentId,
+      destinationIndex,
+    );
+    const expandedParent = expandParentId ? parseNodeKey(expandParentId).id : '';
+    onChange(expandedParent
+      ? { ...next, expandedGroupIds: [...new Set([...next.expandedGroupIds, expandedParent])] }
+      : next);
   }
 
   function deleteEntry(entryId) {
@@ -117,17 +168,23 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
     setSelected(null);
   }
 
-  const library = {
-    characterId: `agent-preset:${preset.id}`,
-    name: preset.name,
-    entries: preset.entries,
-    groups: preset.groups,
-    promptPositions: preset.promptPositions,
-    activeVersionId: preset.activeVersionId,
-    versions: [],
-    listAllExpanded: false,
-    expandedGroupIds: preset.expandedGroupIds,
-  };
+  function openTreeNodeContextMenu(event, data) {
+    setAddOpen(false);
+    if (data.fixed) {
+      context.open(event);
+      return;
+    }
+    const value = data.nodeKind === 'group'
+      ? preset.groups.find((group) => group.id === data.recordId)
+      : preset.entries.find((entry) => entry.id === data.recordId);
+    if (!value) return;
+    context.open(event, { kind: data.nodeKind, value });
+  }
+
+  function openTreeContextMenu(event) {
+    setAddOpen(false);
+    context.open(event);
+  }
 
   const menuTarget = context.menu?.target;
   const createTarget = menuTarget ? { kind: menuTarget.kind, id: menuTarget.value.id } : null;
@@ -160,45 +217,33 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
           </div>
           {saveAction}
         </div>
-        <div className="preset-prompt-tree" tabIndex={0} aria-label="预设提示词列表" onContextMenu={(event) => { setAddOpen(false); context.open(event); }} onMouseDown={(event) => { if (event.button === 0 && event.target === event.currentTarget) setSelected(null); }}>
-          {rows.map((row) => {
-            const active = selected?.kind === row.kind && selected.id === row.value.id;
-            return <div
-              className={`preset-prompt-row${active ? ' is-selected' : ''}${row.value.enabled === false ? ' is-disabled' : ''}`}
-              style={{ paddingLeft: 12 + row.depth * 18 }}
-              key={`${row.kind}:${row.value.id}`}
-              onContextMenu={(event) => {
-                setAddOpen(false);
-                if (row.kind === 'entry' && PINNED_ENTRY_IDS.has(row.value.id)) {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  return;
-                }
-                context.open(event, row);
+        <div
+          className="preset-prompt-tree setting-library-tree"
+          tabIndex={0}
+          aria-label="预设提示词列表"
+          onMouseDown={(event) => {
+            if (event.button === 0 && !event.target.closest('[role="treeitem"]')) setSelected(null);
+          }}
+          onContextMenu={openTreeContextMenu}
+        >
+          <SettingTreeActionsContext.Provider value={{ openContextMenu: openTreeNodeContextMenu, updateEntryById: updateTreeEntry }}>
+            <SettingLibraryTree
+              key={preset.id}
+              nodes={nodes}
+              query={query}
+              selectedId={selected ? nodeKey(selected.kind, selected.id) : ''}
+              expandedIds={preset.expandedGroupIds.map((id) => nodeKey('group', id))}
+              onSelectedIdChange={(id) => {
+                const next = parseNodeKey(id);
+                setSelected(next.id ? next : null);
               }}
-            >
-              <button type="button" className="preset-prompt-open" onClick={() => setSelected({ kind: row.kind, id: row.value.id })}>
-                {row.kind === 'group' ? <>
-                  <CaretRight size={13} className={collapsed.has(row.value.id) ? '' : 'is-expanded'} onClick={(event) => { event.stopPropagation(); toggleGroup(row.value.id); }} />
-                  <DshFolderClosedIcon size={17} />
-                </> : <><span className="preset-prompt-caret-space" />{row.value.dynamicMode === 'ejs_controller'
-                  ? <Code size={17} />
-                  : row.value.dynamicMode === 'ejs_reference' ? <LinkSimple size={17} /> : row.value.triggerMode === 'cache' ? <Database size={17} /> : <SettingEntryGlyph iconId={row.value.iconId} size={17} />}</>}
-                <span>{row.kind === 'group' ? row.value.name : row.value.title || '未命名提示词'}</span>
-              </button>
-              {row.kind === 'entry' ? <>
-                <button
-                  type="button"
-                  className="preset-prompt-switch"
-                  role="switch"
-                  aria-checked={row.value.enabled !== false}
-                  aria-label={`${row.value.title || '提示词'}启用状态`}
-                  onClick={() => requestEntryEnabledChange(row.value)}
-                ><i /></button>
-              </> : null}
-            </div>;
-          })}
-          {!rows.length ? <p className="setting-library-empty">{query ? '没有匹配的提示词' : '还没有预设提示词'}</p> : null}
+              onExpandedIdsChange={handleExpandedIdsChange}
+              onMove={handleMove}
+              ariaLabel="预设提示词树"
+            />
+          </SettingTreeActionsContext.Provider>
+          {!query && !nodes.length ? <p className="setting-library-empty">还没有预设提示词</p> : null}
+          {query && !searchHasResults ? <p className="setting-library-empty">没有匹配的提示词</p> : null}
         </div>
       </div>
 
@@ -226,24 +271,6 @@ export function PresetPromptEditor({ preset, onChange, saveAction }) {
       />
     </section>
   );
-}
-
-function promptRows(preset, query, collapsed) {
-  const key = query.trim().toLocaleLowerCase();
-  const result = [];
-  function visit(parentId, depth) {
-    const nodes = [
-      ...preset.groups.filter((group) => group.parentId === parentId).map((value) => ({ kind: 'group', value })),
-      ...preset.entries.filter((entry) => entry.groupId === parentId).map((value) => ({ kind: 'entry', value })),
-    ].sort((left, right) => left.value.treeViewOrder - right.value.treeViewOrder);
-    for (const node of nodes) {
-      const label = node.kind === 'group' ? node.value.name : `${node.value.title} ${node.value.content}`;
-      if (!key || label.toLocaleLowerCase().includes(key)) result.push({ ...node, depth });
-      if (node.kind === 'group' && (key || !collapsed.has(node.value.id))) visit(node.value.id, depth + 1);
-    }
-  }
-  visit('', 0);
-  return result;
 }
 
 function descendantGroups(groups, groupId) {

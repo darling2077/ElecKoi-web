@@ -86,11 +86,12 @@
   min-width: 0;
   min-height: 0;
   padding: 0 18px;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .variable-tree [role="tree"],
 .variable-tree [role="treeitem"] { outline: 0; }
+.variable-tree [role="tree"] { position: relative; min-height: 100%; padding: 8px 0 24px; }
 .variable-tree [role="treeitem"]:focus-visible .variable-tree-row { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent); }
 .variable-tree-row {
   display: flex;
@@ -109,6 +110,7 @@
   line-height: 34px;
   cursor: default;
 }
+.variable-tree-row + .variable-tree-row { margin-top: 4px; }
 
 .variable-tree-row:hover { background: color-mix(in srgb, var(--active) 66%, transparent); }
 .variable-tree-row.is-selected { background: var(--active); }
@@ -128,8 +130,7 @@
 .variable-tree-switch > span { position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; content: ""; background: #fff; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,.22); transition: transform 120ms ease; }
 .variable-tree-switch[aria-checked="true"] { background: var(--blue); }
 .variable-tree-switch[aria-checked="true"] > span { transform: translateX(12px); }
-.variable-tree-drop-cursor { position: absolute; z-index: 2; left: 0; height: 2px; box-sizing: border-box; pointer-events: none; }
-.variable-tree-drop-cursor span { display: block; width: 100%; height: 2px; background: var(--blue); border-radius: 999px; }
+.variable-tree-drop-cursor { --tree-drop-max-width: 380px; }
 .variable-empty,
 .variable-loading { margin: 0; color: var(--soft-text); font-size: 13px; }
 .variable-empty { padding: 28px 12px; text-align: center; }

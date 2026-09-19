@@ -13,6 +13,11 @@ import {
   SETTING_LIBRARY_POSITION_OPTIONS,
   updateOpening
 } from '../src/renderer/src/modules/settingLibraries/model/settingLibraryEditing.js'
+import {
+  HEADLESS_TREE_ROOT_ID,
+  canDropAtHeadlessTarget,
+  resolveHeadlessTreeDrop,
+} from '../src/renderer/src/ui/tree/headlessTreeModel.js'
 
 function openingEntry() {
   return {
@@ -27,6 +32,70 @@ function openingEntry() {
 }
 
 describe('setting-library editor model', () => {
+  it('uses Headless Tree post-removal slots while keeping fixed root entries pinned', () => {
+    const siblings = [
+      { id: 'entry:fixed-opening-assistant', fixed: true },
+      { id: 'entry:new', fixed: false },
+      { id: 'entry:two', fixed: false },
+      { id: 'entry:three', fixed: false }
+    ]
+
+    expect(resolveHeadlessTreeDrop({
+      dragIds: ['entry:new'],
+      parentId: HEADLESS_TREE_ROOT_ID,
+      siblings,
+      insertionIndex: 2
+    })).toEqual({
+      dragId: 'entry:new',
+      parentId: '',
+      destinationIndex: 1,
+      expandParentId: ''
+    })
+
+    expect(canDropAtHeadlessTarget({
+      query: '',
+      draggedNodes: [siblings[1]],
+      parentNode: { id: HEADLESS_TREE_ROOT_ID, nodeKind: 'root' },
+      insertionIndex: 0,
+      siblings
+    })).toBe(false)
+  })
+
+  it('resolves a line inside another folder without requiring a folder-icon drop', () => {
+    expect(resolveHeadlessTreeDrop({
+      dragIds: ['entry:moving'],
+      parentId: 'group:folder-b',
+      siblings: [
+        { id: 'entry:first', fixed: false },
+        { id: 'entry:second', fixed: false }
+      ],
+      insertionIndex: 1
+    })).toEqual({
+      dragId: 'entry:moving',
+      parentId: 'group:folder-b',
+      destinationIndex: 1,
+      expandParentId: ''
+    })
+  })
+
+  it('turns an indented line after an empty folder into its first child slot', () => {
+    expect(resolveHeadlessTreeDrop({
+      dragIds: ['entry:moving'],
+      parentId: HEADLESS_TREE_ROOT_ID,
+      siblings: [
+        { id: 'group:empty', nodeKind: 'group', fixed: false, children: [] },
+        { id: 'entry:moving', nodeKind: 'entry', fixed: false }
+      ],
+      insertionIndex: 1,
+      nestedParentId: 'group:empty'
+    })).toEqual({
+      dragId: 'entry:moving',
+      parentId: 'group:empty',
+      destinationIndex: 0,
+      expandParentId: 'group:empty'
+    })
+  })
+
   it('creates new settings as Agent-readable entries while keeping preset prompts explicit', () => {
     vi.stubGlobal('crypto', { randomUUID: () => 'draft-id' })
     const standard = createEntryDraft('', 1, [], 'standard')
