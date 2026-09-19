@@ -249,6 +249,7 @@ export class DshRuntime {
         content,
         runtimeThreadId,
         (notification) => {
+          maintainSubagentSessionSnapshot(join(this.options.runtimeDataRoot, 'session-snapshots'), notification)
           this.captureTrajectoryEvent(conversationId, runtimeThreadId, notification)
           if (run.cancelled) return
           const generationStats = generationStatsProjector.project(notification, runtimeThreadId)
@@ -380,6 +381,7 @@ export class DshRuntime {
     this.harness = undefined
     this.harnessKey = ''
     if (harness !== undefined) await harness.close()
+    discardInheritedSessionSnapshots(join(this.options.runtimeDataRoot, 'session-snapshots'))
     this.activeRuns.clear()
     this.startingRuns.clear()
     this.cancellationTasks.clear()
@@ -776,7 +778,10 @@ function writeSessionSnapshot(root: string, runtimeThreadId: string, value: Reco
   writeAtomically(join(root, `${safeRuntimeThreadFile(runtimeThreadId)}.json`), JSON.stringify(value, null, 2))
 }
 
-function readSessionSnapshot(root: string, runtimeThreadId: string): DshSessionRuntimeIdentity | undefined {
+function readSessionSnapshot(
+  root: string,
+  runtimeThreadId: string
+): (DshSessionRuntimeIdentity & Record<string, unknown>) | undefined {
   const path = join(root, `${safeRuntimeThreadFile(runtimeThreadId)}.json`)
   if (!existsSync(path)) return undefined
   try {
@@ -788,9 +793,69 @@ function readSessionSnapshot(root: string, runtimeThreadId: string): DshSessionR
 }
 
 function discardSessionSnapshots(root: string, threadIds: readonly string[], selectedThreadId: string): void {
-  for (const threadId of new Set(threadIds)) {
-    if (!threadId || threadId === selectedThreadId) continue
+  const discarded = new Set(threadIds.filter((threadId) => threadId && threadId !== selectedThreadId))
+  for (const threadId of discarded) {
     rmSync(join(root, `${safeRuntimeThreadFile(threadId)}.json`), { force: true })
+  }
+  if (discarded.size === 0 || !existsSync(root)) return
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) continue
+    const path = join(root, entry.name)
+    const snapshot = readSnapshotRecord(path)
+    const inheritedRoot = typeof snapshot?.rootRuntimeThreadId === 'string'
+      ? snapshot.rootRuntimeThreadId
+      : typeof snapshot?.runtimeThreadId === 'string'
+        ? snapshot.runtimeThreadId
+        : undefined
+    if (inheritedRoot !== undefined && discarded.has(inheritedRoot)) rmSync(path, { force: true })
+  }
+}
+
+function maintainSubagentSessionSnapshot(root: string, notification: HarnessNotification): void {
+  if (notification.method !== 'subagent.started' && notification.method !== 'subagent.finished') return
+  const childSessionId = typeof notification.params.childSessionId === 'string'
+    ? notification.params.childSessionId
+    : ''
+  if (!childSessionId) return
+  const childPath = join(root, `${safeRuntimeThreadFile(childSessionId)}.json`)
+  if (notification.method === 'subagent.finished') {
+    rmSync(childPath, { force: true })
+    return
+  }
+  if (existsSync(childPath)) return
+  const parentSessionId = typeof notification.params.parentSessionId === 'string'
+    ? notification.params.parentSessionId
+    : ''
+  if (!parentSessionId) return
+  const parentSnapshot = readSessionSnapshot(root, parentSessionId)
+  if (parentSnapshot === undefined) return
+  writeSessionSnapshot(root, childSessionId, {
+    ...parentSnapshot,
+    inheritedFromSessionId: parentSessionId,
+    rootRuntimeThreadId: typeof parentSnapshot.rootRuntimeThreadId === 'string'
+      ? parentSnapshot.rootRuntimeThreadId
+      : typeof parentSnapshot.runtimeThreadId === 'string'
+        ? parentSnapshot.runtimeThreadId
+        : parentSessionId
+  })
+}
+
+function discardInheritedSessionSnapshots(root: string): void {
+  if (!existsSync(root)) return
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isFile() || entry.isSymbolicLink() || !entry.name.endsWith('.json')) continue
+    const path = join(root, entry.name)
+    const snapshot = readSnapshotRecord(path)
+    if (typeof snapshot?.inheritedFromSessionId === 'string') rmSync(path, { force: true })
+  }
+}
+
+function readSnapshotRecord(path: string): Record<string, unknown> | undefined {
+  try {
+    const value = JSON.parse(readFileSync(path, 'utf8')) as unknown
+    return isRecord(value) ? value : undefined
+  } catch {
+    return undefined
   }
 }
 

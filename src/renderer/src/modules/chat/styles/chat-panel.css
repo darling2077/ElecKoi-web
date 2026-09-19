@@ -787,6 +787,14 @@
 .agent-process-delegated { padding-top: 18px; border-top: 1px solid var(--line); }
 .agent-process-delegated .agent-process-detail-timeline { margin: 0 -6px; }
 .agent-process-delegated .agent-process-phase { margin-left: 45px; }
+.agent-process-text-block > p { margin: 0; padding: 13px 15px; border-radius: 12px; background: var(--control-bg); color: var(--text); font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-process-waiting { margin: 22px 0 0; color: var(--muted); font-size: 13px; }
+.agent-process-child-reply { display: grid; gap: 8px; padding: 8px 6px 2px; }
+.agent-process-child-reply-title { display: flex; align-items: center; gap: 9px; min-height: 34px; }
+.agent-process-child-reply-title strong { font-size: 14px; font-weight: 650; }
+.agent-process-child-reply-content { min-width: 0; margin-left: 39px; color: var(--text); font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.agent-process-child-reply-content > :first-child { margin-top: 0; }
+.agent-process-child-reply-content > :last-child { margin-bottom: 0; }
 .agent-process-detail pre, .agent-process-raw pre { margin: 0; padding: 14px 16px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--control-bg); color: var(--text); font: 12px/1.6 Consolas, 'Cascadia Mono', monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-process-result-section { display: grid; gap: 11px; }
 .agent-process-result-meta { display: grid; gap: 8px; color: var(--muted); font-size: 12px; }

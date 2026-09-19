@@ -23,6 +23,43 @@ function preserveAttachmentRenderKeys(current = [], incoming = []) {
   });
 }
 
+export function mergeProcessItems(current = [], incoming = []) {
+  const order = [];
+  const byId = new Map();
+  for (const item of [...current, ...incoming]) {
+    if (!item?.id) continue;
+    if (!byId.has(item.id)) order.push(item.id);
+    const previous = byId.get(item.id);
+    if (!previous) {
+      byId.set(item.id, item);
+      continue;
+    }
+    const incomingTerminal = item.status !== 'running';
+    const previousTerminal = previous.status !== 'running';
+    const keepPreviousStatus = previousTerminal && !incomingTerminal;
+    const reasoning = item.kind === 'reasoning' || item.toolName === 'reasoning';
+    byId.set(item.id, {
+      ...previous,
+      ...item,
+      ...(keepPreviousStatus ? {
+        status: previous.status,
+        completedAtMillis: previous.completedAtMillis,
+      } : {}),
+      ...(reasoning ? {
+        summary: longerText(previous.summary, item.summary),
+        detail: longerText(previous.detail, item.detail),
+      } : {}),
+    });
+  }
+  return order.map((id) => byId.get(id));
+}
+
+function longerText(left, right) {
+  const first = typeof left === 'string' ? left : '';
+  const second = typeof right === 'string' ? right : '';
+  return second.length >= first.length ? second : first;
+}
+
 export function preserveMessageRenderKeys(currentMessages = [], incomingMessages = [], pendingMessage = null) {
   const current = pendingMessage ? [...currentMessages, pendingMessage] : currentMessages;
   const matches = new Map();
@@ -57,6 +94,7 @@ export function preserveMessageRenderKeys(currentMessages = [], incomingMessages
     return {
       ...message,
       ...(renderKey ? { renderKey } : {}),
+      process: mergeProcessItems(previous.process || [], message.process || []),
       inputImageAttachments: preserveAttachmentRenderKeys(
         previous.inputImageAttachments || [],
         message.inputImageAttachments || [],

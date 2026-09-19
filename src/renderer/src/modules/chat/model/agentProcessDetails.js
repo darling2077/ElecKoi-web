@@ -5,6 +5,7 @@ const SETTING_GLOB = 'eleckoi_glob_setting_files';
 const VARIABLE_GLOB = 'eleckoi_glob_variables';
 const SETTING_READ = 'eleckoi_read_setting_files';
 const VARIABLE_READ = 'eleckoi_read_variables';
+const SUBAGENT_TOOLS = new Set(['subagent', 'subagent_fork']);
 
 export function processBlocks(items) {
   const blocks = [];
@@ -111,6 +112,35 @@ export function processItemDetails(item) {
     argumentsValue,
     rawResult: result ? result : firstText(item?.summary, item?.detail),
   };
+}
+
+export function subagentDetailPresentation(item, delegatedItems = []) {
+  const args = parseValue(item?.arguments);
+  const values = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  const directChildren = delegatedItems.filter((child) => child?.parentId === item?.id);
+  const finalReply = directChildren.findLast((child) => child?.toolName === 'assistant_final');
+  const relayed = directChildren.findLast((child) => child?.toolName === 'send_message');
+  const relayedArgs = parseValue(relayed?.arguments);
+  const relayedText = stringValue(relayedArgs?.message).trim();
+  const replyText = stringValue(finalReply?.summary).trim();
+  const differentRelayedResult = relayedText && normalizeText(relayedText) !== normalizeText(replyText)
+    ? relayedText
+    : '';
+  const rawFailure = item?.status === 'error'
+    ? firstText(item?.summary, item?.detail).trim()
+    : '';
+  return {
+    description: stringValue(values.description).trim(),
+    prompt: stringValue(values.prompt).trim(),
+    model: stringValue(item?.delegatedModel).trim() || '跟随主模型',
+    execution: values.run_in_background === true || values.background === true ? '后台运行' : '等待子 Agent 返回',
+    reply: replyText,
+    returnResult: differentRelayedResult || (replyText ? '' : launchReceipt(rawFailure) ? '' : rawFailure),
+  };
+}
+
+export function isSubagentItem(item) {
+  return item?.kind === 'subagent' || SUBAGENT_TOOLS.has(item?.toolName);
 }
 
 function specializedResult(toolName, result, args) {
@@ -251,6 +281,9 @@ function parseValue(raw) {
   if (typeof raw !== 'string' || !raw.trim()) return null;
   try { return JSON.parse(raw); } catch { return raw; }
 }
+
+function normalizeText(value) { return String(value || '').trim().replace(/\s+/g, ' '); }
+function launchReceipt(value) { return /^started subagent\s+[0-9a-f-]+$/i.test(String(value || '').trim()); }
 
 function arrayOf(value) { return Array.isArray(value) ? value : []; }
 function stringValue(value) { return typeof value === 'string' ? value : ''; }

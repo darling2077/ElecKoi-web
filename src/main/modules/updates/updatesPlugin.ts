@@ -1,3 +1,4 @@
+import { dirname } from 'node:path'
 import { app } from 'electron'
 import electronUpdater, { type AppUpdater } from 'electron-updater'
 import type { Context, Plugin } from '@deepseek-ai/cordis'
@@ -17,6 +18,16 @@ export function attachUpdaterLogger(
   return () => { updater.logger = null }
 }
 
+export function preserveWindowsUpdateInstallDirectory(
+  updater: AppUpdater,
+  executablePath: string,
+  packaged: boolean,
+  platform: NodeJS.Platform
+): void {
+  if (!packaged || platform !== 'win32') return
+  ;(updater as AppUpdater & { installDirectory?: string }).installDirectory = dirname(executablePath)
+}
+
 export const updatesPlugin = {
   name: 'eleckoi-updates',
   inject: ['appLog', 'desktopGateway', 'agentSessions', 'electronWindows'],
@@ -29,6 +40,7 @@ export const updatesPlugin = {
     const detachUpdaterLogger = attachUpdaterLogger(updater, appLog)
 
     const enabled = app.isPackaged && process.platform === 'win32'
+    preserveWindowsUpdateInstallDirectory(updater, process.execPath, app.isPackaged, process.platform)
     const updates = new UpdateService({
       updater,
       currentVersion: app.getVersion(),

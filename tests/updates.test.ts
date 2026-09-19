@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import type { AppUpdater, UpdateInfo } from 'electron-updater'
 import { UpdateService, normalizeReleaseNotes } from '@main/modules/updates'
-import { attachUpdaterLogger } from '@main/modules/updates/updatesPlugin'
+import { attachUpdaterLogger, preserveWindowsUpdateInstallDirectory } from '@main/modules/updates/updatesPlugin'
 import type { UpdateStatus } from '@shared/contracts/updates/schemas'
 
 class FakeUpdater extends EventEmitter {
@@ -19,6 +19,40 @@ class FakeUpdater extends EventEmitter {
 }
 
 describe('desktop updater', () => {
+  it('keeps app updates in the current Windows installation directory', () => {
+    const updater = new FakeUpdater()
+
+    preserveWindowsUpdateInstallDirectory(
+      updater as unknown as AppUpdater,
+      'D:\\Apps\\ElecKoi\\ElecKoi.exe',
+      true,
+      'win32'
+    )
+
+    expect((updater as FakeUpdater & { installDirectory?: string }).installDirectory)
+      .toBe('D:\\Apps\\ElecKoi')
+  })
+
+  it('does not set an NSIS install directory outside packaged Windows builds', () => {
+    const developmentUpdater = new FakeUpdater()
+    preserveWindowsUpdateInstallDirectory(
+      developmentUpdater as unknown as AppUpdater,
+      'D:\\Apps\\ElecKoi\\ElecKoi.exe',
+      false,
+      'win32'
+    )
+    const otherPlatformUpdater = new FakeUpdater()
+    preserveWindowsUpdateInstallDirectory(
+      otherPlatformUpdater as unknown as AppUpdater,
+      '/Applications/ElecKoi.app/Contents/MacOS/ElecKoi',
+      true,
+      'darwin'
+    )
+
+    expect((developmentUpdater as FakeUpdater & { installDirectory?: string }).installDirectory).toBeUndefined()
+    expect((otherPlatformUpdater as FakeUpdater & { installDirectory?: string }).installDirectory).toBeUndefined()
+  })
+
   it('detaches updater logging before host services become inactive', () => {
     const updater = new FakeUpdater()
     const appLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }

@@ -219,6 +219,7 @@ export class DshProcessProjector {
   private readonly hiddenTools = new Set<string>()
   private readonly pendingSubagentCalls = new Map<string, string[]>()
   private readonly subagentLineageBySession = new Map<string, string[]>()
+  private readonly subagentReplyBySession = new Map<string, DshProcessItem>()
   private readonly liveAttempts = new Map<string, AssistantAttempt>()
 
   constructor(
@@ -232,8 +233,7 @@ export class DshProcessProjector {
       return undefined
     }
     if (notification.method === 'subagent.finished') {
-      this.subagentLineageBySession.delete(string(notification.params.childSessionId))
-      return undefined
+      return this.finishSubagent(notification.params)
     }
     if (notification.method === AssistantStreamMethod) {
       const sessionId = string(notification.params.sessionId)
@@ -358,7 +358,31 @@ export class DshProcessProjector {
         completedReasoning = this.completeReasoning(id, string(content[reasoningIndex]?.text), time)
       }
     }
-    return this.assistantNarrative(data, time) ?? completedReasoning
+    const narrative = this.assistantNarrative(data, time)
+    if (narrative) return narrative
+
+    const sessionId = string(notification.params.sessionId)
+    const lineage = this.sessionLineage(sessionId)
+    if (!lineage?.length) return completedReasoning
+    const snapshot = content
+      .filter((block) => block?.type === 'text')
+      .map((block) => string(block?.text))
+      .join('')
+      .trim()
+    const reply = finalReplyText(snapshot)
+    if (!reply) return completedReasoning
+    const messageId = string(message?.id)
+    const item = completedEventItem(
+      `subagent-reply-${messageId || sessionId}`,
+      'narrative',
+      'assistant_final',
+      '',
+      reply,
+      reply,
+      time
+    )
+    this.subagentReplyBySession.set(sessionId, item)
+    return item
   }
 
   private completeReasoning(id: string, snapshot: string, time: number): DshProcessItem {
@@ -610,6 +634,32 @@ export class DshProcessProjector {
     if (!parentCallId) return
     if (!pending?.length) this.pendingSubagentCalls.delete(parentSessionId)
     this.subagentLineageBySession.set(childSessionId, [...parentLineage, parentCallId])
+  }
+
+  private finishSubagent(params: Record<string, unknown>): DshProcessItem | undefined {
+    const childSessionId = string(params.childSessionId)
+    if (!childSessionId) return undefined
+    const lineage = this.subagentLineageBySession.get(childSessionId)
+    if (!lineage?.length) return undefined
+    const previous = this.subagentReplyBySession.get(childSessionId)
+    const rawReply = contentText(params.lastAssistantMessage).trim()
+    const reply = finalReplyText(rawReply) || previous?.summary || ''
+    const time = number(params.time) ?? Date.now()
+    const status = string(params.status) === 'ok' ? 'complete' : 'error'
+    this.subagentReplyBySession.delete(childSessionId)
+    this.subagentLineageBySession.delete(childSessionId)
+    return {
+      id: previous?.id ?? `subagent-reply-${childSessionId}`,
+      kind: 'narrative',
+      status,
+      toolName: 'assistant_final',
+      arguments: reply ? '' : string(params.stopReason),
+      summary: reply,
+      detail: reply,
+      startedAtMillis: previous?.startedAtMillis ?? time,
+      completedAtMillis: time,
+      parentId: lineage.at(-1)
+    }
   }
 }
 

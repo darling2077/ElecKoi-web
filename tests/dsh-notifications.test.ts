@@ -388,10 +388,36 @@ describe('DSH process projection', () => {
       parentId: 'call-subagent'
     })
 
+    expect(projector.project(sessionEvent('assistant/message', {
+      turn: 1,
+      step: 2,
+      message: {
+        id: 'assistant-child-final',
+        content: [{ type: 'text', text: '这是子 Agent 的完整回复。' }]
+      }
+    }, 130, 'session-child'))).toMatchObject({
+      id: 'subagent-reply-assistant-child-final',
+      kind: 'narrative',
+      toolName: 'assistant_final',
+      summary: '这是子 Agent 的完整回复。',
+      parentId: 'call-subagent'
+    })
+
     expect(projector.project({
       method: 'subagent.finished',
-      params: { parentSessionId: 'session-a', childSessionId: 'session-child' }
-    } as never)).toBeUndefined()
+      params: {
+        parentSessionId: 'session-a',
+        childSessionId: 'session-child',
+        status: 'ok',
+        lastAssistantMessage: [{ type: 'text', text: '这是子 Agent 的完整回复。' }]
+      }
+    } as never)).toMatchObject({
+      id: 'subagent-reply-assistant-child-final',
+      status: 'complete',
+      toolName: 'assistant_final',
+      summary: '这是子 Agent 的完整回复。',
+      parentId: 'call-subagent'
+    })
 
     expect(projector.project(sessionEvent('tool/result', {
       message: {
@@ -403,6 +429,35 @@ describe('DSH process projection', () => {
       kind: 'subagent',
       status: 'complete',
       delegatedModel: 'child-model'
+    })
+  })
+
+  it('projects the finished notification reply when the child emitted no assistant message event', () => {
+    const projector = new DshProcessProjector('session-a')
+    projector.project(sessionEvent('tool/call', {
+      callId: 'call-subagent',
+      name: 'subagent',
+      arguments: { description: '读取设定', prompt: '查看设定库' }
+    }, 100))
+    projector.project({
+      method: 'subagent.started',
+      params: { parentSessionId: 'session-a', childSessionId: 'session-child' }
+    } as never)
+
+    expect(projector.project({
+      method: 'subagent.finished',
+      params: {
+        parentSessionId: 'session-a',
+        childSessionId: 'session-child',
+        status: 'ok',
+        lastAssistantMessage: [{ type: 'text', text: '通过完成通知返回的正文。' }]
+      }
+    } as never)).toMatchObject({
+      id: 'subagent-reply-session-child',
+      status: 'complete',
+      toolName: 'assistant_final',
+      summary: '通过完成通知返回的正文。',
+      parentId: 'call-subagent'
     })
   })
 

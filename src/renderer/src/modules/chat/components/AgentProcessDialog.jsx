@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { DshCloseIcon } from '../../../ui/icons/dshComposerIcons.jsx';
 import { MessageChevronLeftIcon, MessageChevronRightIcon } from '../../../ui/icons/elecKoiMessageIcons.jsx';
-import { processBlocks, processItemDetails } from '../model/agentProcessDetails.js';
+import { isSubagentItem, processBlocks, processItemDetails, subagentDetailPresentation } from '../model/agentProcessDetails.js';
 import { delegatedProcessItems } from '../model/agentProcessHierarchy.js';
 import { AgentProcessIcon } from './AgentProcessIcon.jsx';
 
@@ -202,6 +204,17 @@ function ReasoningOverview({ block, displayMode }) {
 }
 
 function ProcessDetail({ item, details, delegatedItems, reasoningDisplayMode, scrollKey, scrollPositions, onSelectItem }) {
+  if (isSubagentItem(item)) {
+    return <SubagentProcessDetail
+      item={item}
+      details={details}
+      delegatedItems={delegatedItems}
+      reasoningDisplayMode={reasoningDisplayMode}
+      scrollKey={scrollKey}
+      scrollPositions={scrollPositions}
+      onSelectItem={onSelectItem}
+    />;
+  }
   const rawResult = details.result || parseValue(item.summary) || item.summary || item.detail;
   return <ProcessScrollPane className="agent-process-detail" scrollKey={scrollKey} scrollPositions={scrollPositions}>
     <div className="agent-process-detail-intro">
@@ -214,6 +227,7 @@ function ProcessDetail({ item, details, delegatedItems, reasoningDisplayMode, sc
     {item.detail && !details.specialized && item.detail !== item.summary && !sameJson(item.detail, rawResult)
       ? <DetailBlock label="事件详情" value={pretty(item.detail)} /> : null}
     {delegatedItems.length ? <DelegatedTimeline
+      parentId={item.id}
       items={delegatedItems}
       reasoningDisplayMode={reasoningDisplayMode}
       onSelectItem={onSelectItem}
@@ -221,17 +235,51 @@ function ProcessDetail({ item, details, delegatedItems, reasoningDisplayMode, sc
   </ProcessScrollPane>;
 }
 
-function DelegatedTimeline({ items, reasoningDisplayMode, onSelectItem }) {
-  const blocks = processBlocks(items);
+function SubagentProcessDetail({ item, details, delegatedItems, reasoningDisplayMode, scrollKey, scrollPositions, onSelectItem }) {
+  const presentation = subagentDetailPresentation(item, delegatedItems);
+  return <ProcessScrollPane className="agent-process-detail agent-process-subagent-detail" scrollKey={scrollKey} scrollPositions={scrollPositions}>
+    <div className="agent-process-detail-intro">
+      <div><h3>{details.title}</h3>{presentation.description ? <p className="target">{presentation.description}</p> : null}</div>
+      <span className={`agent-process-status status-${item.status}`}>{details.statusLabel}</span>
+    </div>
+    {presentation.prompt ? <DetailTextBlock label="委派指令" value={presentation.prompt} /> : null}
+    <DetailTextBlock label="使用模型" value={presentation.model} />
+    <DetailTextBlock label="执行方式" value={presentation.execution} />
+    {delegatedItems.length
+      ? <DelegatedTimeline parentId={item.id} items={delegatedItems} reasoningDisplayMode={reasoningDisplayMode} onSelectItem={onSelectItem} />
+      : item.status === 'running' ? <p className="agent-process-waiting">正在等待子 Agent 返回执行事件</p> : null}
+    {presentation.returnResult
+      ? <DetailTextBlock label={item.status === 'error' ? '失败原因' : '返回结果'} value={presentation.returnResult} />
+      : null}
+  </ProcessScrollPane>;
+}
+
+function DelegatedTimeline({ parentId, items, reasoningDisplayMode, onSelectItem }) {
+  const reply = items.findLast((item) => item?.toolName === 'assistant_final' && item?.parentId === parentId);
+  const blocks = processBlocks(items.filter((item) => item?.toolName !== 'assistant_final'));
   return <section className="agent-process-delegated">
-    <h4>执行过程</h4>
+    <h4>子 Agent 思考与完整回复</h4>
     <div className="agent-process-detail-timeline">{blocks.flatMap((block) => {
       if (block.type === 'narrative') return [<p className="agent-process-phase" key={block.id}>{block.text}</p>];
       return block.items.map((item) => item.kind === 'reasoning' || item.toolName === 'reasoning'
         ? <ReasoningOverview key={item.id} block={{ item, text: item.detail || item.summary || '' }} displayMode={reasoningDisplayMode} />
         : <OperationRow key={item.id} item={item} details={processItemDetails(item)} onClick={() => onSelectItem(item.id)} />);
-    })}</div>
+    })}
+      {reply?.summary || reply?.detail ? <ChildAgentReply item={reply} /> : null}
+    </div>
   </section>;
+}
+
+function ChildAgentReply({ item }) {
+  return <div className="agent-process-child-reply">
+    <div className="agent-process-child-reply-title">
+      <span className={`agent-process-glyph status-${item.status}`}><AgentProcessIcon name="groups" size={20} /></span>
+      <strong>{item.status === 'running' ? '子 Agent 正在回复' : '子 Agent 回复'}</strong>
+    </div>
+    <div className="agent-process-child-reply-content markdown-message">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.summary || item.detail}</ReactMarkdown>
+    </div>
+  </div>;
 }
 
 function SpecializedResult({ result }) {
@@ -342,6 +390,7 @@ function ExpandAction({ expanded, collapsedLabel, expandedLabel, onClick }) {
 
 function RawResult({ value }) { return <details className="agent-process-raw"><summary>原始结果</summary><pre>{pretty(value)}</pre></details>; }
 function DetailBlock({ label, value }) { return <section><h4>{label}</h4><pre>{value}</pre></section>; }
+function DetailTextBlock({ label, value }) { return <section className="agent-process-text-block"><h4>{label}</h4><p>{value}</p></section>; }
 function parseValue(value) { if (value && typeof value === 'object') return value; try { return JSON.parse(value); } catch { return value; } }
 function pretty(value) { const parsed = parseValue(value); return typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2); }
 function sameJson(left, right) { try { return JSON.stringify(parseValue(left)) === JSON.stringify(parseValue(right)); } catch { return left === right; } }

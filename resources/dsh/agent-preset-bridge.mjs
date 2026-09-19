@@ -2,7 +2,7 @@
 
 import { createConversationSeed, installConversationContext } from './conversation-context.mjs'
 import { installRequestConfig } from './request-config.mjs'
-import { readSessionSnapshot } from './session-snapshot.mjs'
+import { inheritSessionSnapshot, readSessionSnapshot, removeSessionSnapshot } from './session-snapshot.mjs'
 import { applyDisabledPolicy } from './tool-policy.mjs'
 
 export const name = 'eleckoi-agent-preset-bridge'
@@ -19,9 +19,17 @@ export function apply(ctx) {
       ? options.parentAgent?.session?.id ?? options.meta?.parentSession
       : options.sessionId
     if (!sourceSessionId) throw new Error('ElecKoi subagent is missing its parent Session id')
-    const snapshot = readSessionSnapshot(snapshotRoot, sourceSessionId)
-    const nextOptions = composeSessionOptions(ctx, options, snapshotRoot, sourceSessionId, snapshot, child, false)
-    return originalCreate.call(ctx.agents, nextOptions)
+    const targetSessionId = child ? options.sessionId : sourceSessionId
+    if (!targetSessionId) throw new Error('ElecKoi subagent is missing its child Session id')
+    const snapshot = child
+      ? inheritSessionSnapshot(snapshotRoot, sourceSessionId, targetSessionId)
+      : readSessionSnapshot(snapshotRoot, sourceSessionId)
+    const nextOptions = composeSessionOptions(ctx, options, snapshotRoot, targetSessionId, snapshot, child, false)
+    return rollbackInheritedSnapshot(
+      () => originalCreate.call(ctx.agents, nextOptions),
+      snapshotRoot,
+      child ? targetSessionId : undefined
+    )
   }
   const wrappedResume = function (options) {
     const child = options.parentAgent !== undefined
@@ -34,9 +42,16 @@ export function apply(ctx) {
       if (error?.code === 'ENOENT') return originalResume.call(ctx.agents, options)
       throw error
     }
-    return originalResume.call(
-      ctx.agents,
-      composeSessionOptions(ctx, options, snapshotRoot, sourceSessionId, snapshot, child, true)
+    const targetSessionId = child ? options.resumeSessionId : sourceSessionId
+    if (!targetSessionId) throw new Error('ElecKoi subagent is missing its resumed Session id')
+    if (child) snapshot = inheritSessionSnapshot(snapshotRoot, sourceSessionId, targetSessionId)
+    return rollbackInheritedSnapshot(
+      () => originalResume.call(
+        ctx.agents,
+        composeSessionOptions(ctx, options, snapshotRoot, targetSessionId, snapshot, child, true)
+      ),
+      snapshotRoot,
+      child ? targetSessionId : undefined
     )
   }
 
@@ -45,6 +60,15 @@ export function apply(ctx) {
   return () => {
     if (ctx.agents.create === wrappedCreate) ctx.agents.create = originalCreate
     if (ctx.agents.resume === wrappedResume) ctx.agents.resume = originalResume
+  }
+}
+
+async function rollbackInheritedSnapshot(start, snapshotRoot, childSessionId) {
+  try {
+    return await start()
+  } catch (error) {
+    if (childSessionId) removeSessionSnapshot(snapshotRoot, childSessionId)
+    throw error
   }
 }
 

@@ -9,7 +9,16 @@ export function rootProcessItems(items = []) {
 export function delegatedProcessItems(items = [], parentId = '') {
   if (!parentId) return [];
   const byId = new Map(items.filter(Boolean).map((item) => [item.id, item]));
-  return items.filter((item) => hasAncestorId(item, byId, parentId));
+  const delegated = items.filter((item) => hasAncestorId(item, byId, parentId));
+  const completion = delegated.findLast((item) => item?.toolName === 'assistant_final' && item?.parentId === parentId);
+  if (!completion) return delegated;
+  return delegated.map((item) => item?.status === 'running'
+    ? {
+        ...item,
+        status: completion.status === 'error' ? 'error' : 'complete',
+        completedAtMillis: completion.completedAtMillis || item.completedAtMillis,
+      }
+    : item);
 }
 
 function hasAncestor(item, byId, ancestorIds) {

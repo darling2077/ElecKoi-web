@@ -405,7 +405,10 @@ export function ChatPanel({
       ) : null}
       {processMessage ? (
         <AgentProcessDialog
-          message={messages.find((item) => item.id === processMessage.id) || processMessage}
+          message={messages.find((item) => (
+            item.id === processMessage.id
+            || item.renderKey === (processMessage.renderKey || processMessage.id)
+          )) || processMessage}
           reasoningDisplayMode={chatDisplay?.reasoning_display_mode || "collapsed"}
           onClose={() => setProcessMessage(null)}
         />

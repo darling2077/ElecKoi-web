@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { processBlocks, processItemDetails } from '../src/renderer/src/modules/chat/model/agentProcessDetails.js';
+import { processBlocks, processItemDetails, subagentDetailPresentation } from '../src/renderer/src/modules/chat/model/agentProcessDetails.js';
 
 function item(overrides) {
   return {
@@ -171,5 +171,38 @@ describe('agent process detail presentation', () => {
     expect(variablePatch.specialized.operations).toMatchObject([{ op: 'replace', path: '/世界/地点' }]);
     expect(settingPatch.specialized.operations).toMatchObject([{ op: 'edit_file', path: '世界/地点' }]);
     expect(plan.specialized.steps).toMatchObject([{ title: '继续剧情', status: 'pending' }]);
+  });
+
+  it('presents subagent metadata and hides the launch receipt', () => {
+    const root = item({
+      kind: 'subagent',
+      toolName: 'subagent',
+      arguments: JSON.stringify({ description: '查看设定库', prompt: '读取完整设定', run_in_background: false }),
+      summary: 'started subagent f23c5d74-98d8-4832-90e6-91203ecac920',
+      delegatedModel: 'deepseek-flash',
+    });
+    const details = subagentDetailPresentation(root, [
+      item({ id: 'reply', kind: 'narrative', toolName: 'assistant_final', summary: '子 Agent 真正回复', parentId: root.id }),
+    ]);
+
+    expect(details).toMatchObject({
+      description: '查看设定库',
+      prompt: '读取完整设定',
+      model: 'deepseek-flash',
+      execution: '等待子 Agent 返回',
+      reply: '子 Agent 真正回复',
+      returnResult: '',
+    });
+  });
+
+  it('shows a separately relayed parent result only when it differs from the child reply', () => {
+    const root = item({ kind: 'subagent', toolName: 'subagent' });
+    const children = [
+      item({ id: 'reply', kind: 'narrative', toolName: 'assistant_final', summary: '可见回复', parentId: root.id }),
+      item({ id: 'relay', toolName: 'send_message', arguments: JSON.stringify({ message: '交给父 Agent 的结果' }), parentId: root.id }),
+    ];
+    expect(subagentDetailPresentation(root, children).returnResult).toBe('交给父 Agent 的结果');
+    children[1].arguments = JSON.stringify({ message: '  可见回复  ' });
+    expect(subagentDetailPresentation(root, children).returnResult).toBe('');
   });
 });
