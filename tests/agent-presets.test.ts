@@ -6,6 +6,7 @@ import { AgentPresetRepository } from '../src/main/modules/agentPresets'
 import { LocalMediaStore } from '../src/main/platform/filesystem/LocalMediaStore'
 import { readPngText } from '../src/main/platform/filesystem/PngTextChunkCodec'
 import { SqliteDatabase } from '../src/main/platform/sqlite/SqliteDatabase'
+import { requestContracts } from '../src/shared/contracts/gateway/definitions'
 
 const databases: SqliteDatabase[] = []
 const directories: string[] = []
@@ -37,6 +38,25 @@ function importDocument(value: unknown, displayName = 'preset.json') {
 }
 
 describe('agent preset repository', () => {
+  it('removes unfinished empty roleplay tasks before the save command reaches the repository', () => {
+    const repository = harness()
+    repository.ensureInitialized()
+    const initial = repository.active()
+    const request = requestContracts['command.agent_presets.save'].input.parse({
+      preset: {
+        ...initial,
+        roleplayPlan: { steps: ['  读取设定  ', '', '   ', '  输出正文  '] }
+      },
+      expectedRegexRules: initial.regexRules
+    })
+
+    expect(request.preset.roleplayPlan.steps).toEqual(['读取设定', '输出正文'])
+    expect(repository.save(request.preset, request.expectedRegexRules).roleplayPlan.steps).toEqual([
+      '读取设定',
+      '输出正文'
+    ])
+  })
+
   it('persists the four editor areas and projects the active preset into runtime context', () => {
     const repository = harness()
     repository.ensureInitialized()

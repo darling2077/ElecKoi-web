@@ -869,9 +869,7 @@ function normalizePreset(input: AgentPreset): AgentPreset {
       configId: input.subagentModelSelection.configId.trim(),
       model: input.subagentModelSelection.model.trim()
     },
-    roleplayPlan: roleplayPlanSettingsSchema.parse({
-      steps: input.roleplayPlan.steps.map((step) => step.trim()).filter(Boolean)
-    }),
+    roleplayPlan: roleplayPlanSettingsSchema.parse(input.roleplayPlan),
     regexRules: input.regexRules.map((rule, index) => regexRuleSchema.parse({ ...rule, order: index })),
     expandedGroupIds: [...new Set(input.expandedGroupIds)].filter((id) => validGroupIds.has(id))
   })

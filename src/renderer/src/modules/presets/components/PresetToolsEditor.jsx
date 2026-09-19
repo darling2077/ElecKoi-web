@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CaretRight, MagnifyingGlass, MinusCircle, Plus, X } from '@phosphor-icons/react';
+import { normalizeRoleplayPlanDraft } from '@shared/contracts/presets/roleplayPlan';
 import { AgentToolGroupIcon } from '../../../ui/icons/index.jsx';
 import { RoleplayPlanEditor, SubagentModelSelect, WebSearchSettings } from '../../agentTools/index.js';
 import { PresetContextMenu, usePresetContextMenu } from './PresetContextMenu.jsx';
@@ -41,6 +42,16 @@ export function PresetToolsEditor({
 
   const menuGroup = context.menu?.target;
   const configGroup = selectedGroups.find((group) => group.id === configGroupId);
+
+  function closeConfig() {
+    if (configGroupId === 'builtin:roleplay-workflow') {
+      const roleplayPlan = normalizeRoleplayPlanDraft(preset.roleplayPlan);
+      if (JSON.stringify(roleplayPlan) !== JSON.stringify(preset.roleplayPlan)) {
+        onChange({ ...preset, roleplayPlan });
+      }
+    }
+    setConfigGroupId('');
+  }
 
   return (
     <section className="preset-tools-editor" aria-label="工具" onMouseDown={() => setAddOpen(false)}>
@@ -95,7 +106,7 @@ export function PresetToolsEditor({
         modelOptionsByKey={modelOptionsByKey}
         subagentModelSelection={preset.subagentModelSelection}
         roleplayPlan={preset.roleplayPlan}
-        onClose={() => setConfigGroupId('')}
+        onClose={closeConfig}
         onEnabledChange={(enabled) => updateGroup(configGroup.id, { enabled })}
         onLoadModels={onLoadModels}
         onSaveModelConfig={onSaveModelConfig}
