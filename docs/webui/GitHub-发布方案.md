@@ -710,6 +710,7 @@ docker compose -f docker/compose.yml up -d --build
 | `webui-v0.1.4` | `0.1.4` | 基于上游 v0.1.4（含 v0.1.3） |
 | `webui-v0.1.5` | `0.1.5` | 基于上游 v0.1.5（上游强推改写历史后按其发布 tag rebase） |
 | `webui-v0.1.6` | `0.1.6` | 基于上游 v0.1.6 |
+| `webui-v0.1.7` | `0.1.7` | 基于上游 v0.1.7 |
 | `webui-v0.1.3` | `0.1.3` | 下一次发布 |
 
 规则：
