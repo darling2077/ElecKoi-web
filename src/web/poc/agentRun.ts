@@ -112,18 +112,34 @@ async function main(): Promise<void> {
     record('P2b-3', '创建并关联角色的会话', Boolean(conversationId), `conversationId=${conversationId}`)
 
     // ── 3. 发起 Agent 回合 ──
+    //
+    // 冷启动特性：DSH 运行时子进程要在 10 秒内完成 profile 初始化（SDK 客户端的默认超时），
+    // 机器负载高时（例如紧接在一次渲染构建之后）会超时，表现为
+    // `RUNTIME_UNAVAILABLE: initialize timed out after 10000ms waiting for dsh profile "sdk"`。
+    // 这属于环境抖动而非功能缺陷，所以**重试一次**；第二次仍失败就照常判失败，不掩盖真问题。
+    const startRound = async (): Promise<{ runId: string; messageId: string }> =>
+      await dispatch<{ runId: string; messageId: string }>('command.agent.start', {
+        conversationId,
+        // 上游 v0.1.5 起 requestId 必填（停止/重新生成链路按它匹配事件），格式与渲染层一致
+        requestId: `p2b-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        text: '你好，请自我介绍一下。'
+      })
+
     const startedAt = Date.now()
-    const started = await dispatch<{ runId: string; messageId: string }>('command.agent.start', {
-      conversationId,
-      // 上游 v0.1.5 起 requestId 必填（停止/重新生成链路按它匹配事件），格式与渲染层一致
-      requestId: `p2b-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      text: '你好，请自我介绍一下。'
-    })
+    let started = await startRound()
+    let finished = await waitFor(events, ['agent.run.finished', 'agent.run.failed'], 120_000)
+    const coldStartTimeout = finished?.name === 'agent.run.failed'
+      && /timed out|RUNTIME_UNAVAILABLE/i.test(JSON.stringify(finished.payload ?? {}))
+    if (coldStartTimeout) {
+      console.log('\n  ⚠️ 运行时冷启动超时（机器负载），重试一次…\n')
+      events.length = 0
+      started = await startRound()
+      finished = await waitFor(events, ['agent.run.finished', 'agent.run.failed'], 120_000)
+    }
     record('P2b-4', 'command.agent.start 被接受', Boolean(started.runId),
-      `runId=${started.runId}`)
+      `runId=${started.runId}${coldStartTimeout ? '（冷启动超时后重试成功发起）' : ''}`)
 
     // ── 4. 等待回合结束 ──
-    const finished = await waitFor(events, ['agent.run.finished', 'agent.run.failed'], 120_000)
     const isFinished = finished?.name === 'agent.run.finished'
     record('P2b-5', 'Agent 回合正常结束（非失败）', isFinished,
       isFinished
