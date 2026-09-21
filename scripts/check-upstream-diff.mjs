@@ -41,6 +41,8 @@ const ALLOWED_ADDITIONS = [
   '.github/workflows/',
   'scripts/check-upstream-diff.mjs',
   'scripts/apply-patches.mjs',
+  // 构建期把 better-sqlite3 顶到 13.x（Node 24 下退出即断言）。按单个文件放行，不放行整个 scripts/。
+  'scripts/webui-pin-better-sqlite3.mjs',
   '.dockerignore',
   'CLAUDE.md'
 ]

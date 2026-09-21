@@ -52,7 +52,20 @@ COPY . .
 
 # 渲染产物（out/renderer）+ 多租户服务端（out/web/entry.mjs）
 # 先施加对上游的最小补丁（patches/），打不上会立刻失败——这是可更新性的告警点。
+#
+# 中间两步是 Node 24 下的必需覆盖，不是可选优化：
+#   上游锁的 better-sqlite3 12.x 在 Node 24 上会让**每一次优雅关闭**都以
+#   `Assertion failed: (env) != nullptr` → SIGABRT 收场（进程退出时 V8 最后一次 GC
+#   回收残留的 Statement，其析构调 node::RemoveEnvironmentCleanupHook 时 Environment 已拆掉）。
+#   restart: unless-stopped 下这表现为容器反复重启，看起来像崩溃循环。
+#   覆盖只发生在镜像里（仓库的 package.json 保持上游原样，见 scripts/check-upstream-diff.mjs 的约束）；
+#   --verify 会在版本没顶上去、或 N-API 产物不可用时直接让构建失败。
+#   上游自行升级 better-sqlite3 后，删掉这两步与脚本本身。
+#   详见 docs/webui/better-sqlite3-退出断言与容器重启.md
 RUN node scripts/apply-patches.mjs \
+ && node scripts/webui-pin-better-sqlite3.mjs \
+ && pnpm install --no-frozen-lockfile \
+ && node scripts/webui-pin-better-sqlite3.mjs --verify \
  && pnpm exec electron-vite build \
  && pnpm exec vite build --config src/web/vite.entry.config.ts
 
