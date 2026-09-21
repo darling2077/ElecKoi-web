@@ -79,3 +79,4 @@ docker compose -f docker/compose.yml up -d --build
 | `docs/webui/自有页面外观.md` | 登录/账号/管理页如何与应用本体保持一致 |
 | `docs/webui/GitHub-发布方案.md` | 发布与提交切分 |
 | `docs/webui/卡片外链图片本地化.md` | 卡片图片全黑的成因、图床放行与批量改写 |
+| `docs/webui/better-sqlite3-退出断言与容器重启.md` | 为什么每次优雅关闭都被记成崩溃重启，以及镜像内覆盖到 13.x 的做法 |
