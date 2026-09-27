@@ -584,6 +584,19 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       return
     }
 
+    // 导出进度：桥脚本用它把"已落盘几张卡"画成进度条（配合已选卡数即可算出百分比）。
+    // 只回文件名/大小/时间，不泄露目录结构；会话门禁之后，天然按租户隔离。
+    if (path === '/api/exports/list' && req.method === 'GET') {
+      sendJson(res, 200, success({
+        files: listExports(binding.exportsDir).map((entry) => ({
+          name: entry.name,
+          bytes: entry.bytes,
+          modified: entry.modified.getTime()
+        }))
+      }))
+      return
+    }
+
     // ── 导出文件下载（批量导出在 Web 端的出口）──
     // 桌面上这一步是"选目录由主进程写盘"，浏览器没有该能力，故导出落到租户的 exports 目录；
     // 这里把它取回来，否则上游新加的批量导出在 Web 上等于没做。

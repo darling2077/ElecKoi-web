@@ -180,10 +180,189 @@ export function buildWebBridgeSource(options: { eventStream?: boolean; cardOrigi
     }
   }
 
+  // ── 导出角色卡的进度与完成弹窗 ─────────────────────────────────────────
+  // 桌面端导出是"选一个目录、主进程直接写盘"；浏览器没有这种能力，导出走后端写进租户的
+  // exports 目录，用户得去 /exports 下载。上游 UI 不会给这个入口，所以由本脚本补上：
+  //   导出期间 → 显示进度条（已落盘张数 / 已选张数，数我们自己的接口）
+  //   导出完成 → 弹出面板"导出成功"，带一个「去下载」链接
+  // 这样用户在应用里就完成了闭环，不需要知道 /exports 这个地址。
+  //
+  // 注意：本文件整段是注入页面的脚本，外层是模板字符串——这里不能用反引号，
+  // 也不能写美元花括号，否则会把外层模板打断（历史上栽过）。
+  let exportNode = null;
+  let exportBar = null;
+  let exportTitle = null;
+  let exportDetail = null;
+  let exportActions = null;
+  let exportTimer = null;
+  let exportStartedAt = 0;
+  let exportTotal = 0;
+
+  function ensureExportNode() {
+    if (exportNode) return;
+    exportNode = document.createElement('div');
+    exportNode.setAttribute('data-eleckoi-export', '');
+    exportNode.setAttribute('role', 'dialog');
+    const box = exportNode.style;
+    box.position = 'fixed';
+    box.left = '50%';
+    box.top = '50%';
+    box.transform = 'translate(-50%, -50%)';
+    box.zIndex = '2147483001';
+    box.minWidth = '300px';
+    box.maxWidth = 'min(420px, calc(100vw - 32px))';
+    box.padding = '18px 20px';
+    box.borderRadius = '14px';
+    box.background = 'rgba(24, 24, 27, 0.97)';
+    box.color = '#f4f4f5';
+    box.boxShadow = '0 24px 60px rgba(0, 0, 0, 0.45)';
+    box.font = '13px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif';
+    box.pointerEvents = 'auto';
+    box.display = 'none';
+
+    exportTitle = document.createElement('div');
+    exportTitle.style.fontSize = '15px';
+    exportTitle.style.fontWeight = '600';
+    exportDetail = document.createElement('div');
+    exportDetail.style.marginTop = '6px';
+    exportDetail.style.opacity = '0.8';
+
+    const track = document.createElement('div');
+    track.style.marginTop = '12px';
+    track.style.height = '6px';
+    track.style.borderRadius = '999px';
+    track.style.background = 'rgba(255, 255, 255, 0.16)';
+    track.style.overflow = 'hidden';
+    exportBar = document.createElement('div');
+    exportBar.style.height = '100%';
+    exportBar.style.width = '0%';
+    exportBar.style.borderRadius = '999px';
+    exportBar.style.background = 'linear-gradient(90deg, #6366f1, #a855f7)';
+    exportBar.style.transition = 'width 240ms ease';
+    track.appendChild(exportBar);
+
+    exportActions = document.createElement('div');
+    exportActions.style.marginTop = '14px';
+    exportActions.style.display = 'none';
+    exportActions.style.gap = '8px';
+
+    exportNode.appendChild(exportTitle);
+    exportNode.appendChild(exportDetail);
+    exportNode.appendChild(track);
+    exportNode.appendChild(exportActions);
+    (document.body ?? document.documentElement).appendChild(exportNode);
+  }
+
+  function exportButton(label, primary, onClick) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    const style = button.style;
+    style.padding = '7px 14px';
+    style.borderRadius = '9px';
+    style.border = primary ? '0' : '1px solid rgba(255, 255, 255, 0.28)';
+    style.background = primary ? 'linear-gradient(90deg, #6366f1, #a855f7)' : 'transparent';
+    style.color = '#f4f4f5';
+    style.font = 'inherit';
+    style.cursor = 'pointer';
+    button.addEventListener('click', onClick);
+    return button;
+  }
+
+  function hideExport() {
+    if (exportTimer) { clearTimeout(exportTimer); exportTimer = null; }
+    if (exportNode) exportNode.style.display = 'none';
+  }
+
+  function renderExport(state) {
+    ensureExportNode();
+    const running = state.phase === 'running';
+    const total = Number(state.total) || 0;
+    const done = Number(state.done) || 0;
+    const percent = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+    exportActions.style.display = 'none';
+    exportActions.textContent = '';
+    exportBar.style.width = (running ? (total > 0 ? percent : 10) : 100) + '%';
+    if (running) {
+      exportTitle.textContent = '正在导出角色卡…';
+      exportDetail.textContent = total > 0
+        ? '已完成 ' + done + '/' + total + ' 张（' + percent + '%），导出期间请不要关闭页面。'
+        : '正在准备导出，请稍候…';
+    } else if (state.phase === 'done') {
+      exportTitle.textContent = '导出成功';
+      exportDetail.textContent = done > 0
+        ? '共 ' + done + ' 张角色卡已放到服务端，点「去下载」即可保存到本地。'
+        : '没有需要导出的角色卡。';
+      exportActions.style.display = 'flex';
+      const link = document.createElement('a');
+      link.href = '/exports';
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = '去下载';
+      link.style.padding = '7px 14px';
+      link.style.borderRadius = '9px';
+      link.style.background = 'linear-gradient(90deg, #6366f1, #a855f7)';
+      link.style.color = '#f4f4f5';
+      link.style.textDecoration = 'none';
+      exportActions.appendChild(link);
+      exportActions.appendChild(exportButton('关闭', false, hideExport));
+    } else {
+      exportTitle.textContent = '导出失败';
+      exportDetail.textContent = String(state.message || '请稍后重试。');
+      exportActions.style.display = 'flex';
+      exportActions.appendChild(exportButton('关闭', false, hideExport));
+    }
+    exportNode.style.display = 'block';
+  }
+
+  async function pollExport() {
+    if (!exportTotal) return;
+    try {
+      const response = await fetch('/api/exports/list', { headers: { accept: 'application/json' } });
+      const payload = await response.json();
+      const files = payload && payload.ok && payload.data && payload.data.files ? payload.data.files : [];
+      const done = files.filter((file) => Number(file.modified) >= exportStartedAt - 1000).length;
+      renderExport({ phase: 'running', done: done, total: exportTotal });
+      if (done < exportTotal) exportTimer = setTimeout(pollExport, 400);
+    } catch (error) {
+      // 轮询失败不影响导出本身：退化成不确定进度，请求返回时会给出结论。
+      exportTimer = setTimeout(pollExport, 1200);
+    }
+  }
+
+  function startExport(total) {
+    exportStartedAt = Date.now();
+    exportTotal = total;
+    // 同步先亮出来：用户点了导出就该立刻有反馈，而不是等第一次轮询。
+    renderExport({ phase: 'running', done: 0, total: total });
+    exportTimer = setTimeout(pollExport, 300);
+  }
+
+  function finishExport(result) {
+    if (exportTimer) { clearTimeout(exportTimer); exportTimer = null; }
+    if (result && result.ok) {
+      const data = result.data || {};
+      const written = data.written && data.written.length ? data.written.length : exportTotal;
+      renderExport({ phase: 'done', done: written, total: exportTotal });
+      return;
+    }
+    const message = result && result.error && result.error.message
+      ? result.error.message
+      : '导出没有成功，请稍后重试。';
+    renderExport({ phase: 'error', message: message });
+  }
+
   async function request(name, input) {
     // 导入提交会同步等搬图完成，这里立刻把进度条亮起来并开始轮询。
     const trackImport = name === 'command.characters.import.commit';
     if (trackImport) startProgress();
+    // 批量导出：上游只会在结束时返回结果，中间过程由我们用"已落盘张数"补成进度条，
+    // 并在结束后弹出带下载入口的面板（浏览器没有原生目录对话框，用户需要这个出口）。
+    const exportIds = name === 'command.characters.export.files' && input && input.characterIds
+      ? input.characterIds.length
+      : 0;
+    const trackExport = name === 'command.characters.export.files';
+    if (trackExport) startExport(exportIds);
     try {
       const response = await fetch('/api/rpc', {
         method: 'POST',
@@ -195,9 +374,11 @@ export function buildWebBridgeSource(options: { eventStream?: boolean; cardOrigi
         ? payload
         : { ok: false, error: { code: 'INTERNAL', message: '服务端返回了无法识别的响应。' } };
       if (trackImport) settleProgress();
+      if (trackExport) finishExport(result);
       return result;
     } catch (error) {
       if (trackImport) settleProgress();
+      if (trackExport) finishExport({ ok: false, error: { message: '与服务的连接中断，导出结果未知。' } });
       // 真正断线时把底层原因带上：只说"连接已断开"会让排查无从下手
       // （历史上最常见的真实原因是请求体超过服务端上限）。
       // 注意：这段是注入到页面的脚本，本身套在模板字符串里——
