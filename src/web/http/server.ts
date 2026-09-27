@@ -16,13 +16,14 @@
  */
 
 import { StringDecoder } from 'node:string_decoder'
-import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import type { GatewayEventEnvelope, RequestContext } from '@shared/contracts/gateway/types'
 import { failure, success } from '@shared/foundation/result'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, type WebGateway } from '../transport/WebGateway'
 import { readSignedMedia } from '../mediaSignature'
+import { renderExportsPage } from './exportsPage'
 import {
   CARD_FRAME_PATH,
   cardFrameCsp,
@@ -64,12 +65,32 @@ export const MEDIA_PREFIX = '/media/v1/'
 export interface SessionBinding {
   gateway: WebGateway
   mediaStore: { pathForReference(reference: string): string | undefined }
+  /** 该租户的导出目录（批量导出角色卡落到这里，用户在 /exports 下载）。 */
+  exportsDir: string
   release(): void
 }
 
 export interface AuthHandler {
   /** 处理认证相关路由；返回 true 表示已处理。 */
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>
+}
+
+/** 只接受单层文件名：挡掉目录穿越与子目录访问。 */
+function exportFilePath(directory: string, name: string): string | undefined {
+  if (name === '' || name.includes('/') || name.includes('\\') || name.startsWith('.')) return undefined
+  const file = join(directory, name)
+  return existsSync(file) && statSync(file).isFile() ? file : undefined
+}
+
+function listExports(directory: string): Array<{ name: string; bytes: number; modified: Date }> {
+  if (!existsSync(directory)) return []
+  return readdirSync(directory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
+    .map((entry) => {
+      const stats = statSync(join(directory, entry.name))
+      return { name: entry.name, bytes: stats.size, modified: stats.mtime }
+    })
+    .sort((left, right) => right.modified.getTime() - left.modified.getTime())
 }
 
 /** 未配置时的请求体上限：给足导入大卡与中等批量导入的余量。 */
@@ -563,6 +584,38 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       return
     }
 
+    // ── 导出文件下载（批量导出在 Web 端的出口）──
+    // 桌面上这一步是"选目录由主进程写盘"，浏览器没有该能力，故导出落到租户的 exports 目录；
+    // 这里把它取回来，否则上游新加的批量导出在 Web 上等于没做。
+    if (path === '/exports' && req.method === 'GET') {
+      const entries = listExports(binding.exportsDir)
+      res.writeHead(200, {
+        'content-type': 'text/html; charset=utf-8',
+        'cache-control': 'no-store',
+        ...securityHeaders('app', cardOrigin)
+      })
+      res.end(renderExportsPage(entries))
+      return
+    }
+    if (path.startsWith('/exports/') && req.method === 'GET') {
+      const name = safeDecode(path.slice('/exports/'.length))
+      const file = name === undefined ? undefined : exportFilePath(binding.exportsDir, name)
+      if (file === undefined) {
+        sendText(res, 404, 'not found')
+        return
+      }
+      res.writeHead(200, {
+        'content-type': 'application/octet-stream',
+        // 导出的角色卡是文件而不是页面，强制下载并避免被当成 HTML 执行
+        'content-disposition': `attachment; filename="${encodeURIComponent(name!)}"`,
+        'content-length': String(statSync(file).size),
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff'
+      })
+      createReadStream(file).pipe(res)
+      return
+    }
+
     // 走到这里说明没有有效签名（或未启用签名媒体），按会话鉴权处理。
     if (path.startsWith(MEDIA_PREFIX)) {
       const resourcePath = safeDecode(path.slice(MEDIA_PREFIX.length))
@@ -612,7 +665,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   }
 }
 
-/** 单租户适配（M1 的 POC 与本地自用形态）：无鉴权、固定租户。 */
-export function singleTenantResolver(gateway: WebGateway, mediaStore: SessionBinding['mediaStore']) {
-  return (): SessionBinding => ({ gateway, mediaStore, release: () => undefined })
+/**
+ * 单租户适配（M1 的 POC 与本地自用形态）：无鉴权、固定租户。
+ * `exportsDir` 由调用方指定；POC 通常给一个临时目录。
+ */
+export function singleTenantResolver(
+  gateway: WebGateway,
+  mediaStore: SessionBinding['mediaStore'],
+  exportsDir = ''
+) {
+  return (): SessionBinding => ({ gateway, mediaStore, exportsDir, release: () => undefined })
 }

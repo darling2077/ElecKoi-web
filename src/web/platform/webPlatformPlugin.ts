@@ -14,6 +14,7 @@ import type { Context, Plugin } from '@deepseek-ai/cordis'
 import { createAppLog } from '@main/platform/logging/AppLog'
 import { ConversationFiles } from '@main/platform/filesystem/ConversationFiles'
 import { LocalMediaStore } from '@main/platform/filesystem/LocalMediaStore'
+import { WebDirectoryPicker } from './webDirectoryPicker'
 import { join } from 'node:path'
 import { WebAppPaths } from './WebAppPaths'
 import { WebCredentialCipher } from './WebCredentialCipher'
@@ -30,7 +31,7 @@ export function createWebPlatformPlugin(options: WebPlatformOptions): Plugin.Obj
 
   return {
     name: 'eleckoi-web-platform',
-    provide: ['appPaths', 'appLog', 'credentialCipher', 'conversationFiles', 'mediaAssets'],
+    provide: ['appPaths', 'appLog', 'credentialCipher', 'conversationFiles', 'mediaAssets', 'directoryPicker'],
     apply(ctx: Context) {
       const log = createAppLog().child({ tenant: options.tenantId })
       ctx.provide('appPaths', appPaths)
@@ -47,6 +48,12 @@ export function createWebPlatformPlugin(options: WebPlatformOptions): Plugin.Obj
         join(appPaths.dshRuntime, 'sessions')
       ]))
       ctx.provide('mediaAssets', new LocalMediaStore(appPaths.media))
+      // 上游 v0.1.10 起 characterTransferPlugin 依赖该服务（原生目录对话框）；
+      // 缺它整块插件都不加载，导入/导出路由会一起消失。Web 版落到租户导出目录，见该类注释。
+      ctx.provide('directoryPicker', new WebDirectoryPicker(
+        join(options.tenantRoot, 'exports'),
+        (message) => log.info(message)
+      ))
     }
   } satisfies Plugin.Object
 }
