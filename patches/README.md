@@ -38,12 +38,13 @@ pnpm 补丁」仍会被门禁抓到。
 
 ## 当前补丁
 
-### 0001-local-media-path-separator.patch
+### ~~0001-local-media-path-separator.patch~~（已删除：上游自行修好）
 
-- **改动**：`src/main/platform/filesystem/LocalMediaStore.ts`（+13/−5）。
-- **为什么非改不可**：原实现把媒体根路径的 `\` 写死，在 POSIX 上所有媒体请求 404。
-  Docker/Linux 部署下这是硬故障，不是偏好问题。
-- **验证**：`pnpm webui:media`（媒体读写与签名 URL 走通）。
+- 原来修的是 `LocalMediaStore` 把媒体根路径分隔符写死成 `\`，导致 POSIX 上所有媒体请求 404。
+- **上游 v0.1.10 用 `sep`（`node:path`）替换了硬编码反斜杠**，修的是同一个 bug，
+  因此本补丁在 2026-09-27 同步 v0.1.10 时删除。回归由 `pnpm webui:media` 继续守着
+  （它验的是行为，不是补丁是否存在）。
+- 这是「上游修好后删掉补丁」这条规则的第一次实际执行。
 
 ### 0002-cross-origin-card-frame.patch
 
