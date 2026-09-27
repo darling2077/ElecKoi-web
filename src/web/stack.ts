@@ -122,6 +122,7 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
       return {
         gateway: lease.runtime.gateway,
         mediaStore: lease.runtime.context.mediaAssets,
+        exportsDir: join(options.dataRoot, 'tenants', tenant.tenant_id, 'exports'),
         release: lease.release
       }
     },
