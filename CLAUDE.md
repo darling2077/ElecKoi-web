@@ -51,6 +51,10 @@ docker compose -f docker/compose.yml up -d --build
   界面由注入的桥脚本画进度条（`/api/card-images/progress` + `webBridge.ts`）。
   同步搬运要求反向代理后端读超时 ≥600 秒；`ELECKOI_IMAGE_LOCALIZE_MODE=background`
   可换回后台搬运。进度条与接口都在我们自己的代码里，没有改上游前端。
+- **批量导出角色卡在 Web 端落到服务端**：浏览器没有原生目录对话框，上游的
+  `directoryPicker` 由我们提供 Web 等价物——导出写进该租户的 `exports` 目录，
+  用户在 **`/exports`** 页面下载（需登录，仅本租户可见）。⚠️ 这个服务不能省：
+  缺了它整块角色卡导入/导出插件都不会加载（连导入都会一起失效，而卡片图片搬运挂在导入上）。
 - 可选的图床（Zipline）在 `images` profile 下，配置全部在 `docker/.env` 的
   「自带图床」段（`ZIPLINE_*`）；不启用不影响默认部署（默认那条 `up -d` 仍只起
   `eleckoi-web`）。⚠️ `ZIPLINE_USER_REGISTRATION` 与 `ZIPLINE_INVITES_ENABLED`
