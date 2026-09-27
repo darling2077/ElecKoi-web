@@ -13,7 +13,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, utimesSync, writeFileSync } from 'node:fs'
 import { WebHost } from '../WebHost'
 import { singleTenantResolver, startWebServer } from '../http/server'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, WEB_MEDIA_REFERENCE_PREFIX } from '../transport/WebGateway'
@@ -112,6 +112,29 @@ async function main(): Promise<void> {
     record('M-6', listed && download.status === 200 && body === exported && traversal.status === 404,
       `列表含该文件=${listed}、下载 ${download.status} 且内容一致=${body === exported}、`
       + `目录穿越被拒=${traversal.status === 404}`)
+
+    // ── M-7 过期自动清理：导出文件是下载中转品，15 分钟后不该还躺在服务端 ──
+    // 把一个文件的 mtime 改成 20 分钟前，再访问下载页，它必须已经被清掉。
+    const stale = join(exportsDir, 'stale-check.json')
+    writeFileSync(stale, exported, 'utf8')
+    const old = new Date(Date.now() - 20 * 60 * 1000)
+    utimesSync(stale, old, old)
+    const afterTtl = await fetch(`${base}/exports`)
+    const afterTtlHtml = await afterTtl.text()
+    record('M-7', !existsSync(stale) && !afterTtlHtml.includes('stale-check.json'),
+      `20 分钟前的导出文件被自动清理：文件还在=${existsSync(stale)}、仍列在页面=${afterTtlHtml.includes('stale-check.json')}`)
+
+    // ── M-8 手动清理按钮：表单 POST 后文件全没了，并且重定向回下载页 ──
+    writeFileSync(join(exportsDir, 'clear-me.json'), exported, 'utf8')
+    const cleared = await fetch(`${base}/exports/clear`, { method: 'POST', redirect: 'manual' })
+    const afterClear = await fetch(`${base}/exports`)
+    const afterClearHtml = await afterClear.text()
+    // 清空后页面应该是"还没有导出文件"的空态（此时不再显示清理按钮才是对的）。
+    const fileGone = !existsSync(join(exportsDir, 'clear-me.json'))
+    const emptyState = afterClearHtml.includes('还没有导出文件')
+    record('M-8', cleared.status === 303 && fileGone && emptyState,
+      `清理按钮 ${cleared.status}（期望 303）→ 文件已删=${fileGone}、`
+      + `回到空态=${emptyState}`)
   } finally {
     await server.close()
     await tenant.dispose()

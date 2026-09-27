@@ -34,7 +34,16 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-export function renderExportsPage(entries: readonly ExportsPageEntry[]): string {
+export interface ExportsPageOptions {
+  readonly entries: readonly ExportsPageEntry[]
+  /** 保留时长（分钟），页面上明确告诉用户"会自动删"。 */
+  readonly ttlMinutes: number
+  /** 刚刚清理掉的文件数（来自跳转参数），>0 时给个反馈。 */
+  readonly cleared: number
+}
+
+export function renderExportsPage(options: ExportsPageOptions): string {
+  const { entries, ttlMinutes, cleared } = options
   const rows = entries.length === 0
     ? '<p class="card__hint">这里还没有导出文件。在应用里选择角色卡后使用「导出」即可。</p>'
     : `<ul class="files">${entries.map((entry) => `
@@ -43,6 +52,16 @@ export function renderExportsPage(entries: readonly ExportsPageEntry[]): string 
         <span>${formatBytes(entry.bytes)} · ${entry.modified.toISOString().replace('T', ' ').slice(0, 16)}</span>
       </li>`).join('')}
     </ul>`
+
+  const toolbar = entries.length === 0
+    ? ''
+    : `<form method="post" action="/exports/clear" class="toolbar">
+        <button type="submit">清理全部导出文件</button>
+        <span>手动清理会立刻删除全部文件；不点也会在 ${ttlMinutes} 分钟后自动删除。</span>
+      </form>`
+  const notice = cleared > 0
+    ? `<p class="card__hint">已清理 ${cleared} 个文件。</p>`
+    : ''
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -63,6 +82,13 @@ ${pageCss()}
 .files a:hover { text-decoration: underline; }
 .files span { opacity: .65; font-size: .85em; white-space: nowrap; }
 .files li span { opacity: .65; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 18px; }
+.toolbar button {
+  padding: 7px 14px; border-radius: 9px; border: 1px solid color-mix(in oklab, currentColor 28%, transparent);
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.toolbar button:hover { border-color: color-mix(in oklab, currentColor 55%, transparent); }
+.toolbar span { opacity: .65; font-size: .85em; }
 </style>
 </head>
 <body>
@@ -71,8 +97,11 @@ ${pageCss()}
     <section class="card">
       <h1 class="card__title">导出文件</h1>
       <p class="card__hint">这里存放你在本服务里导出的角色卡。桌面上这一步是「选一个文件夹写进去」，
-        浏览器没有这个能力，因此统一放在服务端，点文件名即可下载。</p>
+        浏览器没有这个能力，因此统一放在服务端，点文件名即可下载。
+        这些文件只是下载用的中转品，<strong>${ttlMinutes} 分钟后会自动删除</strong>。</p>
+      ${notice}
       ${rows}
+      ${toolbar}
     </section>
     <p class="foot"><a href="/">返回应用</a></p>
   </div>

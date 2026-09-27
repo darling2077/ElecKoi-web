@@ -47,6 +47,8 @@ services:
       ELECKOI_ADMIN_EMAILS: "${ELECKOI_ADMIN_EMAILS:-}"
       # 无引用多久后回收该用户的运行时（释放 SQLite 句柄与 Agent 子进程）
       ELECKOI_TENANT_IDLE_MINUTES: "${ELECKOI_TENANT_IDLE_MINUTES:-30}"
+      # 导出文件（角色卡批量导出）在服务端的保留时长，默认 15 分钟；下载页也能手动清
+      ELECKOI_EXPORT_TTL_MINUTES: "${ELECKOI_EXPORT_TTL_MINUTES:-15}"
       # 每用户同时进行的 Agent 回合上限（每个回合一个 node 子进程，是主要资源消耗）
       ELECKOI_MAX_CONCURRENT_RUNS: "${ELECKOI_MAX_CONCURRENT_RUNS:-2}"
       # 同时存活的租户上限，超过时淘汰最久未用的空闲租户

@@ -16,7 +16,7 @@
  */
 
 import { StringDecoder } from 'node:string_decoder'
-import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import type { GatewayEventEnvelope, RequestContext } from '@shared/contracts/gateway/types'
@@ -24,6 +24,7 @@ import { failure, success } from '@shared/foundation/result'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, type WebGateway } from '../transport/WebGateway'
 import { readSignedMedia } from '../mediaSignature'
 import { renderExportsPage } from './exportsPage'
+import { clearExports, exportFilePath, listExports, pruneExports, DEFAULT_EXPORT_TTL_MS } from './exportStore'
 import {
   CARD_FRAME_PATH,
   cardFrameCsp,
@@ -75,24 +76,6 @@ export interface AuthHandler {
   handle(req: IncomingMessage, res: ServerResponse): Promise<boolean>
 }
 
-/** 只接受单层文件名：挡掉目录穿越与子目录访问。 */
-function exportFilePath(directory: string, name: string): string | undefined {
-  if (name === '' || name.includes('/') || name.includes('\\') || name.startsWith('.')) return undefined
-  const file = join(directory, name)
-  return existsSync(file) && statSync(file).isFile() ? file : undefined
-}
-
-function listExports(directory: string): Array<{ name: string; bytes: number; modified: Date }> {
-  if (!existsSync(directory)) return []
-  return readdirSync(directory, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && !entry.name.startsWith('.'))
-    .map((entry) => {
-      const stats = statSync(join(directory, entry.name))
-      return { name: entry.name, bytes: stats.size, modified: stats.mtime }
-    })
-    .sort((left, right) => right.modified.getTime() - left.modified.getTime())
-}
-
 /** 未配置时的请求体上限：给足导入大卡与中等批量导入的余量。 */
 export const DEFAULT_MAX_BODY_BYTES = 128 * 1024 * 1024
 
@@ -125,6 +108,8 @@ export interface WebServerOptions {
    * CSP 白名单。文件名是内容哈希且只认图片扩展名，不接受目录穿越，也不列表。
    */
   cardImageDir?: string
+  /** 导出文件保留时长（毫秒）。超过即在访问时顺手清掉；缺省 15 分钟。 */
+  exportTtlMs?: number
   /**
    * `POST /api/rpc` 的请求体上限（字节）。导入角色卡会把**整张卡的 base64** 放进一次请求，
    * 上游契约单文件就允许到 132 MB，所以这个值必须给够——太小会让"上传大图/批量导入"
@@ -586,6 +571,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
     // 导出进度：桥脚本用它把"已落盘几张卡"画成进度条（配合已选卡数即可算出百分比）。
     // 只回文件名/大小/时间，不泄露目录结构；会话门禁之后，天然按租户隔离。
+    // 顺手清掉过期导出：没人打开页面时由 entry.ts 的定时清扫兜底。
+    pruneExports(binding.exportsDir, options.exportTtlMs ?? DEFAULT_EXPORT_TTL_MS)
+
     if (path === '/api/exports/list' && req.method === 'GET') {
       sendJson(res, 200, success({
         files: listExports(binding.exportsDir).map((entry) => ({
@@ -597,17 +585,31 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       return
     }
 
+    // 「清理」按钮：导出文件是下载中转品，用户点一下就该全没了。
+    // 用表单 POST（不是 fetch + JS）：下载页不依赖脚本，CSP 与无 JS 环境都成立。
+    if (path === '/exports/clear' && req.method === 'POST') {
+      const removed = clearExports(binding.exportsDir)
+      res.writeHead(303, { location: `/exports?cleared=${removed}`, 'cache-control': 'no-store' })
+      res.end()
+      return
+    }
+
     // ── 导出文件下载（批量导出在 Web 端的出口）──
     // 桌面上这一步是"选目录由主进程写盘"，浏览器没有该能力，故导出落到租户的 exports 目录；
     // 这里把它取回来，否则上游新加的批量导出在 Web 上等于没做。
     if (path === '/exports' && req.method === 'GET') {
       const entries = listExports(binding.exportsDir)
+      const ttlMinutes = Math.round((options.exportTtlMs ?? DEFAULT_EXPORT_TTL_MS) / 60000)
       res.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
         'cache-control': 'no-store',
         ...securityHeaders('app', cardOrigin)
       })
-      res.end(renderExportsPage(entries))
+      res.end(renderExportsPage({
+        entries,
+        ttlMinutes,
+        cleared: Number(new URL(req.url ?? '/', 'http://localhost').searchParams.get('cleared') ?? 0)
+      }))
       return
     }
     if (path.startsWith('/exports/') && req.method === 'GET') {

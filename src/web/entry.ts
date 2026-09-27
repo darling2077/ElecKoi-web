@@ -8,8 +8,9 @@
  */
 
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { pruneAllTenantExports } from './http/exportStore'
 import { startWebUiStack } from './stack'
 
 function envFlag(name: string, fallback: boolean): boolean {
@@ -75,6 +76,8 @@ function readMaxBodyBytes(): number {
 }
 const allowRegistration = envFlag('ELECKOI_ALLOW_REGISTRATION', true)
 const idleMs = Number(process.env.ELECKOI_TENANT_IDLE_MINUTES ?? 30) * 60 * 1000
+// 导出文件是下载中转品：默认 15 分钟后自动删除（下载页也能手动清）。
+const exportTtlMs = Number(process.env.ELECKOI_EXPORT_TTL_MINUTES ?? 15) * 60 * 1000
 const maxLive = Number(process.env.ELECKOI_MAX_LIVE_TENANTS ?? 50)
 
 let masterKeyBase64 = process.env.ELECKOI_MASTER_KEY ?? ''
@@ -104,6 +107,7 @@ const stack = await startWebUiStack({
   port: Number(process.env.ELECKOI_PORT ?? 8790),
   allowRegistration,
   idleMs,
+  exportTtlMs,
   maxLive,
   ...(process.env.ELECKOI_CARD_ORIGIN ? { cardOrigin: process.env.ELECKOI_CARD_ORIGIN } : {}),
   cardImageOrigins: (process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').split(','),
@@ -119,6 +123,13 @@ const sessionSweeper = setInterval(() => {
   if (removed > 0) console.log(`[auth] 清理过期会话 ${removed} 条`)
 }, 60 * 60 * 1000)
 sessionSweeper.unref()
+
+// 定时清扫导出目录：即使没有人打开下载页，过期文件也不会一直留在磁盘上。
+const exportSweeper = setInterval(() => {
+  const removed = pruneAllTenantExports(join(dataRoot, 'tenants'), exportTtlMs)
+  if (removed > 0) console.log(`[web] 清理过期导出文件 ${removed} 个`)
+}, Math.max(60_000, Math.min(exportTtlMs, 5 * 60 * 1000)))
+exportSweeper.unref()
 
 console.log(`\nElecKoi WebUI 已启动：${stack.server.url}`)
 console.log(`数据目录：${dataRoot}　开放注册：${allowRegistration ? '是' : '否（账号池为空时仍可创建首个账号）'}　租户空闲回收：${idleMs / 60000} 分钟`)
@@ -167,6 +178,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true
   console.log(`\n收到 ${signal}，正在关闭……`)
   clearInterval(sessionSweeper)
+  clearInterval(exportSweeper)
   await stack.close()
   process.exit(0)
 }
