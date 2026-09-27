@@ -13,6 +13,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { existsSync, writeFileSync } from 'node:fs'
 import { WebHost } from '../WebHost'
 import { singleTenantResolver, startWebServer } from '../http/server'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, WEB_MEDIA_REFERENCE_PREFIX } from '../transport/WebGateway'
@@ -36,10 +37,11 @@ async function main(): Promise<void> {
     appVersion: '0.1.0-web-m1'
   })
 
+  const exportsDir = join(root, 'tenant', 'exports')
   const server = await startWebServer({
     port: 0,
     rendererDir: resolve('out/renderer'),
-    resolveSession: singleTenantResolver(tenant.gateway, tenant.context.mediaAssets)
+    resolveSession: singleTenantResolver(tenant.gateway, tenant.context.mediaAssets, exportsDir)
   })
 
   const base = server.url
@@ -86,6 +88,30 @@ async function main(): Promise<void> {
       results.push(`${attack} → ${response.status}${isSpaFallback ? '(SPA)' : ''}${blocked ? '' : ' ⚠ 泄露文件内容'}`)
     }
     record('M-4', allBlocked, results.join('；'))
+
+    // ── M-5 目录选择器（上游 v0.1.10 新增依赖）──
+    // 该服务缺失时 characterTransferPlugin 整块不加载，导入/导出 5 条路由会一起消失，
+    // 而我们的图床搬运正挂在导入上——所以这里是硬断言，不是可选项。
+    const picker = tenant.context.directoryPicker as {
+      pickDirectory(request: { title: string; buttonLabel: string }): Promise<string | undefined>
+    }
+    const picked = await picker.pickDirectory({ title: '选择导出位置', buttonLabel: '导出到这里' })
+    record('M-5', typeof picked === 'string' && picked.length > 0 && existsSync(picked),
+      `目录选择器返回可用目录：${String(picked)}（Web 端等价物：租户导出目录）`)
+
+    // ── M-6 导出链路终点：写进去的文件必须能从浏览器取回 ──
+    // 只断言"文件存在"是不够的——用户在浏览器里拿不到就等于没做，所以一路验到 HTTP 响应体。
+    const exported = '{"spec":"chara_card_v2","name":"导出验收"}\n'
+    writeFileSync(join(exportsDir, 'export-check.json'), exported, 'utf8')
+    const index = await fetch(`${base}/exports`)
+    const indexHtml = await index.text()
+    const listed = index.status === 200 && indexHtml.includes('export-check.json')
+    const download = await fetch(`${base}/exports/export-check.json`)
+    const body = await download.text()
+    const traversal = await fetch(`${base}/exports/..%2F..%2Fregistry.sqlite`, { redirect: 'manual' })
+    record('M-6', listed && download.status === 200 && body === exported && traversal.status === 404,
+      `列表含该文件=${listed}、下载 ${download.status} 且内容一致=${body === exported}、`
+      + `目录穿越被拒=${traversal.status === 404}`)
   } finally {
     await server.close()
     await tenant.dispose()

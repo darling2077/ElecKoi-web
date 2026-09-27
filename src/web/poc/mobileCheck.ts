@@ -138,9 +138,14 @@ function probeScript(): string {
       stats: (() => {
         const line = document.querySelector('.generation-stats-line');
         if (!line) return null;
-        const items = [...line.querySelectorAll('.generation-stats-item')];
+        // 上游 v0.1.10 起统计条改为「药丸 + 点开看详情」：
+        // 常显的是 .generation-stat-pill，明细在 .generation-stat-panel/.generation-stat-details。
+        const items = [...line.querySelectorAll('.generation-stat-pill')];
+        const panel = document.querySelector('.generation-stat-panel');
+        const detailRows = panel ? panel.querySelectorAll('.generation-stat-details > *').length : 0;
         return {
           count: items.length,
+          detailRows,
           height: Math.round(line.getBoundingClientRect().height),
           clipped: items.filter((el) => el.scrollWidth > el.clientWidth + 1).length,
           // 有壁纸时必须改用壁纸前景色，否则 --muted 的灰字糊在背景里
@@ -193,7 +198,15 @@ function probeScript(): string {
         // 两个条件都要满足：消息出现（会话确实打开了）**且**统计条渲染出来
         // （整轮生成结束）。只看消息会在生成中途就退出，统计条还没挂上。
         if ((after.messageCount > 0 && after.stats != null) || waited >= 15000) {
-          write({ ...before, tapped: true, waitedMs: waited, collapsedAfterTap: after.collapsed, chatWidthAfterTap: after.chatWidth, bubbleWidthAfterTap: after.bubbleWidth, diagAfterTap: after.diag, messageCountAfterTap: after.messageCount, backdropAfterTap: after.backdrop, statsAfterTap: after.stats });
+          // 上游 v0.1.10 新增「统计药丸点开看详情」：点一下用量药丸，
+          // 详情面板里必须真有行——只验药丸可见等于没验这个新功能。
+          const pill = document.querySelector('.generation-stat-pill[aria-haspopup="dialog"]');
+          if (pill) pill.click();
+          // 详情面板是 React 状态驱动的，点完要等一帧再量；立刻量会读到还没打开的 0 行。
+          setTimeout(() => {
+            const final = measure();
+            write({ ...before, tapped: true, waitedMs: waited, collapsedAfterTap: after.collapsed, chatWidthAfterTap: after.chatWidth, bubbleWidthAfterTap: after.bubbleWidth, diagAfterTap: after.diag, messageCountAfterTap: after.messageCount, backdropAfterTap: after.backdrop, statsAfterTap: final.stats });
+          }, 400);
           return;
         }
         setTimeout(pollChat, 250);
@@ -757,13 +770,19 @@ async function main(): Promise<void> {
     }
     const colorOk = stats?.wallpaper !== true
       || (stats.color !== undefined && colorNorm(stats.color) === colorNorm(stats.wallpaperFg))
-    const statsOk = stats != null && Number(stats.count) >= 3 && Number(stats.clipped) === 0 && colorOk
+    // 上游 v0.1.10：常显两粒药丸（用时/用量），点开后是详情面板。
+    // 断言仍测"用户能感知的性质"：统计看得见、没被截断、也没被壁纸吞掉。
+    // 详情行也要有：验收里已经点过药丸，面板打开却没有内容说明新功能是坏的。
+    const detailRows = Number((stats as { detailRows?: number } | null | undefined)?.detailRows ?? 0)
+    const statsOk = stats != null && Number(stats.count) >= 2 && Number(stats.clipped) === 0
+      && detailRows >= 1 && colorOk
     record('M-stats', statsOk,
       stats == null
         ? '未取到生成统计条'
         : `统计条 ${String(stats.count)} 项、高 ${String(stats.height)}px、被截断 ${String(stats.clipped)} 项`
           + `、壁纸前景色=${colorOk ? '已套用' : '未套用(' + colorNorm(stats.color) + ' vs ' + colorNorm(stats.wallpaperFg) + ')'}`
-          + `（期望全部完整显示且不被壁纸吞掉）\n        ${String(stats.text)}`)
+          + `、点开后详情 ${detailRows} 行`
+          + `（期望药丸完整显示、点开有详情、且不被壁纸吞掉）\n        ${String(stats.text)}`)
 
     // ── M-outside：点抽屉外的空白处应当收起侧栏 ──
     const outside = await captureAt(url('&outside=1'), { width: 390, height: 844 },
