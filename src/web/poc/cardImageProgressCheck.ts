@@ -517,6 +517,47 @@ async function main(): Promise<void> {
     const shape = await page.evaluate<string>(`fetch('/api/card-images/progress').then(r => r.headers.get('content-type') || '')`)
     record('CI-8', shape.includes('application/json'), `进度接口返回 ${shape}`)
 
+    // ── CI-9/CI-10：应用内的导出体验（进度条 → 完成弹窗 → 下载入口）──
+    // 浏览器没有原生目录对话框，导出走后端写进租户 exports 目录；用户必须在**应用界面里**
+    // 就能看到"导出中"、并在结束时拿到下载入口，否则功能等于藏在服务端。
+    // 这条同时也是桥脚本能否被浏览器执行的实证（脚本语法错了这里最先炸）。
+    const characterId = imported.data?.importedCharacterIds?.[0]
+    const exportReport = await page.evaluate<{
+      duringText: string; duringVisible: boolean; ok: boolean
+      doneText: string; link: string | null; detail: string
+    }>(`
+      (async () => {
+        // 不 await：先同步读一眼"导出中"的状态，再等结果。
+        const pending = window.eleckoi.request('command.characters.export.files', {
+          characterIds: [${JSON.stringify(characterId ?? '')}],
+          format: 'json'
+        });
+        const node = document.querySelector('[data-eleckoi-export]');
+        const duringText = node ? node.textContent : '';
+        const duringVisible = Boolean(node) && node.style.display !== 'none';
+        const result = await pending;
+        const after = document.querySelector('[data-eleckoi-export]');
+        const anchor = after ? after.querySelector('a[href="/exports"]') : null;
+        const written = result && result.ok && result.data && result.data.written
+          ? result.data.written.length
+          : 0;
+        return {
+          duringText: duringText,
+          duringVisible: duringVisible,
+          ok: Boolean(result && result.ok) && written >= 1,
+          doneText: after ? after.textContent : '',
+          link: anchor ? anchor.getAttribute('href') : null,
+          detail: result && result.ok ? String(written) : JSON.stringify(result && result.error)
+        };
+      })()
+    `)
+    record('CI-9', exportReport.duringVisible && exportReport.duringText.includes('正在导出'),
+      `导出期间界面显示进度：可见=${exportReport.duringVisible}、文案「${exportReport.duringText.slice(0, 40)}」`)
+    record('CI-10', exportReport.ok && exportReport.link === '/exports'
+      && exportReport.doneText.includes('导出成功'),
+      `导出结束弹出成功面板并给出下载入口：written=${exportReport.detail}、`
+      + `链接=${String(exportReport.link)}、文案「${exportReport.doneText.slice(0, 40)}」`)
+
     page.close()
     browser.close()
   } finally {
