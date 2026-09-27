@@ -45,6 +45,14 @@ ARG NPM_REGISTRY=https://registry.npmjs.org
 # 实测官方源下这步能卡十几分钟（甚至超时），走镜像站 28 秒。
 ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY \
     COREPACK_NPM_REGISTRY=$NPM_REGISTRY
+
+# 原生模块离线编译：上游把 better-sqlite3 列在 pnpm.onlyBuiltDependencies 里，而 13.x 的发布包
+# 没有 install 脚本，pnpm 会对含 binding.gyp 的包自动跑 `node-gyp rebuild`；node-gyp 默认去
+# nodejs.org 下 headers，国内实测卡 400+ 秒后 ETIMEDOUT，整个构建失败。
+# node 官方镜像自带完整 headers（/usr/local/include/node，70 个头文件），指过去即完全离线。
+# 另外备上 NODEJS_ORG_MIRROR：万一将来基础镜像不带 headers，走镜像站也比官方源稳。
+ENV npm_config_nodedir=/usr/local \
+    NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
 RUN pnpm install --frozen-lockfile
 
 # 其余源码（src/ resources/ scripts/ patches/ docker/ …）
