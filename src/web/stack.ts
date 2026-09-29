@@ -176,6 +176,34 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
  */
 const dshClientCache = new WeakMap<object, Promise<DshClientHost>>()
 
+/** 把嵌套错误里最有信息量的一句挑出来（cause 链 + attempts 明细）。 */
+function describeLaunchError(error: unknown): string {
+  const parts: string[] = []
+  const seen = new Set<unknown>()
+  let current: unknown = error
+  while (current !== undefined && current !== null && !seen.has(current)) {
+    seen.add(current)
+    if (current instanceof Error && current.message.length > 0) parts.push(current.message)
+    const attempts = (current as { attempts?: unknown }).attempts
+    if (Array.isArray(attempts)) {
+      for (const attempt of attempts) {
+        const message = (attempt as { message?: unknown })?.message
+        if (typeof message === 'string' && message.length > 0) parts.push(message)
+        const nested = (attempt as { attempts?: unknown }).attempts
+        if (Array.isArray(nested)) {
+          for (const inner of nested) {
+            const innerMessage = (inner as { message?: unknown })?.message
+            if (typeof innerMessage === 'string' && innerMessage.length > 0) parts.push(innerMessage)
+          }
+        }
+      }
+    }
+    current = (current as { cause?: unknown }).cause
+  }
+  const unique = [...new Set(parts)]
+  return unique.join(' ← ').slice(0, 400)
+}
+
 export function launchDshClient(context: unknown, rendererDirectory: string): Promise<DshClientHost> {
   const key = context as object
   const cached = dshClientCache.get(key)
@@ -186,7 +214,16 @@ export function launchDshClient(context: unknown, rendererDirectory: string): Pr
       frontendDirectory(): string
     } }).pluginHost
     if (pluginHost === undefined) throw new Error('该租户没有 DSH 插件宿主（agentPlugin 未加载）')
-    const ready = await pluginHost.start()
+    let ready: { url: string; injections?: readonly DshInjection[] }
+    try {
+      ready = await pluginHost.start()
+    } catch (error) {
+      // 宿主启动失败时，最有用的信息往往在**外层错误的 cause / attempts 里**
+      // （例如原生加载器把失败原因放在 error.attempts[].message：
+      //  "failed to map segment from shared object" —— 一眼就能看出是 noexec 的锅）。
+      // 只报最外层那句「host preparation failed」，排障要多绕好几圈。
+      throw new Error(`DSH 插件宿主启动失败：${describeLaunchError(error)}`)
+    }
     return {
       url: ready.url,
       cookie: await authenticateDshClientHost(ready.url),

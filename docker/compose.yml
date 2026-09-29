@@ -86,6 +86,12 @@ services:
       # self-hosted 用（third-party 已放开全部 https，不需要它）：
       # 额外允许卡片加载图片的源（逗号分隔的纯源）。
       # ⚠️ 只填**你自己控制**的域：放行哪个域就等于允许卡片把数据以图片请求发给它。
+      # DSH 界面宿主的原生加载器（node-addon-native-custom-loader）会把 .node 复制到缓存目录
+      # 再 dlopen。容器里的 /tmp 是 tmpfs 且**默认带 noexec**，从那里加载共享库会被拒：
+      #   No usable native binding found for node-addon-require-builtin-linux-x64-gnu (auto)
+      #   … failed to map segment from shared object
+      # 结果是「界面宿主尚未就绪」。把缓存指到数据卷（可写且可执行）即可，顺便跨重启复用。
+      NARB_NATIVE_CACHE_DIR: /data/.native-cache
       ELECKOI_CARD_IMAGE_ORIGINS: "${ELECKOI_CARD_IMAGE_ORIGINS:-}"
       # third-party 用的黑名单（主机名或后缀，逗号分隔），如 postimg.cc,imgur.com
       ELECKOI_CARD_IMAGE_BLOCKED_HOSTS: "${ELECKOI_CARD_IMAGE_BLOCKED_HOSTS:-}"
