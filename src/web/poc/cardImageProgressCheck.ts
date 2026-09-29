@@ -12,13 +12,14 @@
  */
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import Database from 'better-sqlite3'
 import { WebHost } from '../WebHost'
+import { closeBrowser } from './cdp'
 import { singleTenantResolver, startWebServer } from '../http/server'
 
 const outcomes: Array<{ id: string; ok: boolean; detail: string }> = []
@@ -561,8 +562,7 @@ async function main(): Promise<void> {
     page.close()
     browser.close()
   } finally {
-    if (!chrome.killed) chrome.kill('SIGKILL')
-    rmSync(profile, { recursive: true, force: true })
+    await closeBrowser(chrome, profile)
     await server.close()
     await tenant.dispose()
     for (const server of fake.servers) server.close()

@@ -30,7 +30,13 @@ export function createWebBuildConfig(entry: string, outFileName: string) {
       rollupOptions: {
         output: {
           entryFileNames: outFileName,
-          format: 'es'
+          format: 'es',
+          // 上游 v0.2.0 的 DshAgentRuntime 里有一句 CJS 的 `require.resolve('pnpm')`
+          // （插件中心要拿 pnpm 的入口路径）。桌面端主进程产物是 CJS 所以无感，
+          // 我们这里是 ESM，直接跑会 `ReferenceError: require is not defined`。
+          // 用 createRequire 在模块作用域补一个 require，语义与 CJS 一致。
+          banner: "import { createRequire as __eleckoiCreateRequire } from 'node:module';\n"
+            + 'const require = __eleckoiCreateRequire(import.meta.url);'
         }
       }
     }

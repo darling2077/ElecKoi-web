@@ -12,6 +12,7 @@ import { mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { WebHost } from '../WebHost'
 import { singleTenantResolver, startWebServer } from '../http/server'
+import { launchDshClient } from '../stack'
 
 const dataRoot = process.env.ELECKOI_POC_DATA ?? process.env.ELECKOI_DATA_DIR ?? '/tmp/eleckoi-web-serve'
 const tenantRoot = join(dataRoot, 'tenants', 'tenant-demo')
@@ -38,7 +39,12 @@ const server = await startWebServer({
   host: process.env.ELECKOI_HOST ?? '127.0.0.1',
   port: Number(process.env.ELECKOI_PORT ?? 8790),
   rendererDir: resolve('out/renderer'),
-  resolveSession: singleTenantResolver(tenant.gateway, tenant.context.mediaAssets),
+  resolveSession: singleTenantResolver(
+    tenant.gateway,
+    tenant.context.mediaAssets,
+    join(dataRoot, 'tenants', 'tenant-demo', 'exports'),
+    () => launchDshClient(tenant.context, process.env.ELECKOI_DSH_RENDERER_DIR ?? 'out/renderer-dsh')
+  ),
   log: (message) => console.log(`[web] ${message}`)
 })
 

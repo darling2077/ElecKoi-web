@@ -173,6 +173,37 @@ async function main(): Promise<void> {
     assert('P2-2', '租户 A 的 DSH 运行时目录与 agentSessions 服务就绪', runtimeReady,
       `${runtimeRoot.replace(root, '<root>')}；agentSessions=${ctxA.agentSessions?.constructor?.name ?? 'undefined'}`)
 
+    // ── P2-4 DSH 插件宿主可启动（v0.2.0 的界面就架在它之上）──
+    // 桌面端从宿主拿 {url, injections, cookie}，再把 DSH 官方 Web 前端与 ElecKoi 的 DSH 页面
+    // 一起伺服给窗口；WebUI 要走同一条路，所以先把它变成常驻断言，顺便固定注入项的形状。
+    const pluginHost = (ctxA as unknown as {
+      pluginHost?: { start(): Promise<{ url: string; injections?: readonly { kind?: string; name?: string }[] }> }
+    }).pluginHost
+    let hostUrl = ''
+    let hostKinds: string[] = []
+    let hostError = ''
+    try {
+      const ready = await pluginHost!.start()
+      hostUrl = ready.url
+      const items = (ready.injections ?? []) as readonly Record<string, unknown>[]
+      hostKinds = items.map((item) => {
+        const name = typeof item.name === 'string' ? item.name : ''
+        const placement = typeof item.placement === 'string' ? item.placement : ''
+        const src = typeof item.src === 'string' ? item.src : ''
+        const text = typeof item.text === 'string' ? item.text : ''
+        const detail = [placement, src === '' ? '' : `src=${src.slice(0, 40)}`, text === '' ? '' : `text=${text.length}字`]
+          .filter((part) => part !== '').join(' ')
+        return `${String(item.kind)}${name === '' ? '' : ':' + name}${detail === '' ? '' : ' [' + detail + ']'}`
+      })
+    } catch (error) {
+      hostError = error instanceof Error ? error.message : String(error)
+    }
+    assert('P2-4', '租户 A 的 DSH 插件宿主可启动（v0.2.0 界面架在它之上）',
+      hostUrl !== '' && hostKinds.length > 0,
+      hostError !== ''
+        ? `插件宿主启动失败：${hostError}`
+        : `插件宿主 ${hostUrl}；injections ${hostKinds.length} 种：${hostKinds.join(', ')}`)
+
     // ── P2-3 媒体 URL 重写（纯函数）──
     const sample = { avatar: `${LOCAL_MEDIA_REFERENCE_PREFIX}abc/face.png`, nested: [{ bg: `${LOCAL_MEDIA_REFERENCE_PREFIX}x/y.webp` }] }
     const rewritten = rewriteLocalMediaReferences(sample)

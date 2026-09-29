@@ -5,7 +5,13 @@
  */
 
 import { mkdirSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import {
+  authenticateDshClientHost,
+  resolveElecKoiClientAssets,
+  type DshClientHost,
+  type DshInjection
+} from './http/dshClient'
 import { LocalMediaStore } from '@main/platform/filesystem/LocalMediaStore'
 import { ControlDatabase } from './control/ControlDatabase'
 import { QuotaService } from './control/QuotaService'
@@ -28,6 +34,8 @@ export interface WebUiStackOptions {
   cardImageBlockedHosts?: readonly string[]
   dataRoot: string
   rendererDir: string
+  /** v0.2.0 的 ElecKoi DSH 页面产物（vite.dsh.config.mjs 的 out/renderer-dsh）。 */
+  dshRendererDir?: string
   masterKeyBase64: string
   appVersion: string
   host?: string
@@ -92,6 +100,9 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
   // "卡片收得到文档但登录被判跨站"这种自相矛盾的故障。
   const appOrigins = resolveAppOrigins(options.appOrigins)
 
+  // v0.2.0 的 ElecKoi DSH 页面产物；容器里由 Dockerfile 构建到同一路径。
+  const dshRendererDirectory = options.dshRendererDir ?? resolve('out/renderer-dsh')
+
   const server = await startWebServer({
       // exactOptionalPropertyTypes：未配置时不要把这些键传成 undefined
       ...(options.maxBodyBytes === undefined ? {} : { maxBodyBytes: options.maxBodyBytes }),
@@ -102,6 +113,7 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
     ...(options.host === undefined ? {} : { host: options.host }),
     ...(options.port === undefined ? {} : { port: options.port }),
     rendererDir: options.rendererDir,
+      ...(options.dshRendererDir === undefined ? {} : { dshRendererDir: options.dshRendererDir }),
     ...(options.cardOrigin === undefined ? {} : { cardOrigin: options.cardOrigin }),
     ...(options.cardImageOrigins === undefined ? {} : { cardImageOrigins: options.cardImageOrigins }),
     appOrigins,
@@ -126,6 +138,7 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
         gateway: lease.runtime.gateway,
         mediaStore: lease.runtime.context.mediaAssets,
         exportsDir: join(options.dataRoot, 'tenants', tenant.tenant_id, 'exports'),
+        dshClient: () => launchDshClient(lease.runtime.context, dshRendererDirectory),
         release: lease.release
       }
     },
@@ -153,3 +166,39 @@ export async function startWebUiStack(options: WebUiStackOptions): Promise<WebUi
     }
   }
 }
+
+/**
+ * 启动（并记忆）该租户的 DSH 界面宿主。
+ *
+ * v0.2.0 的界面 = DSH 官方 Web 前端 + ElecKoi 的 DSH 页面 + 反代到插件宿主，
+ * 三者都需要宿主先起来。宿主由 agentPlugin 提供（`ctx.pluginHost`），
+ * 第一次访问界面时才启动，之后复用同一份 url/cookie/injections。
+ */
+const dshClientCache = new WeakMap<object, Promise<DshClientHost>>()
+
+export function launchDshClient(context: unknown, rendererDirectory: string): Promise<DshClientHost> {
+  const key = context as object
+  const cached = dshClientCache.get(key)
+  if (cached !== undefined) return cached
+  const pending = (async () => {
+    const pluginHost = (context as { pluginHost?: {
+      start(): Promise<{ url: string; injections?: readonly DshInjection[] }>
+      frontendDirectory(): string
+    } }).pluginHost
+    if (pluginHost === undefined) throw new Error('该租户没有 DSH 插件宿主（agentPlugin 未加载）')
+    const ready = await pluginHost.start()
+    return {
+      url: ready.url,
+      cookie: await authenticateDshClientHost(ready.url),
+      injections: ready.injections ?? [],
+      frontendDirectory: pluginHost.frontendDirectory(),
+      rendererDirectory,
+      clientAssets: resolveElecKoiClientAssets(rendererDirectory)
+    } satisfies DshClientHost
+  })()
+  dshClientCache.set(key, pending)
+  // 失败不缓存：下次请求可以重试（宿主可能只是还没就绪）。
+  pending.catch(() => dshClientCache.delete(key))
+  return pending
+}
+

@@ -24,6 +24,14 @@ import { failure, success } from '@shared/foundation/result'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, type WebGateway } from '../transport/WebGateway'
 import { readSignedMedia } from '../mediaSignature'
 import { renderExportsPage } from './exportsPage'
+import {
+  forwardDshClientRequest,
+  proxyDshUpgrade,
+  isDshClientAsset,
+  serveDshClientAsset,
+  serveElecKoiClientAsset,
+  type DshClientHost
+} from './dshClient'
 import { clearExports, exportFilePath, listExports, pruneExports, DEFAULT_EXPORT_TTL_MS } from './exportStore'
 import {
   CARD_FRAME_PATH,
@@ -39,6 +47,7 @@ import { WEB_CHROME_CSS_PATH, WEB_CHROME_JS_PATH, buildWebChromeCss, buildWebChr
 import { securityHeaders } from './securityHeaders'
 import { effectiveHost } from './cookies'
 import { WEB_BRIDGE_PATH, buildWebBridgeSource } from './webBridge'
+import { randomBytes } from 'node:crypto'
 
 const MIME_TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -68,6 +77,11 @@ export interface SessionBinding {
   mediaStore: { pathForReference(reference: string): string | undefined }
   /** 该租户的导出目录（批量导出角色卡落到这里，用户在 /exports 下载）。 */
   exportsDir: string
+  /**
+   * v0.2.0 的界面宿主（DSH 客户端前端 + ElecKoi DSH 页面 + 插件宿主反代）。
+   * 按需启动、租户内记忆化；启动失败时抛错，由调用方决定如何提示。
+   */
+  dshClient?: () => Promise<DshClientHost>
   release(): void
 }
 
@@ -331,6 +345,37 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       options.log?.(`请求处理失败：${String(error)}`)
       if (!res.headersSent) sendText(res, 500, '内部错误')
     })
+  })
+
+  // WebSocket 升级：DSH 客户端的传输就走这条（见 dshClient.proxyDshUpgrade 的说明）。
+  // 先过我们自己的会话门禁——升级请求同样带 Cookie，未登录直接拒绝。
+  server.on('upgrade', (req, socket, head) => {
+    void (async () => {
+      const raw = req.url ?? '/'
+      const upgradePath = raw.split('?')[0] ?? '/'
+      let binding: SessionBinding | undefined
+      try {
+        binding = options.resolveSession === undefined ? undefined : await options.resolveSession(req)
+      } catch {
+        binding = undefined
+      }
+      if (binding?.dshClient === undefined) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+        socket.destroy()
+        return
+      }
+      try {
+        const dsh = await binding.dshClient()
+        if (process.env.ELECKOI_DEBUG_DSH === '1') options.log?.(`WebSocket 升级 → ${upgradePath}`)
+        // 租约要握到连接结束：否则租户可能被空闲回收，正在用的界面会突然断线。
+        socket.on('close', () => binding!.release())
+        proxyDshUpgrade(req, socket, head, dsh)
+      } catch (error) {
+        options.log?.(`WebSocket 升级失败（${upgradePath}）：${String(error)}`)
+        binding.release()
+        socket.destroy()
+      }
+    })()
   })
 
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -642,6 +687,44 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       return
     }
 
+    // ── v0.2.0 的 DSH 客户端界面 ──
+    // 顺序很重要：上面所有 /api、/exports、媒体、卡片帧都归我们；走到这里才交给 DSH 宿主。
+    // 与桌面端 dsh-app 协议一致：前端自身资源我们直接伺服（并注入宿主给的 injections），
+    // 其余（如 /plugins/… 的插件包、传输端点）反代到该租户的插件宿主。
+    if (binding.dshClient !== undefined) {
+      let dsh: DshClientHost | undefined
+      try {
+        dsh = await binding.dshClient()
+      } catch (error) {
+        sendText(res, 503, `界面宿主尚未就绪：${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
+      if (isDshClientAsset(path)) {
+        // 每个文档一份 nonce：宿主注入的内联脚本靠它过 CSP（见 securityHeaders.appCsp）。
+        const nonce = randomBytes(16).toString('base64')
+        serveDshClientAsset(req, res, dsh, path, securityHeaders('app', cardOrigin, nonce), nonce)
+        return
+      }
+      if (path.startsWith('/eleckoi/assets/')) {
+        serveElecKoiClientAsset(req, res, dsh, path)
+        return
+      }
+      const rawBody = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req)
+      const body = rawBody === undefined ? undefined : Buffer.from(rawBody)
+      // path 已经把查询串切掉了，原始串要从 req.url 取（插件包 URL 形如 /plugins/??a/client.js,b&rev=…）。
+      const rawUrl = req.url ?? '/'
+      const queryAt = rawUrl.indexOf('?')
+      const search = queryAt < 0 ? '' : rawUrl.slice(queryAt)
+      try {
+        await forwardDshClientRequest(req, res, dsh, path, search, body)
+      } catch (error) {
+        // 流式转发可能已经发过头（例如 SSE 中途断开），此时只能断开连接。
+        if (res.headersSent) res.destroy()
+        else sendText(res, 502, `无法连接界面宿主：${error instanceof Error ? error.message : String(error)}`)
+      }
+      return
+    }
+
     // ── 静态产物 + SPA 回退 ──
     const target = safeJoin(options.rendererDir, path === '/' ? '/index.html' : path)
     const file = target !== undefined && existsSync(target) && statSync(target).isFile()
@@ -687,7 +770,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 export function singleTenantResolver(
   gateway: WebGateway,
   mediaStore: SessionBinding['mediaStore'],
-  exportsDir = ''
+  exportsDir = '',
+  dshClient?: () => Promise<DshClientHost>
 ) {
-  return (): SessionBinding => ({ gateway, mediaStore, exportsDir, release: () => undefined })
+  return (): SessionBinding => ({
+    gateway,
+    mediaStore,
+    exportsDir,
+    ...(dshClient === undefined ? {} : { dshClient }),
+    release: () => undefined
+  })
 }

@@ -11,11 +11,21 @@
 export type DocumentKind = 'app' | 'login'
 
 /** 应用文档 CSP。frame-src 需放行卡片源；未配置卡片源时退回同源（srcdoc 帧）。 */
-export function appCsp(cardOrigin: string): string {
+export function appCsp(cardOrigin: string, nonce = ''): string {
   const frameSources = cardOrigin === '' ? "'self'" : `'self' ${cardOrigin}`
+  // v0.2.0 的界面由 DSH 宿主注入**内联脚本**（引导门面、__DSH_BOOT__ 等配置），
+  // 桌面端由 Electron 原生注入不受 CSP 约束，Web 端必须放行。用 nonce 而不是
+  // 'unsafe-inline'：只有我们自己在文档里写的那些 <script> 才带得上这个随机值。
+  // ⚠️ 'unsafe-eval' 是 v0.2.0 的硬性要求：DSH 客户端的模块系统用 eval/new Function
+  // 装配插件包（插件产物是 classic script，不是 ESM），少了它整块界面起不来
+  // （实测报 "Evaluating a string as JavaScript violates ... 'unsafe-eval' is not allowed"）。
+  // 脚本来源仍然限制在 'self' + 本次响应的 nonce，所以没有引入第三方脚本源；
+  // 代价是 XSS 的影响面变大——这是为了跑上游新架构而接受的取舍，记录在
+  // docs/webui/上游升级流程.md 里。
+  const scriptSources = nonce === '' ? "'self' 'unsafe-eval'" : `'self' 'nonce-${nonce}' 'unsafe-eval'`
   return [
     "default-src 'self'",
-    "script-src 'self'",
+    `script-src ${scriptSources}`,
     // React 组件会写 style 属性（如 iframe 高度），因此必须放行内联样式。
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
@@ -49,9 +59,9 @@ export const LOGIN_CSP = [
   "frame-ancestors 'none'"
 ].join('; ')
 
-export function securityHeaders(kind: DocumentKind, cardOrigin: string): Record<string, string> {
+export function securityHeaders(kind: DocumentKind, cardOrigin: string, nonce = ''): Record<string, string> {
   const headers: Record<string, string> = {
-    'content-security-policy': kind === 'app' ? appCsp(cardOrigin) : LOGIN_CSP,
+    'content-security-policy': kind === 'app' ? appCsp(cardOrigin, nonce) : LOGIN_CSP,
     'x-content-type-options': 'nosniff',
     'referrer-policy': 'same-origin',
     'x-frame-options': 'DENY',

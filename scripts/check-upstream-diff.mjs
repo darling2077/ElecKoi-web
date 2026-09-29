@@ -43,6 +43,9 @@ const ALLOWED_ADDITIONS = [
   'scripts/apply-patches.mjs',
   // 构建期把 better-sqlite3 顶到 13.x（Node 24 下退出即断言）。按单个文件放行，不放行整个 scripts/。
   'scripts/webui-pin-better-sqlite3.mjs',
+  // 验收运行器：上游 v0.2.0 把 pnpm@11.7.0 装进了依赖，脚本内嵌套的 pnpm 会命中它，
+  // 并因版本自检（packageManager 是 10.32.1）直接失败；运行器改用调用它的那个 pnpm 跑各组。
+  'scripts/webui-verify.mjs',
   '.dockerignore',
   'CLAUDE.md'
 ]

@@ -9,11 +9,12 @@
 
 import { spawn } from 'node:child_process'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { WebHost } from '../WebHost'
+import { closeBrowser } from './cdp'
 import { cardFrameCsp, resolveCardImageOrigins } from '../http/cardFrame'
 import { singleTenantResolver, startWebServer } from '../http/server'
 
@@ -49,9 +50,7 @@ function renderDom(url: string, timeoutMs = 90_000): Promise<{ dom: string; note
       if (settled) return
       settled = true
       clearTimeout(timer)
-      child.kill('SIGKILL')
-      rmSync(profile, { recursive: true, force: true })
-      resolveDom({ dom, note })
+      void closeBrowser(child, profile).then(() => resolveDom({ dom, note }))
     }
     const timer = setTimeout(() => finish(`超时 ${timeoutMs} ms`), timeoutMs)
     child.stdout?.on('data', (chunk: Buffer) => { dom += chunk.toString() })

@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { startWebUiStack } from '../stack'
+import { closeBrowser } from './cdp'
 import { APP_TOKENS_PATH } from '../http/appTokens'
 
 const outcomes: Array<{ id: string; ok: boolean; detail: string }> = []
@@ -145,9 +146,7 @@ async function runChromium(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      child.kill('SIGKILL')
-      rmSync(profile, { recursive: true, force: true })
-      resolveRun({ stdout, note })
+      void closeBrowser(child, profile).then(() => resolveRun({ stdout, note }))
     }
     const timer = setTimeout(() => finish(`超时 ${timeoutMs} ms`), timeoutMs)
     child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString() })

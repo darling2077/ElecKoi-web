@@ -53,7 +53,21 @@ ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY \
 # 另外备上 NODEJS_ORG_MIRROR：万一将来基础镜像不带 headers，走镜像站也比官方源稳。
 ENV npm_config_nodedir=/usr/local \
     NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
-RUN pnpm install --frozen-lockfile
+
+# 依赖层：**跳过安装脚本**，然后自己显式做同样的两步。
+# 为什么不能直接 `pnpm install`：上游 v0.2.0 把 `pnpm@11.7.0` 当依赖装了进来，于是
+# `node_modules/.bin/pnpm` 就是 11.7.0，而**脚本内**的嵌套 `pnpm` 会优先命中它
+# （pnpm 跑脚本时把 node_modules/.bin 放在 PATH 最前），它的版本自检与本仓库
+# `packageManager: pnpm@10.32.1` 冲突，直接 ERROR 退出——上游的 postinstall /
+# pretypecheck / build 都会踩到。我们不改上游文件，改为在这里自己完成等价工作：
+#   1) pnpm rebuild better-sqlite3：恢复被 --ignore-scripts 跳过的原生模块构建；
+#   2) 直接跑三个工作区包的 build（不经过 postinstall 的嵌套 pnpm）。
+# 上游修掉这个依赖问题后，这两步可以换回一句 `pnpm install`。
+RUN pnpm install --frozen-lockfile --ignore-scripts \
+ && pnpm rebuild better-sqlite3 \
+ && pnpm --filter @eleckoi/author-sdk build \
+ && pnpm --filter @eleckoi/compatibility-mvu build \
+ && pnpm --filter @eleckoi/dsh-runtime build
 
 # 其余源码（src/ resources/ scripts/ patches/ docker/ …）
 COPY . .
@@ -72,9 +86,11 @@ COPY . .
 #   详见 docs/webui/better-sqlite3-退出断言与容器重启.md
 RUN node scripts/apply-patches.mjs \
  && node scripts/webui-pin-better-sqlite3.mjs \
- && pnpm install --no-frozen-lockfile \
+ && pnpm install --no-frozen-lockfile --ignore-scripts \
+ && pnpm rebuild better-sqlite3 \
  && node scripts/webui-pin-better-sqlite3.mjs --verify \
  && pnpm exec electron-vite build \
+ && pnpm exec vite build --config vite.dsh.config.mjs \
  && pnpm exec vite build --config src/web/vite.entry.config.ts
 
 # ── 阶段 2：运行 ──────────────────────────────────────────────

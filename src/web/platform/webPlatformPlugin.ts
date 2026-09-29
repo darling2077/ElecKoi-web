@@ -15,6 +15,7 @@ import { createAppLog } from '@main/platform/logging/AppLog'
 import { ConversationFiles } from '@main/platform/filesystem/ConversationFiles'
 import { LocalMediaStore } from '@main/platform/filesystem/LocalMediaStore'
 import { WebDirectoryPicker } from './webDirectoryPicker'
+import { WebFileOpener } from './webFileOpener'
 import { join } from 'node:path'
 import { WebAppPaths } from './WebAppPaths'
 import { WebCredentialCipher } from './WebCredentialCipher'
@@ -31,7 +32,7 @@ export function createWebPlatformPlugin(options: WebPlatformOptions): Plugin.Obj
 
   return {
     name: 'eleckoi-web-platform',
-    provide: ['appPaths', 'appLog', 'credentialCipher', 'conversationFiles', 'mediaAssets', 'directoryPicker'],
+    provide: ['appPaths', 'appLog', 'credentialCipher', 'conversationFiles', 'mediaAssets', 'directoryPicker', 'fileOpener'],
     apply(ctx: Context) {
       const log = createAppLog().child({ tenant: options.tenantId })
       ctx.provide('appPaths', appPaths)
@@ -54,6 +55,8 @@ export function createWebPlatformPlugin(options: WebPlatformOptions): Plugin.Obj
         join(options.tenantRoot, 'exports'),
         (message) => log.info(message)
       ))
+      // 上游 v0.2.0 起 agentPlugin 注入该服务；缺它整块 Agent 插件不加载，见该类注释。
+      ctx.provide('fileOpener', new WebFileOpener((message) => log.warn(message)))
     }
   } satisfies Plugin.Object
 }

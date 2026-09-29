@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { WebHost } from '../WebHost'
+import { closeBrowser } from './cdp'
 import { singleTenantResolver, startWebServer } from '../http/server'
 
 const outcomes: Array<{ id: string; ok: boolean; detail: string }> = []
@@ -191,9 +192,8 @@ async function captureFromBrowser(buildUrl: (beaconUrl: string) => string, timeo
       })
     ])
   } finally {
-    child.kill('SIGKILL')
+    await closeBrowser(child, profile)
     await receiver.close()
-    rmSync(profile, { recursive: true, force: true })
   }
 }
 

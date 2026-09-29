@@ -9,7 +9,7 @@
 
 import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { agentPlugin } from '@main/modules/agent'
+import { agentFileDraftsPlugin, agentPlugin } from '@main/modules/agent'
 import { agentPresetsPlugin } from '@main/modules/agentPresets'
 import { agentToolsPlugin } from '@main/modules/agentTools'
 import { authorSdkPlugin } from '@main/modules/authorSdk'
@@ -201,6 +201,10 @@ export class WebHost {
     await context.plugin(createWebShellPlugin({ appVersion: options.appVersion }))
 
     // — 交互层（依赖 foundation 全部就绪）—
+    // v0.2.0 把 agent 拆成两个插件：agentPlugin 注入 fileDrafts，而 fileDrafts 由
+    // agentFileDraftsPlugin 提供——**顺序不能反**，否则 agentPlugin 一直等待服务，
+    // 连带 agentSessions/pluginHost 与 18 条 agent 路由全部缺席。
+    await context.plugin(agentFileDraftsPlugin)
     await context.plugin(agentPlugin)
     await context.plugin(authorSdkPlugin)
 

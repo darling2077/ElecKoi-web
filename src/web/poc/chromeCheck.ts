@@ -1,20 +1,29 @@
 /**
- * 「Web 外壳」验收：隐藏桌面端窗口按钮 + 账号区 + 账号管理页。
+ * 「Web 外壳」验收：账号体系 + 应用能在真实浏览器里挂载。
  *
- * 关键的一条是**升级探针**：我们的样式挂在 `.client-titlebar .window-controls`
- * 这个上游类名上。上游若改了它，注入会失效、旧按钮会重新出现。因此这里在真实浏览器里
- * 断言该钩子仍然命中——上游一改就报警，而不是等用户发现。
+ * ⚠️ v0.2.0 起语义换了一代。上游把界面搬进了 **DSH 客户端插件体系**：
+ *   桌面端主窗口加载 DSH 官方 Web 前端，由宿主注入 injections 与我们的桥
+ *   （`window.eleckoi`），其余请求反代到该租户的 DSH 插件宿主。
+ *   旧 React 应用（`out/renderer`）在 v0.2.0 已是死代码，所以"标题栏钩子是否命中"
+ *   这类断言不再有意义。
+ *
+ * 现在断言的是**界面可用的充要条件**，且不依赖上游任何具体类名：
+ *   C-1/C-2 桥与启动门面确实进了应用文档；
+ *   C-3..C-5 账号体系（注册/账号页/改密码）；
+ *   C-6..C-8 真实浏览器里应用挂载成功（`__ELECKOI_DSH_APP__`）、桥就位、
+ *           并且桥能完成一次真实 RPC（打通 /api/rpc）。
  *
  * 运行：pnpm webui:chrome
  */
 
 import { spawn } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import { startWebUiStack } from '../stack'
+import { Cdp, waitForPageEndpoint } from './cdp'
 
 const outcomes: Array<{ id: string; ok: boolean; detail: string }> = []
 
@@ -23,87 +32,22 @@ function record(id: string, ok: boolean, detail: string): void {
   console.log(`${ok ? '\u001b[32mPASS\u001b[0m' : '\u001b[31mFAIL\u001b[0m'}  ${id}\n        ${detail}`)
 }
 
-const TEST_PAGE = '__chrometest.html'
-const TEST_SCRIPT = '__chrometest.js'
-
-/**
- * 测试页：先用 fetch 登录（拿到会话 Cookie），再整页跳到应用。
- *
- * 不能把应用放进 iframe 读它的 DOM——我们自己的加固（X-Frame-Options: DENY、
- * frame-ancestors 'none'）不允许应用被任何页面嵌套，包括同源测试页。
- * 于是改成跳转，再用无头浏览器的 DOM 快照做断言。
- */
-function renderTestPage(): string {
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><title>chrome-test</title></head>
-<body><pre id="out">pending</pre><script src="/${TEST_SCRIPT}"></script></body></html>
-`
-}
-
-function renderTestScript(): string {
-  return `(() => {
-  const params = new URLSearchParams(location.search);
-  const beacon = params.get('beacon') || '';
-  const email = params.get('email') || '';
-  const password = params.get('password') || '';
-  const out = document.getElementById('out');
-  (async () => {
-    const login = await fetch('/api/auth/login', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email, password })
-    });
-    if (!login.ok) { out.textContent = 'LOGIN-FAILED ' + login.status; return; }
-    location.replace('/');
-  })().catch((error) => { out.textContent = 'ERROR ' + String(error); });
-})();
-`
-}
-
-/**
- * 登录后整页跳转到应用，再取最终 DOM 快照。
- * 必须用异步 spawn：被测服务就在本进程内，spawnSync 会阻塞事件循环让浏览器等不到响应。
- */
-function captureAppDom(url: string, timeoutMs = 90_000): Promise<{ dom: string; note: string }> {
-  const profile = mkdtempSync(join(tmpdir(), 'eleckoi-chrome-'))
-  return new Promise((resolveDom) => {
-    const child = spawn('chromium', [
-      '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
-      '--no-first-run', '--disable-sync', '--disable-features=Translate,BackForwardCache',
-      `--user-data-dir=${profile}`, '--virtual-time-budget=8000', '--dump-dom', url
-    ], { stdio: ['ignore', 'pipe', 'pipe'] })
-    let dom = ''
-    let stderr = ''
-    let settled = false
-    const finish = (note: string): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      child.kill('SIGKILL')
-      rmSync(profile, { recursive: true, force: true })
-      resolveDom({ dom, note })
-    }
-    const timer = setTimeout(() => finish(`超时 ${timeoutMs} ms`), timeoutMs)
-    child.stdout?.on('data', (chunk: Buffer) => { dom += chunk.toString() })
-    child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
-    child.on('close', () => {
-      if (dom.length > 0) return finish('')
-      const errors = stderr.split('\n').filter((line: string) => line.includes('ERROR') && !line.includes('dbus') && !line.includes('gcm'))
-      finish(`空输出｜${errors.slice(-2).join(' | ')}`)
-    })
-  })
+interface AppState {
+  app: string
+  platform: string
+  bridgeRequest: string
+  bridgeSubscribe: string
+  bootFailed: boolean
+  text: string
 }
 
 async function main(): Promise<void> {
-  // 无头快照必须让网络进入空闲：桥的 SSE 长连接会让 --virtual-time-budget 永不结束。
+  // 事件流是长连接，无头快照会被它拖住；这组只关心首屏挂载。
   process.env.ELECKOI_DISABLE_EVENT_STREAM = '1'
 
   const root = await mkdtemp(join(tmpdir(), 'eleckoi-web-chrome-'))
   const rendererDir = resolve('out/renderer')
   mkdirSync(rendererDir, { recursive: true })
-  const pagePath = join(rendererDir, TEST_PAGE)
-  const scriptPath = join(rendererDir, TEST_SCRIPT)
-  writeFileSync(pagePath, renderTestPage())
-  writeFileSync(scriptPath, renderTestScript())
 
   const stack = await startWebUiStack({
     dataRoot: root,
@@ -111,14 +55,12 @@ async function main(): Promise<void> {
     masterKeyBase64: randomBytes(32).toString('base64'),
     appVersion: '0.1.0-web-chrome',
     port: 0,
-    allowRegistration: true,
-    // 测试页需要免鉴权才能加载（否则会被 302 到 /login，脚本根本没机会执行）
-    publicPaths: [`/${TEST_PAGE}`, `/${TEST_SCRIPT}`]
+    allowRegistration: true
   })
   const base = stack.server.url
   const email = 'chrome@example.com'
   const password = 'chrome-check-password'
-  console.log(`\n== Web 外壳验收 ==\n服务地址：${base}\n`)
+  console.log(`\n== Web 外壳验收（v0.2.0 架构）==\n服务地址：${base}\n`)
 
   const jar: Record<string, string> = {}
   const capture = (response: Response): void => {
@@ -134,16 +76,30 @@ async function main(): Promise<void> {
       body: JSON.stringify({ email, password })
     }))
 
-    // ── 静态资源 ──
-    const css = await (await fetch(`${base}/__eleckoi/web-chrome.css`)).text()
-    record('C-1', css.includes('.client-titlebar .window-controls') && css.includes('display: none'),
-      '外壳样式已提供，且明确隐藏 .window-controls')
+    // ── C-1 桥脚本 ──
+    // 桥是 ElecKoi 的 DSH 插件在 apply 阶段就要用的东西（`new XxxCatalog(window.eleckoi)`），
+    // 少它整块界面起不来，所以单独断言它可达且契约完整。
+    const bridge = await fetch(`${base}/__eleckoi/web-bridge.js`)
+    const bridgeSource = await bridge.text()
+    record('C-1', bridge.status === 200 && bridgeSource.includes('window.eleckoi') && bridgeSource.includes('request'),
+      `GET /__eleckoi/web-bridge.js → ${bridge.status}，${bridgeSource.length} 字节，含 window.eleckoi 与 request`)
 
+    // ── C-2 应用文档 ──
     const appHtml = await (await fetch(`${base}/`, { headers: jar })).text()
-    record('C-2', appHtml.includes('/__eleckoi/web-chrome.css') && appHtml.includes('/__eleckoi/web-chrome.js'),
-      '应用页面已注入外壳样式与脚本（均为同源外链，无需放宽 CSP）')
+    const marks = {
+      bridge: appHtml.includes('/__eleckoi/web-bridge.js'),
+      bootReady: appHtml.includes('__DSH_BOOT_READY__'),
+      moduleLoader: appHtml.includes('__ModuleLoader__'),
+      clientAssets: appHtml.includes('__ELECKOI_CLIENT_ASSETS__'),
+      eleckoiAssets: appHtml.includes('/eleckoi/assets/')
+    }
+    const missing = Object.entries(marks).filter(([, ok]) => !ok).map(([name]) => name)
+    record('C-2', missing.length === 0,
+      missing.length === 0
+        ? '应用文档已带桥脚本、DSH 启动门面与 ElecKoi 资源表'
+        : `应用文档缺：${missing.join(', ')}`)
 
-    // ── 账号管理页 ──
+    // ── C-3 账号页 ──
     const account = await fetch(`${base}/account`, { headers: jar })
     const accountHtml = await account.text()
     record('C-3', account.status === 200 && accountHtml.includes(email) && accountHtml.includes('修改密码'),
@@ -152,7 +108,7 @@ async function main(): Promise<void> {
     const anonymousAccount = await fetch(`${base}/account`, { redirect: 'manual' })
     record('C-4', anonymousAccount.status === 302, `未登录访问 /account → ${anonymousAccount.status} → ${anonymousAccount.headers.get('location')}`)
 
-    // ── 改密码 ──
+    // ── C-5 改密码 ──
     const badChange = await fetch(`${base}/api/auth/password`, {
       method: 'POST', headers: { 'content-type': 'application/json', ...jar },
       body: JSON.stringify({ current: 'wrong-password', next: 'brand-new-password' })
@@ -173,35 +129,78 @@ async function main(): Promise<void> {
       badChange.status === 400 && changed.ok && oldLogin.status === 401 && newLogin.ok,
       `错误当前密码 → ${badChange.status}；正确修改 → ${changed.status}；旧密码登录 → ${oldLogin.status}；新密码登录 → ${newLogin.status}`)
 
-    // ── 真实浏览器 ──
-    const { dom, note } = await captureAppDom(
-      `${base}/${TEST_PAGE}?email=${encodeURIComponent(email)}&password=${encodeURIComponent('brand-new-password')}`
-    )
-    const diag = /DIAG[^<]*/.exec(dom)?.[0]
-    writeFileSync('/tmp/chrome-dom.html', dom)
-    console.log(`        · 浏览器最终 DOM 已存到 /tmp/chrome-dom.html；诊断=${diag ?? '(无，说明已跳转)'}`)
-    const hook = /data-eleckoi-web-chrome="([a-z]+)"/.exec(dom)?.[1]
-    const controlsPresent = dom.includes('class="window-controls"')
-    const accountRendered = dom.includes('eleckoi-web-account__trigger') && dom.includes(email)
+    // ── C-6..C-8 真实浏览器 ──
+    // 用 CDP 而不是 --dump-dom：DSH 界面要等插件清单与传输就绪才挂载，
+    // 而且我们要在页面里直接调桥做一次真实 RPC。
+    const profile = mkdtempSync(join(tmpdir(), 'eleckoi-chrome-'))
+    const port = 9400 + Math.floor(Math.random() * 400)
+    const browser = spawn('chromium', [
+      '--headless=new', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage',
+      '--no-first-run', '--disable-sync', '--disable-features=Translate,BackForwardCache',
+      `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, 'about:blank'
+    ], { stdio: 'ignore' })
 
-    record('C-6', hook === 'hooked' && controlsPresent,
-      hook === undefined
-        ? `升级探针未命中：DOM 里没有外壳标记（${note || `DOM ${dom.length} 字节`}）——上游可能改了类名`
-        : `升级探针：上游 .client-titlebar .window-controls 钩子仍命中（${hook}），上游控件仍在 DOM 中`)
+    let cdp: Cdp | undefined
+    try {
+      cdp = await Cdp.connect(await waitForPageEndpoint(port))
+      await cdp.send('Network.enable')
+      const token = (jar.cookie ?? '').replace('eleckoi_session=', '')
+      await cdp.send('Network.setCookie', { name: 'eleckoi_session', value: token, url: base, path: '/' })
+      await cdp.send('Page.enable')
+      await cdp.send('Page.navigate', { url: `${base}/` })
 
-    record('C-7', accountRendered,
-      accountRendered
-        ? `账号区已在真实浏览器里渲染，并显示登录邮箱 ${email}`
-        : `账号区未渲染（DOM ${dom.length} 字节${note === '' ? '' : `｜${note}`}）`)
+      // 导航刚提交时 document.body 还不存在，先给它一拍再进轮询。
+      await new Promise((done) => setTimeout(done, 800))
 
-    record('C-8', dom.includes('账号管理') && dom.includes('退出登录'),
-      '账号区菜单含「账号管理」与「退出登录」')
+      // DSH 客户端要先拉插件清单、建好传输再挂载，给足 60 秒。
+      let state: AppState = { app: 'undefined', platform: 'undefined', bridgeRequest: 'undefined', bridgeSubscribe: 'undefined', bootFailed: false, text: '' }
+      const deadline = Date.now() + 60_000
+      while (Date.now() < deadline) {
+        state = await cdp.evaluate<AppState>(`(() => ({
+          app: typeof globalThis.__ELECKOI_DSH_APP__,
+          platform: typeof globalThis.__ELECKOI_DSH_PLATFORM__,
+          bridgeRequest: typeof window.eleckoi?.request,
+          bridgeSubscribe: typeof window.eleckoi?.subscribe,
+          bootFailed: (document.body?.innerText ?? '').includes('Failed to load plugin'),
+          text: (document.body?.innerText ?? '').replace(/\\s+/g, ' ').slice(0, 120)
+        }))()`)
+        if (state.app === 'function' && state.bridgeRequest === 'function') break
+        await new Promise((done) => setTimeout(done, 1000))
+      }
+
+      record('C-6', state.app === 'function' && !state.bootFailed,
+        state.app === 'function'
+          ? `应用已在真实浏览器里挂载（__ELECKOI_DSH_APP__=${state.app}，平台=${state.platform}）：${state.text}`
+          : `应用未挂载${state.bootFailed ? '（页面报 Failed to load plugin）' : ''}：${state.text}`)
+
+      record('C-7', state.bridgeRequest === 'function' && state.bridgeSubscribe === 'function',
+        `桥就位：request=${state.bridgeRequest}、subscribe=${state.bridgeSubscribe}`)
+
+      // 真正跑一次 RPC：这一步打通"浏览器 → 我们的 /api/rpc → 租户运行时"。
+      const rpc = await cdp.evaluate<string>(`window.eleckoi.request('query.characters.list', {})
+        .then(() => 'ok')
+        .catch((error) => 'err:' + String(error && error.message || error))`)
+      record('C-8', rpc === 'ok', `桥完成一次真实 RPC（query.characters.list）→ ${rpc}`)
+    } finally {
+      cdp?.close()
+      browser.kill('SIGKILL')
+      // 等进程真的退出再删 profile：chromium 还在写时直接删会 ENOTEMPTY，
+      // 那个异常会盖住真正的断言结果（上一版就吃过这个亏）。
+      await new Promise<void>((done) => {
+        if (browser.exitCode !== null || browser.signalCode !== null) return done()
+        browser.once('exit', () => done())
+        setTimeout(done, 5000)
+      })
+      try {
+        rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
+      } catch {
+        // 临时目录删不掉不影响验收结论
+      }
+    }
   } catch (error) {
     record('C-9', false, `流程中断：${error instanceof Error ? error.message : String(error)}`)
   } finally {
     await stack.close()
-    rmSync(pagePath, { force: true })
-    rmSync(scriptPath, { force: true })
     await rm(root, { recursive: true, force: true })
   }
 

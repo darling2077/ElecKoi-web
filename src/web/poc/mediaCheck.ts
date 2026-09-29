@@ -16,6 +16,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, utimesSync, writeFileSync } from 'node:fs'
 import { WebHost } from '../WebHost'
 import { singleTenantResolver, startWebServer } from '../http/server'
+import { installStubModel } from './stubModel'
 import { LOCAL_MEDIA_REFERENCE_PREFIX, WEB_MEDIA_REFERENCE_PREFIX } from '../transport/WebGateway'
 
 /** 1×1 透明 PNG。 */
@@ -52,6 +53,12 @@ async function main(): Promise<void> {
     const reference = prepared.reference
     record('M-1', reference.startsWith(LOCAL_MEDIA_REFERENCE_PREFIX),
       `上游产出引用：${reference}`)
+
+    // v0.2.0 起建会话会立刻创建 agent 会话并解析当前 chat 模型，没配置就抛错。
+    await installStubModel((name, input) => tenant.gateway.dispatch(
+      { name, input },
+      { senderId: 1, windowId: undefined }
+    ) as Promise<never>)
 
     // ── 2. 出站重写 ──
     const conversation = await tenant.gateway.dispatch(

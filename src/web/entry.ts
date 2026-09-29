@@ -108,6 +108,7 @@ const stack = await startWebUiStack({
   allowRegistration,
   idleMs,
   exportTtlMs,
+  ...(process.env.ELECKOI_DSH_RENDERER_DIR ? { dshRendererDir: process.env.ELECKOI_DSH_RENDERER_DIR } : {}),
   maxLive,
   ...(process.env.ELECKOI_CARD_ORIGIN ? { cardOrigin: process.env.ELECKOI_CARD_ORIGIN } : {}),
   cardImageOrigins: (process.env.ELECKOI_CARD_IMAGE_ORIGINS ?? '').split(','),

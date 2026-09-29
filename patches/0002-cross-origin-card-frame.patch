@@ -1,10 +1,10 @@
 diff --git a/src/renderer/src/modules/authorFrontend/components/RichMessageFrame.jsx b/src/renderer/src/modules/authorFrontend/components/RichMessageFrame.jsx
-index 7b84306..e45d088 100644
+index 6767f53..58ef6ef 100644
 --- a/src/renderer/src/modules/authorFrontend/components/RichMessageFrame.jsx
 +++ b/src/renderer/src/modules/authorFrontend/components/RichMessageFrame.jsx
-@@ -8,6 +8,15 @@ import { rememberRichMessageHeight } from '../model/richMessageHeights.js';
- 
- const minimumHeight = 1;
+@@ -7,6 +7,15 @@ import { routeAuthorAudioRequest, subscribeAuthorAudioEvents } from '../model/au
+ import { prepareAuthorRuntimeLibraries } from '../model/authorRuntimeLibraries.js';
+ import { normalizeRichMessageViewportWidth } from '../model/richMessageHeightCache.js';
  
 +/**
 + * WebUI 卡片源，由服务端注入（见 window.__ELECKOI_WEB__）。
@@ -15,12 +15,12 @@ index 7b84306..e45d088 100644
 + */
 +const CARD_ORIGIN = globalThis.__ELECKOI_WEB__?.cardOrigin || '';
 +
+ const minimumHeight = 1;
+ 
  function createChannel() {
-   return globalThis.crypto?.randomUUID?.() || `rich-${Date.now()}-${Math.random().toString(36).slice(2)}`;
- }
-@@ -106,6 +115,20 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
+@@ -130,6 +139,20 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
      return () => window.removeEventListener('message', receive);
-   }, [channel, identity, message.conversationId, message.id]);
+   }, [channel, message.conversationId, message.id]);
  
 +  useEffect(() => {
 +    if (!CARD_ORIGIN) return undefined;
@@ -39,7 +39,7 @@ index 7b84306..e45d088 100644
    return (
      <iframe
        ref={frameRef}
-@@ -113,7 +136,7 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
+@@ -137,7 +160,7 @@ export function RichMessageFrame({ message, document, rootIndex = 0 }) {
        title="互动消息内容"
        allow="fullscreen; autoplay; clipboard-read; clipboard-write"
        loading="eager"
