@@ -54,20 +54,18 @@ ENV NPM_CONFIG_REGISTRY=$NPM_REGISTRY \
 ENV npm_config_nodedir=/usr/local \
     NODEJS_ORG_MIRROR=https://npmmirror.com/mirrors/node
 
-# 依赖层：**跳过安装脚本**，然后自己显式做同样的两步。
+# 依赖层：**跳过安装脚本**，然后自己显式重建原生模块。
 # 为什么不能直接 `pnpm install`：上游 v0.2.0 把 `pnpm@11.7.0` 当依赖装了进来，于是
 # `node_modules/.bin/pnpm` 就是 11.7.0，而**脚本内**的嵌套 `pnpm` 会优先命中它
 # （pnpm 跑脚本时把 node_modules/.bin 放在 PATH 最前），它的版本自检与本仓库
 # `packageManager: pnpm@10.32.1` 冲突，直接 ERROR 退出——上游的 postinstall /
-# pretypecheck / build 都会踩到。我们不改上游文件，改为在这里自己完成等价工作：
-#   1) pnpm rebuild better-sqlite3：恢复被 --ignore-scripts 跳过的原生模块构建；
-#   2) 直接跑三个工作区包的 build（不经过 postinstall 的嵌套 pnpm）。
+# pretypecheck / build 都会踩到。我们不改上游文件，改为在这里自己完成等价工作。
+# 工作区包的 build 挪到 `COPY . .` 之后（见下）：v0.2.0 的 dsh-runtime 会
+# `import '../../../src/shared/contracts/agent/imageLimits'`，跨出包目录引用主仓库源码，
+# 在只拷了 packages/ 的依赖层里必然解析失败（UNRESOLVED_IMPORT）。
 # 上游修掉这个依赖问题后，这两步可以换回一句 `pnpm install`。
 RUN pnpm install --frozen-lockfile --ignore-scripts \
- && pnpm rebuild better-sqlite3 \
- && pnpm --filter @eleckoi/author-sdk build \
- && pnpm --filter @eleckoi/compatibility-mvu build \
- && pnpm --filter @eleckoi/dsh-runtime build
+ && pnpm rebuild better-sqlite3
 
 # 其余源码（src/ resources/ scripts/ patches/ docker/ …）
 COPY . .
@@ -89,6 +87,9 @@ RUN node scripts/apply-patches.mjs \
  && pnpm install --no-frozen-lockfile --ignore-scripts \
  && pnpm rebuild better-sqlite3 \
  && node scripts/webui-pin-better-sqlite3.mjs --verify \
+ && pnpm --filter @eleckoi/author-sdk build \
+ && pnpm --filter @eleckoi/compatibility-mvu build \
+ && pnpm --filter @eleckoi/dsh-runtime build \
  && pnpm exec electron-vite build \
  && pnpm exec vite build --config vite.dsh.config.mjs \
  && pnpm exec vite build --config src/web/vite.entry.config.ts
